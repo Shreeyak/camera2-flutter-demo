@@ -4,8 +4,9 @@ tmp_files/*
 .vscode/
 *.png
 android/.kotlin
-android/.gradle
-android/app/bin
+**/android/.gradle
+**/android/app/bin
+
 
 # Miscellaneous
 pubspec.lock
