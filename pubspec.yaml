@@ -1,5 +1,5 @@
 name: camera2_flutter_demo
-description: "A new Flutter project."
+description: "A demo for camera2 library in Flutter."
 publish_to: 'none'
 version: 0.1.0
 
@@ -9,6 +9,8 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  material_symbols_icons: ^4.2906.0
+  google_fonts: ^8.0.2
 
 dev_dependencies:
   flutter_test:
