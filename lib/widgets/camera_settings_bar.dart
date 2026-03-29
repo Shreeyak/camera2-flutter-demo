@@ -39,90 +39,85 @@ class CameraSettingsBar extends StatelessWidget {
         child: Padding(
           padding: const EdgeInsets.fromLTRB(48.0, 8.0, 48.0, 0.0),
           child: Row(
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          // Match the position of the settings button from MainActionBar
-          BottomBarActionButton(
-            icon: Icons.keyboard_arrow_down,
-            label: 'CLOSE',
-            onTap: onToggleSettings,
-          ),
-
-          const SizedBox(width: 32),
-
-          // Chips
-          Expanded(
-            child: SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: Row(
-                children: [
-                  CameraSettingChip(
-                    param: CameraSettingType.iso,
-                    icon: Icons.iso,
-                    label: 'ISO',
-                    valueLabel: values.isoValue.toString(),
-                    isActive: activeSetting == CameraSettingType.iso,
-                    onTap: () => onSettingChipTap(
-                      activeSetting == CameraSettingType.iso
-                          ? null
-                          : CameraSettingType.iso,
-                    ),
-                  ),
-                  CameraSettingChip(
-                    param: CameraSettingType.shutter,
-                    icon: Icons.shutter_speed,
-                    label: 'SHUTTER',
-                    valueLabel: _formatShutter(values.exposureTimeNs),
-                    isActive: activeSetting == CameraSettingType.shutter,
-                    onTap: () => onSettingChipTap(
-                      activeSetting == CameraSettingType.shutter
-                          ? null
-                          : CameraSettingType.shutter,
-                    ),
-                  ),
-                  CameraSettingChip(
-                    param: CameraSettingType.focus,
-                    icon: Icons.center_focus_strong,
-                    label: 'FOCUS',
-                    valueLabel: values.afEnabled
-                        ? 'AUTO'
-                        : '${values.focusDistance.toStringAsFixed(1)}D',
-                    isActive: activeSetting == CameraSettingType.focus,
-                    onTap: () => onSettingChipTap(
-                      activeSetting == CameraSettingType.focus
-                          ? null
-                          : CameraSettingType.focus,
-                    ),
-                  ),
-                  CameraSettingChip(
-                    param: CameraSettingType.wb,
-                    icon: Icons.wb_auto,
-                    label: 'WB',
-                    valueLabel: values.wbLocked ? 'LOCK' : 'AUTO',
-                    isActive: activeSetting == CameraSettingType.wb,
-                    onTap: () => onSettingChipTap(
-                      activeSetting == CameraSettingType.wb
-                          ? null
-                          : CameraSettingType.wb,
-                    ),
-                  ),
-                  CameraSettingChip(
-                    param: CameraSettingType.zoom,
-                    icon: Icons.zoom_in,
-                    label: 'ZOOM',
-                    valueLabel: '${values.zoomRatio.toStringAsFixed(1)}×',
-                    isActive: activeSetting == CameraSettingType.zoom,
-                    onTap: () => onSettingChipTap(
-                      activeSetting == CameraSettingType.zoom
-                          ? null
-                          : CameraSettingType.zoom,
-                    ),
-                  ),
-                ],
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              // Match the position of the settings button from MainActionBar
+              BottomBarActionButton(
+                icon: Icons.keyboard_arrow_down,
+                label: 'CLOSE',
+                onTap: onToggleSettings,
               ),
-            ),
-          ),
-        ],
+
+              const SizedBox(width: 32),
+
+              // Chips
+              Expanded(
+                child: SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(
+                    children: [
+                      CameraSettingChip(
+                        icon: Icons.iso,
+                        label: 'ISO',
+                        valueLabel: values.isoValue.toString(),
+                        isActive: activeSetting == CameraSettingType.iso,
+                        onTap: () => onSettingChipTap(
+                          activeSetting == CameraSettingType.iso
+                              ? null
+                              : CameraSettingType.iso,
+                        ),
+                      ),
+                      CameraSettingChip(
+                        icon: Icons.shutter_speed,
+                        label: 'SHUTTER',
+                        valueLabel: _formatShutter(values.exposureTimeNs),
+                        isActive: activeSetting == CameraSettingType.shutter,
+                        onTap: () => onSettingChipTap(
+                          activeSetting == CameraSettingType.shutter
+                              ? null
+                              : CameraSettingType.shutter,
+                        ),
+                      ),
+                      CameraSettingChip(
+                        icon: Icons.center_focus_strong,
+                        label: 'FOCUS',
+                        valueLabel: values.afEnabled
+                            ? 'AUTO'
+                            : '${values.focusDistance.toStringAsFixed(1)}D',
+                        isActive: activeSetting == CameraSettingType.focus,
+                        onTap: () => onSettingChipTap(
+                          activeSetting == CameraSettingType.focus
+                              ? null
+                              : CameraSettingType.focus,
+                        ),
+                      ),
+                      CameraSettingChip(
+                        icon: Icons.wb_auto,
+                        label: 'WB',
+                        valueLabel: values.wbLocked ? 'LOCK' : 'AUTO',
+                        isActive: activeSetting == CameraSettingType.wb,
+                        onTap: () => onSettingChipTap(
+                          activeSetting == CameraSettingType.wb
+                              ? null
+                              : CameraSettingType.wb,
+                        ),
+                      ),
+                      CameraSettingChip(
+                        icon: Icons.zoom_in,
+                        label: 'ZOOM',
+                        valueLabel: '${values.zoomRatio.toStringAsFixed(1)}×',
+                        isActive: activeSetting == CameraSettingType.zoom,
+                        onTap: () => onSettingChipTap(
+                          activeSetting == CameraSettingType.zoom
+                              ? null
+                              : CameraSettingType.zoom,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
           ),
         ),
       ),
@@ -130,6 +125,7 @@ class CameraSettingsBar extends StatelessWidget {
   }
 
   String _formatShutter(int ns) {
+    if (ns == 0) return '0';
     final secs = ns / 1e9;
     if (secs < 1.0) return '1/${(1.0 / secs).round()}';
     return '${secs.toStringAsFixed(1)}s';

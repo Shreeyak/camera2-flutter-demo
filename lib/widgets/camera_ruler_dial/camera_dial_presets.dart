@@ -30,6 +30,7 @@ class IsoDialPreset {
   });
 
   CameraDialModel toModel() {
+    assert(isoRange.length >= 2, 'isoRange must contain [min, max]');
     // dart format off
     const all = <double>[
        50,   57,   64,   72,   80,   90,
@@ -77,6 +78,8 @@ class ShutterDialPreset {
   });
 
   CameraDialModel toModel() {
+    assert(exposureTimeRangeNs.length >= 2,
+        'exposureTimeRangeNs must contain [min, max]');
     // dart format off
     const shutterSeconds = <double>[
       1/8000, 1/6400, 1/5000, 1/4000, 1/3200, 1/2500,

@@ -84,7 +84,9 @@ class _CameraScreenState extends State<CameraScreen> {
   }
 
   void _onFocusChanged(double dist) {
-    setState(() => _values = _values.copyWith(focusDistance: dist, afEnabled: false));
+    setState(
+      () => _values = _values.copyWith(focusDistance: dist, afEnabled: false),
+    );
   }
 
   void _onZoomChanged(double ratio) {
@@ -187,7 +189,8 @@ class _CameraScreenState extends State<CameraScreen> {
                           ),
                           if (_hasAutoMode(_activeSetting))
                             Positioned(
-                              right: (MediaQuery.of(context).size.width / 2) +
+                              right:
+                                  (MediaQuery.of(context).size.width / 2) +
                                   200 +
                                   32,
                               child: CameraAutoToggleButton(

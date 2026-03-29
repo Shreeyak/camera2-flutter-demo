@@ -49,7 +49,7 @@ dart format lib/            # Format code to match Flutter conventions
 
 ## Important Notes
 
-- This is a fresh Flutter starter project
+- This is a Flutter demo project for the camera2 library
 - Platform-specific implementations belong in `android/` and `ios/` directories
 - Follow Flutter style conventions enforced by `flutter_lints`
 - Use `flutter pub get` after modifying `pubspec.yaml`

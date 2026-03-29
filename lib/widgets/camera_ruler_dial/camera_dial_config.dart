@@ -194,7 +194,7 @@ class CameraDialConfig {
     this.iconSize = 20,
     this.style = const CameraDialStyle(),
     this.hapticFeedback = HapticFeedback.heavyImpact,
-  });
+  }) : assert(stops.length >= 2, 'stops must have at least 2 elements');
 
   // ── Instance methods ──────────────────────────────────────────────────────
 
@@ -215,6 +215,7 @@ class CameraDialConfig {
   /// Default label formatting (used when [formatter] is null).
   String format(double value) {
     if (formatter != null) return formatter!(value);
+    if (value == 0) return '0';
     if (value >= 1) return value.toStringAsFixed(0);
     final inv = 1 / value;
     if (inv > 100000) return '1/${(inv / 1000).round()}k';

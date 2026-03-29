@@ -156,6 +156,10 @@ class _CameraRulerDialState extends State<CameraRulerDial> {
     const friction = 0.88;
     _inertiaTimer?.cancel();
     _inertiaTimer = Timer.periodic(const Duration(milliseconds: 16), (_) {
+      if (!mounted) {
+        _inertiaTimer?.cancel();
+        return;
+      }
       _velocity *= friction;
       if (_velocity.abs() < 0.5) {
         _inertiaTimer?.cancel();

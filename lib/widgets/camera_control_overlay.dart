@@ -67,6 +67,8 @@ class CameraControlOverlay extends StatelessWidget {
         ).toModel();
         break;
       case CameraSettingType.af:
+        // AF is handled separately; should not reach here if properly filtered.
+        return const SizedBox.shrink();
       case CameraSettingType.wb:
         // Unreachable — WB is handled by the guard at the top of build().
         return const SizedBox.shrink();
@@ -126,7 +128,7 @@ class _WbControlPanel extends StatelessWidget {
         segments: const [
           ButtonSegment<bool>(
             value: false,
-            label: Text('Auto AWB'),
+            label: Text('AWB'),
             icon: Icon(Icons.wb_auto),
           ),
           ButtonSegment<bool>(

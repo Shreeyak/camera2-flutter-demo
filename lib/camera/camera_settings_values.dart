@@ -39,13 +39,14 @@ class CameraSettingsValues {
   });
 
   factory CameraSettingsValues.initialFromRanges(CameraRanges ranges) {
+    final clampedFocusDistance = min(0.1, ranges.minFocusDistance);
     return CameraSettingsValues(
       isoValue: max(ranges.isoRange[0], min(200, ranges.isoRange[1])),
       exposureTimeNs: max(
         ranges.exposureTimeRangeNs[0],
         min(250000, ranges.exposureTimeRangeNs[1]),
       ),
-      focusDistance: 0.1,
+      focusDistance: clampedFocusDistance,
       zoomRatio: ranges.minZoomRatio,
       afEnabled: false,
       wbLocked: false,

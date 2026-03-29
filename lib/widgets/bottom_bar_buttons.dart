@@ -1,8 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:material_symbols_icons/symbols.dart';
 
-import '../camera/camera_settings_values.dart';
-
 /// A custom vertical icon-text button used in the bottom action bars.
 ///
 /// WHY NOT IconButton + Text?
@@ -77,7 +75,6 @@ class BottomBarActionButton extends StatelessWidget {
 class CameraSettingChip extends StatelessWidget {
   const CameraSettingChip({
     super.key,
-    required this.param,
     required this.icon,
     required this.label,
     required this.valueLabel,
@@ -85,7 +82,6 @@ class CameraSettingChip extends StatelessWidget {
     required this.onTap,
   });
 
-  final CameraSettingType param;
   final IconData icon;
   final String label;
   final String valueLabel;

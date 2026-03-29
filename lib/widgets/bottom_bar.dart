@@ -39,9 +39,7 @@ class BottomBar extends StatelessWidget {
                 heightFactor: 1.0 - value,
                 child: FractionalTranslation(
                   translation: Offset(0.0, value),
-                  child: _MainActionBar(
-                    onToggleSettings: onToggleSettings,
-                  ),
+                  child: _MainActionBar(onToggleSettings: onToggleSettings),
                 ),
               ),
             ),
@@ -74,9 +72,7 @@ class BottomBar extends StatelessWidget {
 class _MainActionBar extends StatelessWidget {
   final VoidCallback onToggleSettings;
 
-  const _MainActionBar({
-    required this.onToggleSettings,
-  });
+  const _MainActionBar({required this.onToggleSettings});
 
   @override
   Widget build(BuildContext context) {
