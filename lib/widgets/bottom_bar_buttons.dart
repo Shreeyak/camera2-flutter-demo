@@ -34,10 +34,10 @@ class BottomBarActionButton extends StatelessWidget {
         ? cs.primary
         : cs.onPrimaryContainer.withValues(alpha: 0.7);
 
-    return InkWell(
-      onTap: isDisabled ? null : onTap,
-      child: Material(
-        type: MaterialType.transparency,
+    return Material(
+      type: MaterialType.transparency,
+      child: InkWell(
+        onTap: isDisabled ? null : onTap,
         child: Padding(
           // Internal padding that expands the clickable area and ink splash size
           padding: const EdgeInsets.symmetric(horizontal: 4.0, vertical: 4.0),

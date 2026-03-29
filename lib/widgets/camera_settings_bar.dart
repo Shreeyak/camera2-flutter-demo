@@ -83,7 +83,7 @@ class CameraSettingsBar extends StatelessWidget {
                         label: 'FOCUS',
                         valueLabel: values.afEnabled
                             ? 'AUTO'
-                            : '${values.focusDistance.toStringAsFixed(1)}D',
+                            : '${values.focusDiopters.toStringAsFixed(1)}D',
                         isActive: activeSetting == CameraSettingType.focus,
                         onTap: () => onSettingChipTap(
                           activeSetting == CameraSettingType.focus

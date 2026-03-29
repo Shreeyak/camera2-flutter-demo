@@ -178,18 +178,18 @@ class ZoomDialPreset {
 /// Focus dial object for direct use by the camera UI.
 @immutable
 class FocusDialPreset {
-  final double minFocusDistance;
-  final double currentFocusDistance;
+  final double minFocusDiopters;
+  final double currentFocusDiopters;
   final ValueChanged<double> onFocusChanged;
 
   const FocusDialPreset({
-    required this.minFocusDistance,
-    required this.currentFocusDistance,
+    required this.minFocusDiopters,
+    required this.currentFocusDiopters,
     required this.onFocusChanged,
   });
 
   CameraDialModel toModel() {
-    final double max = minFocusDistance > 0.05 ? minFocusDistance : 10.0;
+    final double max = minFocusDiopters > 0.05 ? minFocusDiopters : 10.0;
     const anchors = <double>[0.0, 0.25, 0.5, 1.0, 2.0, 3.0, 5.0, 7.0, 10.0];
     final valid = anchors.where((d) => d <= max + 0.05).toList();
     if ((valid.last - max).abs() > 0.05) valid.add(max);
@@ -220,7 +220,7 @@ class FocusDialPreset {
 
     return CameraDialModel(
       config: config,
-      initialValue: config.closestTo(currentFocusDistance),
+      initialValue: config.closestTo(currentFocusDiopters),
       onChanged: onFocusChanged,
     );
   }

@@ -61,8 +61,8 @@ class CameraControlOverlay extends StatelessWidget {
         break;
       case CameraSettingType.focus:
         model = FocusDialPreset(
-          minFocusDistance: ranges.minFocusDistance,
-          currentFocusDistance: values.focusDistance,
+          minFocusDiopters: ranges.minFocusDiopters,
+          currentFocusDiopters: values.focusDiopters,
           onFocusChanged: callbacks.onFocusChanged,
         ).toModel();
         break;

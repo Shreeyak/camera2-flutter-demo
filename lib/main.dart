@@ -39,7 +39,7 @@ class CameraScreen extends StatefulWidget {
 
 class _CameraScreenState extends State<CameraScreen> {
   // ── Camera state
-  CameraSettingsValues _values = const CameraSettingsValues();
+  late CameraSettingsValues _values;
   final CameraRanges _ranges = const CameraRanges();
   late final CameraCallbacks _callbacks;
 
@@ -50,6 +50,7 @@ class _CameraScreenState extends State<CameraScreen> {
   @override
   void initState() {
     super.initState();
+    _values = CameraSettingsValues.initialFromRanges(_ranges);
     _callbacks = CameraCallbacks(
       onIsoChanged: _onIsoChanged,
       onExposureTimeNsChanged: _onExposureTimeNsChanged,
@@ -85,7 +86,7 @@ class _CameraScreenState extends State<CameraScreen> {
 
   void _onFocusChanged(double dist) {
     setState(
-      () => _values = _values.copyWith(focusDistance: dist, afEnabled: false),
+      () => _values = _values.copyWith(focusDiopters: dist, afEnabled: false),
     );
   }
 
@@ -109,6 +110,8 @@ class _CameraScreenState extends State<CameraScreen> {
   bool _hasAutoMode(CameraSettingType? param) {
     if (param == null) return false;
     switch (param) {
+      case CameraSettingType.iso:
+      case CameraSettingType.shutter:
       case CameraSettingType.focus:
       case CameraSettingType.wb:
         return true;
@@ -120,6 +123,9 @@ class _CameraScreenState extends State<CameraScreen> {
   bool _isAutoMode(CameraSettingType? param) {
     if (param == null) return false;
     switch (param) {
+      case CameraSettingType.iso:
+      case CameraSettingType.shutter:
+        return false; // ISO and shutter don't have auto state, just show button
       case CameraSettingType.focus:
         return _values.afEnabled;
       case CameraSettingType.wb:
@@ -189,10 +195,7 @@ class _CameraScreenState extends State<CameraScreen> {
                           ),
                           if (_hasAutoMode(_activeSetting))
                             Positioned(
-                              right:
-                                  (MediaQuery.of(context).size.width / 2) +
-                                  200 +
-                                  32,
+                              left: (MediaQuery.of(context).size.width / 2) - 400 / 2 - 60,
                               child: CameraAutoToggleButton(
                                 isAuto: _isAutoMode(_activeSetting),
                                 onTap: () => _onAutoToggleTap(_activeSetting),

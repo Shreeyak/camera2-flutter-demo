@@ -9,8 +9,8 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  material_symbols_icons: ^4.2729.0
-  google_fonts: ^6.2.1
+  material_symbols_icons: ^4.2906.0
+  google_fonts: ^8.0.2
 
 dev_dependencies:
   flutter_test:

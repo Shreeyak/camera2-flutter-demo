@@ -75,17 +75,19 @@ class _CameraRulerDialState extends State<CameraRulerDial> {
   @override
   void didUpdateWidget(covariant CameraRulerDial oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.initialValue != widget.initialValue) {
+    final configChanged = oldWidget.config != widget.config;
+    final initialValueChanged = oldWidget.initialValue != widget.initialValue;
+
+    if (configChanged || initialValueChanged) {
       _syncToInitialValue();
     }
   }
 
   void _syncToInitialValue() {
-    final idx = widget.config.stops.indexOf(widget.initialValue);
-    final clampedIdx = (idx < 0 ? 0 : idx).clamp(
-      0,
-      widget.config.stopCount - 1,
-    );
+    // Snap to the closest stop rather than falling back to index 0
+    final closestValue = widget.config.closestTo(widget.initialValue);
+    final idx = widget.config.stops.indexOf(closestValue);
+    final clampedIdx = idx.clamp(0, widget.config.stopCount - 1);
     _visualPercent = widget.config.indexToPercent(clampedIdx);
     _lastTickIndex = clampedIdx.toInt();
   }
