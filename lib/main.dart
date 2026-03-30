@@ -41,7 +41,7 @@ class CameraScreen extends StatefulWidget {
 class _CameraScreenState extends State<CameraScreen> {
   // ── Camera state
   late CameraSettingsValues _values;
-  final CameraRanges _ranges = const CameraRanges();
+  CameraRanges _ranges = const CameraRanges();
   late final CameraCallbacks _callbacks;
   CambrianCamera? _camera;
 
@@ -67,7 +67,21 @@ class _CameraScreenState extends State<CameraScreen> {
   Future<void> _openCamera() async {
     try {
       final camera = await CambrianCamera.open();
-      if (mounted) setState(() => _camera = camera);
+      final caps = camera.capabilities;
+      final ranges = CameraRanges(
+        isoRange: [caps.isoMin, caps.isoMax],
+        exposureTimeRangeNs: [caps.exposureTimeMinNs, caps.exposureTimeMaxNs],
+        minFocusDiopters: caps.focusMax,
+        minZoomRatio: caps.zoomMin,
+        maxZoomRatio: caps.zoomMax,
+      );
+      if (mounted) {
+        setState(() {
+          _camera = camera;
+          _ranges = ranges;
+          _values = CameraSettingsValues.initialFromRanges(ranges);
+        });
+      }
     } catch (e) {
       // Camera may not be available in all environments (e.g. emulators).
       // The UI degrades gracefully to a black placeholder.
@@ -83,30 +97,46 @@ class _CameraScreenState extends State<CameraScreen> {
 
   // ── Camera setting callbacks
 
+  /// Sends the current [_values] to the native camera as a settings update.
+  void _applySettings() {
+    _camera?.updateSettings(CameraSettings(
+      iso: _values.isoValue,
+      exposureTimeNs: _values.exposureTimeNs,
+      focusDistanceDiopters: _values.focusDiopters,
+      zoomRatio: _values.zoomRatio,
+      afEnabled: _values.afEnabled,
+      awbLocked: _values.wbLocked,
+    ));
+  }
+
   void _setWbLocked(bool locked) {
     setState(() => _values = _values.copyWith(wbLocked: locked));
+    _applySettings();
   }
 
   void _toggleAf() {
     setState(() => _values = _values.copyWith(afEnabled: !_values.afEnabled));
+    _applySettings();
   }
 
   void _onIsoChanged(int iso) {
     setState(() => _values = _values.copyWith(isoValue: iso));
+    _applySettings();
   }
 
   void _onExposureTimeNsChanged(int ns) {
     setState(() => _values = _values.copyWith(exposureTimeNs: ns));
+    _applySettings();
   }
 
   void _onFocusChanged(double dist) {
-    setState(
-      () => _values = _values.copyWith(focusDiopters: dist, afEnabled: false),
-    );
+    setState(() => _values = _values.copyWith(focusDiopters: dist, afEnabled: false));
+    _applySettings();
   }
 
   void _onZoomChanged(double ratio) {
     setState(() => _values = _values.copyWith(zoomRatio: ratio));
+    _applySettings();
   }
 
   // ── UI actions
