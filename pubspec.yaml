@@ -11,6 +11,8 @@ dependencies:
     sdk: flutter
   material_symbols_icons: ^4.2906.0
   google_fonts: ^8.0.2
+  cambrian_camera:
+    path: packages/cambrian_camera
 
 dev_dependencies:
   flutter_test:

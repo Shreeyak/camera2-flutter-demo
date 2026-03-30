@@ -1,0 +1,6 @@
+# Build artifacts
+build/
+.dart_tool/
+
+# Generated lock file (not committed for packages)
+pubspec.lock
