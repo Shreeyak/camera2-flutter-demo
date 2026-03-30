@@ -80,6 +80,10 @@ class CambrianCamera {
   final StreamController<CameraError> _errorController;
   late final CameraSettingsSerializer _serializer;
 
+  /// The most recent camera lifecycle state. Used as [StreamBuilder.initialData]
+  /// to avoid a race where the streaming event fires before the widget subscribes.
+  CameraState _currentState = CameraState.closed;
+
   // ---------------------------------------------------------------------------
   // Factory
   // ---------------------------------------------------------------------------
@@ -121,6 +125,12 @@ class CambrianCamera {
 
   /// Device capabilities (resolution list, ISO/exposure ranges, etc.).
   CameraCapabilities get capabilities => _capabilities;
+
+  /// The most recent camera lifecycle state.
+  ///
+  /// Use this as [StreamBuilder.initialData] so the preview widget renders
+  /// correctly when it is first built after [open] resolves.
+  CameraState get state => _currentState;
 
   /// Broadcasts camera lifecycle state changes.
   ///
@@ -196,7 +206,8 @@ class CambrianCamera {
   // ---------------------------------------------------------------------------
 
   void _onStateChanged(CamStateUpdate update) {
-    _stateController.add(CameraState.fromString(update.state));
+    _currentState = CameraState.fromString(update.state);
+    _stateController.add(_currentState);
   }
 
   void _onError(CamError error) {

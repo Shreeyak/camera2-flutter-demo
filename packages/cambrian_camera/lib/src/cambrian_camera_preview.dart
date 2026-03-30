@@ -36,6 +36,7 @@ class CambrianCameraPreview extends StatelessWidget {
   Widget build(BuildContext context) {
     return StreamBuilder<CameraState>(
       stream: camera.stateStream,
+      initialData: camera.state,
       builder: (context, snapshot) {
         // Only show the live texture when the camera is actively streaming.
         if (snapshot.data == CameraState.streaming) {
