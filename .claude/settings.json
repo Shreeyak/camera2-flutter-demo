@@ -1,0 +1,9 @@
+{                                                                       
+    "permissions": {                                                      
+        "allow": [
+            "Bash(adb -s * logcat*)",
+            "Bash(adb logcat*)"
+        ],              
+        "deny": []          
+    }                             
+} 

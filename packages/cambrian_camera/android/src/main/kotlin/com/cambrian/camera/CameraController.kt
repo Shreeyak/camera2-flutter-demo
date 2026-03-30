@@ -54,6 +54,12 @@ class CameraController(
             System.loadLibrary("cambrian_camera")
         }
 
+        /**
+         * Set to true to log every [updateSettings] call (ISO, exposure, focus, zoom, etc.).
+         * Disable before shipping to avoid log spam at 30fps slider rates.
+         */
+        const val VERBOSE_SETTINGS = true
+
         /** Initialises the native pipeline. Returns an opaque pointer used in subsequent calls. */
         @JvmStatic external fun nativeInit(previewSurface: Surface): Long
 
@@ -361,12 +367,28 @@ class CameraController(
             val request = buildCaptureRequest(device, reader.surface, settings)
             repeatingRequest = request
             session.setRepeatingRequest(request, null, backgroundHandler)
+            if (VERBOSE_SETTINGS) {
+                android.util.Log.d("CambrianCamera", buildSettingsLog(settings))
+            }
         } catch (e: CameraAccessException) {
             // Non-fatal; the session may be closing. Log and ignore.
             android.util.Log.w("CameraController", "updateSettings failed: ${e.message}")
         } catch (e: IllegalStateException) {
             android.util.Log.w("CameraController", "updateSettings: session already closed")
         }
+    }
+
+    /** Formats [settings] fields into a single log line, omitting null fields. */
+    private fun buildSettingsLog(settings: CamSettings): String {
+        val parts = mutableListOf<String>()
+        settings.iso?.let { parts += "iso=$it" }
+        settings.exposureTimeNs?.let { parts += "exposureNs=$it" }
+        settings.focusDistanceDiopters?.let { parts += "focus=${String.format("%.3f", it)}dpt" }
+        settings.zoomRatio?.let { parts += "zoom=${String.format("%.2f", it)}x" }
+        settings.afEnabled?.let { parts += "af=$it" }
+        settings.awbLocked?.let { parts += "awbLocked=$it" }
+        settings.evCompensation?.let { parts += "ev=$it" }
+        return "updateSettings: ${parts.joinToString(" ")}"
     }
 
     /**
