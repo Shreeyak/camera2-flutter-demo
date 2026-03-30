@@ -1,3 +1,4 @@
+import 'package:cambrian_camera/cambrian_camera.dart';
 import 'package:flutter/material.dart';
 
 import 'camera/camera_callbacks.dart';
@@ -42,6 +43,7 @@ class _CameraScreenState extends State<CameraScreen> {
   late CameraSettingsValues _values;
   final CameraRanges _ranges = const CameraRanges();
   late final CameraCallbacks _callbacks;
+  CambrianCamera? _camera;
 
   // ── UI state
   bool _settingsDrawerOpen = false;
@@ -51,6 +53,7 @@ class _CameraScreenState extends State<CameraScreen> {
   void initState() {
     super.initState();
     _values = CameraSettingsValues.initialFromRanges(_ranges);
+    _openCamera();
     _callbacks = CameraCallbacks(
       onIsoChanged: _onIsoChanged,
       onExposureTimeNsChanged: _onExposureTimeNsChanged,
@@ -61,8 +64,14 @@ class _CameraScreenState extends State<CameraScreen> {
     );
   }
 
+  Future<void> _openCamera() async {
+    final camera = await CambrianCamera.open();
+    if (mounted) setState(() => _camera = camera);
+  }
+
   @override
   void dispose() {
+    _camera?.close();
     super.dispose();
   }
 
@@ -228,5 +237,15 @@ class _CameraScreenState extends State<CameraScreen> {
     );
   }
 
-  Widget _buildCameraPreview() => Container(color: Colors.black);
+  Widget _buildCameraPreview() {
+    final camera = _camera;
+    if (camera == null) {
+      // Camera not yet opened — show black placeholder.
+      return const ColoredBox(color: Colors.black);
+    }
+    return camera.buildPreview(
+      fit: BoxFit.cover,
+      placeholder: const ColoredBox(color: Colors.black),
+    );
+  }
 }

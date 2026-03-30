@@ -34,6 +34,9 @@ android {
 }
 
 dependencies {
-    // flutter_plugin_android_lifecycle provides FlutterPlugin and ActivityAware.
-    implementation("androidx.lifecycle:lifecycle-common:2.7.0")
+    // androidx.lifecycle is used by the Flutter embedding; listed here so the IDE
+    // can resolve lifecycle types during development. The Flutter plugin-loader
+    // script injects flutter.jar (FlutterPlugin, ActivityAware, TextureRegistry, etc.)
+    // as compileOnly automatically when this module is included by the host app.
+    compileOnly("androidx.lifecycle:lifecycle-common:2.7.0")
 }
