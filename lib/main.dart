@@ -65,8 +65,14 @@ class _CameraScreenState extends State<CameraScreen> {
   }
 
   Future<void> _openCamera() async {
-    final camera = await CambrianCamera.open();
-    if (mounted) setState(() => _camera = camera);
+    try {
+      final camera = await CambrianCamera.open();
+      if (mounted) setState(() => _camera = camera);
+    } catch (e) {
+      // Camera may not be available in all environments (e.g. emulators).
+      // The UI degrades gracefully to a black placeholder.
+      debugPrint('CambrianCamera.open failed: $e');
+    }
   }
 
   @override

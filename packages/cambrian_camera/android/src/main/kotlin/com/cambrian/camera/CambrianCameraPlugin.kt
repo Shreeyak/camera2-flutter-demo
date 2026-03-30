@@ -2,6 +2,7 @@
 package com.cambrian.camera
 
 import android.app.Activity
+import android.content.Context
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.embedding.engine.plugins.activity.ActivityAware
 import io.flutter.embedding.engine.plugins.activity.ActivityPluginBinding
@@ -10,14 +11,16 @@ import io.flutter.view.TextureRegistry
 /**
  * Per-camera session state.
  *
- * Holds the [TextureRegistry.SurfaceTextureEntry] whose [TextureRegistry.SurfaceTextureEntry.id]
- * is used as the camera handle returned to Dart. Phase 3 will extend this with a real
- * CameraDevice/CaptureSession once the Camera2 controller is wired in.
+ * Holds the [TextureRegistry.SurfaceProducer] whose [TextureRegistry.SurfaceProducer.id]
+ * is used as the camera handle returned to Dart, and the [CameraController] that manages
+ * the Camera2 lifecycle for this session.
  *
- * @property entry The Flutter texture entry backing this camera's preview surface.
+ * @property producer  Flutter texture entry backing the camera preview.
+ * @property controller  Camera2 lifecycle manager for this session.
  */
 data class CameraSession(
-    val entry: TextureRegistry.SurfaceTextureEntry,
+    val producer: TextureRegistry.SurfaceProducer,
+    val controller: CameraController,
 )
 
 /**
@@ -25,13 +28,14 @@ data class CameraSession(
  *
  * Lifecycle:
  * - [onAttachedToEngine] — receives the [FlutterPlugin.FlutterPluginBinding], registers the
- *   Pigeon [CameraHostApi] handler and stores the [TextureRegistry] reference.
- * - [onDetachedFromEngine] — tears down the Pigeon handler and releases all active sessions.
- * - [onAttachedToActivity] / [onDetachedFromActivity] — keeps an [Activity] reference available
- *   for Phase 3 (Camera2 requires an Activity context for permission checks).
+ *   Pigeon [CameraHostApi] handler, creates the [CameraFlutterApi], and stores the
+ *   [TextureRegistry] and application context.
+ * - [onDetachedFromEngine] — tears down the Pigeon handler, releases all active sessions.
+ * - [onAttachedToActivity] / [onDetachedFromActivity] — keeps an [Activity] reference for
+ *   camera permission checks and context.
  *
- * Phase 2: Stub implementation — registers the TextureRegistry, manages [CameraSession] objects,
- * and returns the texture ID as the camera handle. No real camera hardware is opened yet.
+ * Phase 3: delegates all [CameraHostApi] calls to [CameraController], which implements the
+ * real Camera2 lifecycle and JNI bridge.
  */
 class CambrianCameraPlugin : FlutterPlugin, ActivityAware, CameraHostApi {
 
@@ -39,7 +43,10 @@ class CambrianCameraPlugin : FlutterPlugin, ActivityAware, CameraHostApi {
     // State
     // -------------------------------------------------------------------------
 
-    /** Flutter texture registry used to create [TextureRegistry.SurfaceTextureEntry] objects. */
+    /** Application context stored at engine attach time. */
+    private var applicationContext: Context? = null
+
+    /** Flutter texture registry used to create [TextureRegistry.SurfaceProducer] objects. */
     private var textureRegistry: TextureRegistry? = null
 
     /**
@@ -48,10 +55,10 @@ class CambrianCameraPlugin : FlutterPlugin, ActivityAware, CameraHostApi {
      */
     private var flutterApi: CameraFlutterApi? = null
 
-    /** Live camera sessions, keyed by handle (= [TextureRegistry.SurfaceTextureEntry.id]). */
+    /** Live camera sessions, keyed by handle (= [TextureRegistry.SurfaceProducer.id]). */
     private val sessions = HashMap<Long, CameraSession>()
 
-    /** Current activity, kept for Phase 3 Camera2 usage. */
+    /** Current activity, used as context for Camera2 and permission checks. */
     private var activity: Activity? = null
 
     // -------------------------------------------------------------------------
@@ -61,10 +68,11 @@ class CambrianCameraPlugin : FlutterPlugin, ActivityAware, CameraHostApi {
     /**
      * Called when the plugin is attached to the Flutter engine.
      *
-     * Registers the Pigeon [CameraHostApi] handler so Dart can invoke host methods, and
-     * creates the [CameraFlutterApi] used to send events back to Dart.
+     * Stores the application context, texture registry, creates the [CameraFlutterApi],
+     * and registers the Pigeon [CameraHostApi] handler.
      */
     override fun onAttachedToEngine(binding: FlutterPlugin.FlutterPluginBinding) {
+        applicationContext = binding.applicationContext
         textureRegistry = binding.textureRegistry
         flutterApi = CameraFlutterApi(binding.binaryMessenger)
         CameraHostApi.setUp(binding.binaryMessenger, this)
@@ -73,15 +81,19 @@ class CambrianCameraPlugin : FlutterPlugin, ActivityAware, CameraHostApi {
     /**
      * Called when the plugin is detached from the Flutter engine.
      *
-     * Clears the Pigeon handler, releases all active [CameraSession] entries, and
-     * nulls out engine-scoped references.
+     * Releases all active camera sessions without waiting for Dart callbacks
+     * (engine is already shutting down), then clears all engine-scoped references.
      */
     override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         CameraHostApi.setUp(binding.binaryMessenger, null)
-        sessions.values.forEach { it.entry.release() }
+        sessions.values.forEach { session ->
+            session.controller.release()
+            session.producer.release()
+        }
         sessions.clear()
         flutterApi = null
         textureRegistry = null
+        applicationContext = null
     }
 
     // -------------------------------------------------------------------------
@@ -115,124 +127,108 @@ class CambrianCameraPlugin : FlutterPlugin, ActivityAware, CameraHostApi {
     /**
      * Opens a camera session.
      *
-     * Phase 2 stub — no real Camera2 device is opened. Creates a [TextureRegistry.SurfaceTextureEntry]
-     * and stores it in [sessions]. The entry's ID is the camera handle returned to Dart; Dart should
-     * pass this ID to the [Texture] widget.
+     * Creates a [TextureRegistry.SurfaceProducer] for the Flutter preview, constructs a
+     * [CameraController], and delegates the open to it. The handle returned to Dart is the
+     * [TextureRegistry.SurfaceProducer.id], which also serves as the Flutter [Texture] widget ID.
      *
-     * Emits [CamStateUpdate]("opening") then [CamStateUpdate]("streaming") to Dart before
-     * completing the callback, simulating a fast open.
-     *
-     * @param cameraId Optional camera device ID string (reserved for Phase 3).
-     * @param settings Optional initial camera settings (reserved for Phase 3).
-     * @param callback Invoked with [Result.success] containing the handle, or [Result.failure] on error.
+     * @param cameraId Optional camera device ID string; null selects the default back camera.
+     * @param settings Optional initial capture settings.
+     * @param callback Invoked with [Result.success] containing the handle, or [Result.failure].
      */
     override fun open(cameraId: String?, settings: CamSettings?, callback: (Result<Long>) -> Unit) {
         val registry = textureRegistry
-        if (registry == null) {
-            callback(Result.failure(FlutterError("no_engine", "TextureRegistry unavailable", null)))
+        val api = flutterApi
+        // Prefer the activity context for permission checks; fall back to application context.
+        val ctx: Context? = activity ?: applicationContext
+
+        if (registry == null || api == null || ctx == null) {
+            callback(Result.failure(FlutterError("no_engine", "Plugin not fully attached", null)))
             return
         }
 
-        val entry = registry.createSurfaceTexture()
-        val handle = entry.id()
-        sessions[handle] = CameraSession(entry)
+        val producer = registry.createSurfaceProducer()
+        val handle = producer.id()
+        val controller = CameraController(ctx, producer, api, handle)
+        sessions[handle] = CameraSession(producer, controller)
 
-        // Emit opening → streaming state transitions to Dart.
-        flutterApi?.onStateChanged(handle, CamStateUpdate("opening")) {}
-        flutterApi?.onStateChanged(handle, CamStateUpdate("streaming")) {}
-
-        callback(Result.success(handle))
+        controller.open(cameraId, settings, callback)
     }
 
     /**
-     * Returns stub camera capabilities.
+     * Returns real camera capabilities by querying [android.hardware.camera2.CameraCharacteristics].
      *
-     * Phase 2 stub — returns hard-coded values representative of a typical modern Android camera.
-     * Phase 3 will query the real CameraCharacteristics.
-     *
-     * @param handle The camera handle (unused in the stub).
+     * @param handle The camera handle returned by [open].
      * @param callback Invoked with [Result.success] containing the capabilities.
      */
     override fun getCapabilities(handle: Long, callback: (Result<CamCapabilities>) -> Unit) {
-        val caps = CamCapabilities(
-            supportedSizes = listOf(
-                CamSize(3840, 2160),  // 4K UHD
-                CamSize(1920, 1080),  // 1080p
-                CamSize(1280, 720),   // 720p
-            ),
-            isoMin = 100L,
-            isoMax = 6400L,
-            exposureTimeMinNs = 100_000L,          // 100 µs
-            exposureTimeMaxNs = 1_000_000_000L,    // 1 s
-            focusMin = 0.0,
-            focusMax = 10.0,
-            zoomMin = 1.0,
-            zoomMax = 8.0,
-            evCompMin = -6L,
-            evCompMax = 6L,
-            evCompensationStep = 0.5,
-            supportsRgba8888 = true,
-            estimatedMemoryBytes = 3840L * 2160L * 4L,  // 4K RGBA
-        )
-        callback(Result.success(caps))
+        val controller = sessions[handle]?.controller
+        if (controller == null) {
+            callback(Result.failure(FlutterError("invalid_handle", "No session for handle $handle", null)))
+            return
+        }
+        controller.getCapabilities(callback)
     }
 
     /**
-     * Updates camera capture settings.
+     * Updates the repeating [android.hardware.camera2.CaptureRequest] with new ISP settings.
      *
-     * Phase 2 stub — no-op. Phase 3 will apply these settings to a live CaptureRequest.
-     *
-     * @param handle The camera handle.
+     * @param handle   The camera handle.
      * @param settings The new capture settings to apply.
      */
     override fun updateSettings(handle: Long, settings: CamSettings) {
-        // No-op stub — Phase 3 will apply settings to CaptureRequest.
+        sessions[handle]?.controller?.updateSettings(settings)
     }
 
     /**
-     * Updates the image processing parameters.
+     * Updates C++ pipeline processing parameters.
      *
-     * Phase 2 stub — no-op. Phase 4 will forward these to the C++ image pipeline.
+     * Phase 3 stub — no-op in [CameraController.setProcessingParams].
+     * Phase 4 will forward these to the C++ image pipeline via JNI.
      *
      * @param handle The camera handle.
      * @param params The processing parameters to apply.
      */
     override fun setProcessingParams(handle: Long, params: CamProcessingParams) {
-        // No-op stub — Phase 4 will forward params to the native image pipeline.
+        sessions[handle]?.controller?.setProcessingParams(params)
     }
 
     /**
-     * Triggers a still capture.
+     * Captures a still JPEG image and returns its file path.
      *
-     * Phase 2 stub — returns a hard-coded placeholder path. Phase 3 will trigger a real
-     * ImageReader capture and write the file.
-     *
-     * @param handle The camera handle.
+     * @param handle   The camera handle.
      * @param callback Invoked with [Result.success] containing the file path.
      */
     override fun takePicture(handle: Long, callback: (Result<String>) -> Unit) {
-        callback(Result.success("/stub/capture.jpg"))
+        val controller = sessions[handle]?.controller
+        if (controller == null) {
+            callback(Result.failure(FlutterError("invalid_handle", "No session for handle $handle", null)))
+            return
+        }
+        controller.takePicture(callback)
     }
 
     /**
-     * Returns the native pipeline handle for JNI interop.
+     * Returns the native pipeline pointer for direct C++ consumer registration.
      *
-     * Phase 2 stub — returns 0. Phase 3/4 will return a valid native pointer or file descriptor.
-     *
-     * @param handle The camera handle.
-     * @param callback Invoked with [Result.success] containing the native handle (0 in stub).
+     * @param handle   The camera handle.
+     * @param callback Invoked with [Result.success] containing the native pointer (may be 0).
      */
     override fun getNativePipelineHandle(handle: Long, callback: (Result<Long>) -> Unit) {
-        callback(Result.success(0L))
+        val controller = sessions[handle]?.controller
+        if (controller == null) {
+            callback(Result.failure(FlutterError("invalid_handle", "No session for handle $handle", null)))
+            return
+        }
+        controller.getNativePipelineHandle(callback)
     }
 
     /**
      * Closes the camera session identified by [handle].
      *
-     * Releases the associated [TextureRegistry.SurfaceTextureEntry] and removes the session
-     * from [sessions]. Emits a [CamStateUpdate]("closed") event to Dart after teardown.
+     * Delegates teardown to [CameraController.close], then releases the
+     * [TextureRegistry.SurfaceProducer] and removes the session from the map.
      *
-     * @param handle The camera handle previously returned by [open].
+     * @param handle   The camera handle previously returned by [open].
      * @param callback Invoked with [Result.success] on success, or [Result.failure] if the
      *   handle is not found.
      */
@@ -242,8 +238,9 @@ class CambrianCameraPlugin : FlutterPlugin, ActivityAware, CameraHostApi {
             callback(Result.failure(FlutterError("invalid_handle", "No session for handle $handle", null)))
             return
         }
-        session.entry.release()
-        flutterApi?.onStateChanged(handle, CamStateUpdate("closed")) {}
-        callback(Result.success(Unit))
+        session.controller.close { result ->
+            session.producer.release()
+            callback(result)
+        }
     }
 }

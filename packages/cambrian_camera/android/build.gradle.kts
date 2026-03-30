@@ -23,14 +23,13 @@ android {
         minSdk = 21
     }
 
-    // Phase 3+: C++ JNI bridge and image pipeline.
-    // Uncommented in Phase 3 when CMakeLists.txt is added.
-    // externalNativeBuild {
-    //     cmake {
-    //         path = file("src/main/cpp/CMakeLists.txt")
-    //         version = "3.22.1"
-    //     }
-    // }
+    // C++ JNI bridge and image pipeline (Phase 3+).
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "3.22.1"
+        }
+    }
 }
 
 dependencies {
