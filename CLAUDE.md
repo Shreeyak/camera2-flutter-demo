@@ -52,6 +52,7 @@ dart format lib/            # Format code to match Flutter conventions
 - This is a Flutter demo project for the camera2 library
 - Platform-specific implementations belong in `android/` and `ios/` directories
 - Follow Flutter style conventions enforced by `flutter_lints`
+- Do not use wildcard imports (for example `import x.y.*`); always import explicit symbols
 - Use `flutter pub get` after modifying `pubspec.yaml`
 
 ## Useful Flutter Commands

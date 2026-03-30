@@ -24,12 +24,19 @@ class CameraRanges {
 class CameraSettingsValues {
   final int isoValue;
   final int exposureTimeNs;
+
   /// Focus distance in diopters. Valid range is [0.0, minFocusDiopters].
   /// Higher diopter values indicate closer focus distance.
   final double focusDiopters;
   final double zoomRatio;
   final bool afEnabled;
   final bool wbLocked;
+
+  /// When true, Camera2 auto-exposure controls ISO; [isoValue] is ignored.
+  final bool isoAuto;
+
+  /// When true, Camera2 auto-exposure controls shutter speed; [exposureTimeNs] is ignored.
+  final bool exposureAuto;
 
   const CameraSettingsValues({
     this.isoValue = 200,
@@ -38,6 +45,8 @@ class CameraSettingsValues {
     this.zoomRatio = 1.0,
     this.afEnabled = false,
     this.wbLocked = false,
+    this.isoAuto = true,
+    this.exposureAuto = true,
   });
 
   factory CameraSettingsValues.initialFromRanges(CameraRanges ranges) {
@@ -52,6 +61,8 @@ class CameraSettingsValues {
       zoomRatio: ranges.minZoomRatio,
       afEnabled: false,
       wbLocked: false,
+      isoAuto: true,
+      exposureAuto: true,
     );
   }
 
@@ -62,6 +73,8 @@ class CameraSettingsValues {
     double? zoomRatio,
     bool? afEnabled,
     bool? wbLocked,
+    bool? isoAuto,
+    bool? exposureAuto,
   }) {
     return CameraSettingsValues(
       isoValue: isoValue ?? this.isoValue,
@@ -70,6 +83,8 @@ class CameraSettingsValues {
       zoomRatio: zoomRatio ?? this.zoomRatio,
       afEnabled: afEnabled ?? this.afEnabled,
       wbLocked: wbLocked ?? this.wbLocked,
+      isoAuto: isoAuto ?? this.isoAuto,
+      exposureAuto: exposureAuto ?? this.exposureAuto,
     );
   }
 }

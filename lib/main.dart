@@ -1,5 +1,6 @@
 import 'package:cambrian_camera/cambrian_camera.dart';
 import 'package:flutter/material.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 import 'camera/camera_callbacks.dart';
 import 'camera/camera_settings_values.dart';
@@ -65,6 +66,11 @@ class _CameraScreenState extends State<CameraScreen> {
   }
 
   Future<void> _openCamera() async {
+    final status = await Permission.camera.request();
+    if (!status.isGranted) {
+      debugPrint('Camera permission denied: $status');
+      return;
+    }
     try {
       final camera = await CambrianCamera.open();
       final caps = camera.capabilities;
@@ -98,15 +104,18 @@ class _CameraScreenState extends State<CameraScreen> {
   // ── Camera setting callbacks
 
   /// Sends the current [_values] to the native camera as a settings update.
+  /// ISO and exposure are omitted when in auto mode so Camera2 AE runs freely.
   void _applySettings() {
-    _camera?.updateSettings(CameraSettings(
-      iso: _values.isoValue,
-      exposureTimeNs: _values.exposureTimeNs,
-      focusDistanceDiopters: _values.focusDiopters,
-      zoomRatio: _values.zoomRatio,
-      afEnabled: _values.afEnabled,
-      awbLocked: _values.wbLocked,
-    ));
+    _camera?.updateSettings(
+      CameraSettings(
+        iso: _values.isoAuto ? null : _values.isoValue,
+        exposureTimeNs: _values.exposureAuto ? null : _values.exposureTimeNs,
+        focusDistanceDiopters: _values.focusDiopters,
+        zoomRatio: _values.zoomRatio,
+        afEnabled: _values.afEnabled,
+        awbLocked: _values.wbLocked,
+      ),
+    );
   }
 
   void _setWbLocked(bool locked) {
@@ -120,17 +129,21 @@ class _CameraScreenState extends State<CameraScreen> {
   }
 
   void _onIsoChanged(int iso) {
-    setState(() => _values = _values.copyWith(isoValue: iso));
+    setState(() => _values = _values.copyWith(isoValue: iso, isoAuto: false));
     _applySettings();
   }
 
   void _onExposureTimeNsChanged(int ns) {
-    setState(() => _values = _values.copyWith(exposureTimeNs: ns));
+    setState(
+      () => _values = _values.copyWith(exposureTimeNs: ns, exposureAuto: false),
+    );
     _applySettings();
   }
 
   void _onFocusChanged(double dist) {
-    setState(() => _values = _values.copyWith(focusDiopters: dist, afEnabled: false));
+    setState(
+      () => _values = _values.copyWith(focusDiopters: dist, afEnabled: false),
+    );
     _applySettings();
   }
 
@@ -240,7 +253,10 @@ class _CameraScreenState extends State<CameraScreen> {
                           ),
                           if (_hasAutoMode(_activeSetting))
                             Positioned(
-                              left: (MediaQuery.of(context).size.width / 2) - 400 / 2 - 60,
+                              left:
+                                  (MediaQuery.of(context).size.width / 2) -
+                                  400 / 2 -
+                                  60,
                               child: CameraAutoToggleButton(
                                 isAuto: _isAutoMode(_activeSetting),
                                 onTap: () => _onAutoToggleTap(_activeSetting),

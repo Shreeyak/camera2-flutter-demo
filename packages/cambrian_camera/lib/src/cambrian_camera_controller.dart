@@ -34,11 +34,13 @@ class CambrianCamera {
     required int handle,
     required CameraHostApi hostApi,
     required CameraCapabilities capabilities,
-  })  : _handle = handle,
-        _hostApi = hostApi,
-        _capabilities = capabilities,
-        _stateController = StreamController<CameraState>.broadcast(),
-        _errorController = StreamController<CameraError>.broadcast() {
+    CameraState initialState = CameraState.closed,
+  }) : _handle = handle,
+       _hostApi = hostApi,
+       _capabilities = capabilities,
+       _currentState = initialState,
+       _stateController = StreamController<CameraState>.broadcast(),
+       _errorController = StreamController<CameraError>.broadcast() {
     // Register in the global instance map so FlutterApi callbacks can be
     // routed to the correct camera by handle.
     _instances[handle] = this;
@@ -82,7 +84,7 @@ class CambrianCamera {
 
   /// The most recent camera lifecycle state. Used as [StreamBuilder.initialData]
   /// to avoid a race where the streaming event fires before the widget subscribes.
-  CameraState _currentState = CameraState.closed;
+  CameraState _currentState;
 
   // ---------------------------------------------------------------------------
   // Factory
@@ -107,10 +109,13 @@ class CambrianCamera {
     final handle = await api.open(cameraId, settings?.toCam());
     final caps = await api.getCapabilities(handle);
 
+    // open() only resolves after the camera is confirmed streaming on the
+    // Kotlin side, so initialState is always streaming at this point.
     return CambrianCamera._(
       handle: handle,
       hostApi: api,
       capabilities: CameraCapabilities.fromPigeon(caps),
+      initialState: CameraState.streaming,
     );
   }
 
@@ -178,15 +183,8 @@ class CambrianCamera {
   ///
   /// Internally wraps a Flutter [Texture] widget. Shows [placeholder] while
   /// the camera is not yet streaming (e.g. during opening or recovery).
-  Widget buildPreview({
-    BoxFit fit = BoxFit.contain,
-    Widget? placeholder,
-  }) =>
-      CambrianCameraPreview(
-        camera: this,
-        fit: fit,
-        placeholder: placeholder,
-      );
+  Widget buildPreview({BoxFit fit = BoxFit.contain, Widget? placeholder}) =>
+      CambrianCameraPreview(camera: this, fit: fit, placeholder: placeholder);
 
   /// Closes the camera and releases all native resources.
   ///
