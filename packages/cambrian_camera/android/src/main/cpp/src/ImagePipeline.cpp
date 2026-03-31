@@ -30,31 +30,42 @@ ImagePipeline::ImagePipeline(ANativeWindow* window, int width, int height)
         LOGD("ImagePipeline created, window=%p dims=%dx%d", previewWindow_, width, height);
     }
 
-    // Start the processing thread before registering the preview sink so it is
-    // ready to receive frames as soon as the first addSink() call completes.
+    // Start the processing thread before registering sinks so it is ready to
+    // receive frames as soon as the first addSink() call completes.
     processingThread_ = std::thread(&ImagePipeline::processingLoop, this);
 
-    // Register the built-in preview consumer.
+    // Built-in processed-preview consumer (post-saturation BGR → preview window).
     addSink({"__preview"}, [this](const SinkFrame& f) {
         cv::Mat bgr(f.height, f.width, CV_8UC3,
                     const_cast<uint8_t*>(f.data), f.stride);
-        // Reuse pre-allocated buffer — cvtColor only reallocates when dimensions change.
         cv::cvtColor(bgr, previewRgba_, cv::COLOR_BGR2RGBA);
-        blitToPreview(previewRgba_);
+        blitToWindow(previewWindow_, lastWidth_, lastHeight_, previewRgba_);
     });
+
+    // Built-in raw-preview consumer (pre-saturation BGR → raw preview window).
+    rawConsumer_ = std::make_unique<Consumer>();
+    rawConsumer_->name     = "__raw_preview";
+    rawConsumer_->callback = [this](const SinkFrame& f) {
+        cv::Mat bgr(f.height, f.width, CV_8UC3,
+                    const_cast<uint8_t*>(f.data), f.stride);
+        cv::cvtColor(bgr, rawPreviewRgba_, cv::COLOR_BGR2RGBA);
+        blitToWindow(rawPreviewWindow_, rawLastWidth_, rawLastHeight_, rawPreviewRgba_);
+    };
+    startConsumerThread(rawConsumer_.get());
 }
 
 ImagePipeline::~ImagePipeline() {
     // Shutdown order:
     // 1. Stop processing thread (signal input ring, join).
-    // 2. Stop all consumer dispatch threads.
-    // 3. Release preview window.
+    // 2. Stop all consumer dispatch threads (processed + raw).
+    // 3. Release preview windows.
     inputRing_.shutdown();
     if (processingThread_.joinable()) {
         processingThread_.join();
     }
 
     shutdownConsumers();
+    shutdownConsumer(rawConsumer_.get());
 
     std::lock_guard<std::mutex> lock(windowMu_);
     if (previewWindow_) {
@@ -106,27 +117,28 @@ void ImagePipeline::setRawPreviewWindow(ANativeWindow* window) {
     }
 }
 
-void ImagePipeline::blitToPreview(const cv::Mat& rgba) {
+void ImagePipeline::blitToWindow(ANativeWindow*& window, int& lastW, int& lastH,
+                                  const cv::Mat& rgba) {
     std::lock_guard<std::mutex> lock(windowMu_);
-    if (!previewWindow_) return;
+    if (!window) return;
 
     const int width  = rgba.cols;
     const int height = rgba.rows;
 
-    if (width != lastWidth_ || height != lastHeight_) {
+    if (width != lastW || height != lastH) {
         if (ANativeWindow_setBuffersGeometry(
-                previewWindow_, width, height, WINDOW_FORMAT_RGBA_8888) != 0) {
-            LOGE("blitToPreview: setBuffersGeometry failed");
+                window, width, height, WINDOW_FORMAT_RGBA_8888) != 0) {
+            LOGE("blitToWindow: setBuffersGeometry failed");
             return;
         }
-        lastWidth_  = width;
-        lastHeight_ = height;
-        LOGD("blitToPreview: geometry set to %dx%d", width, height);
+        lastW = width;
+        lastH = height;
+        LOGD("blitToWindow: geometry set to %dx%d for window %p", width, height, window);
     }
 
     ANativeWindow_Buffer buf;
-    if (ANativeWindow_lock(previewWindow_, &buf, nullptr) != 0) {
-        LOGE("blitToPreview: ANativeWindow_lock failed");
+    if (ANativeWindow_lock(window, &buf, nullptr) != 0) {
+        LOGE("blitToWindow: ANativeWindow_lock failed");
         return;
     }
 
@@ -141,44 +153,7 @@ void ImagePipeline::blitToPreview(const cv::Mat& rgba) {
                static_cast<size_t>(safeW) * 4);
     }
 
-    ANativeWindow_unlockAndPost(previewWindow_);
-}
-
-void ImagePipeline::blitToRawPreview(const cv::Mat& rgba) {
-    std::lock_guard<std::mutex> lock(windowMu_);
-    if (!rawPreviewWindow_) return;
-
-    const int width  = rgba.cols;
-    const int height = rgba.rows;
-
-    if (width != rawLastWidth_ || height != rawLastHeight_) {
-        if (ANativeWindow_setBuffersGeometry(
-                rawPreviewWindow_, width, height, WINDOW_FORMAT_RGBA_8888) != 0) {
-            LOGE("blitToRawPreview: setBuffersGeometry failed");
-            return;
-        }
-        rawLastWidth_  = width;
-        rawLastHeight_ = height;
-    }
-
-    ANativeWindow_Buffer buf;
-    if (ANativeWindow_lock(rawPreviewWindow_, &buf, nullptr) != 0) {
-        LOGE("blitToRawPreview: ANativeWindow_lock failed");
-        return;
-    }
-
-    const int dstStride = buf.stride * 4;
-    const int safeH = std::min(height, static_cast<int>(buf.height));
-    const int safeW = std::min(width,  static_cast<int>(buf.width));
-    auto* dst = reinterpret_cast<uint8_t*>(buf.bits);
-
-    for (int row = 0; row < safeH; ++row) {
-        memcpy(dst + row * dstStride,
-               rgba.data + row * rgba.step,
-               static_cast<size_t>(safeW) * 4);
-    }
-
-    ANativeWindow_unlockAndPost(rawPreviewWindow_);
+    ANativeWindow_unlockAndPost(window);
 }
 
 // ---------------------------------------------------------------------------
@@ -249,9 +224,27 @@ void ImagePipeline::processingLoop() {
             cv::cvtColorTwoPlane(y_mat, uv_mat, bgr, code);
         }
 
-        // Raw preview: blit before any processing so it shows the unmodified BGR.
-        cv::cvtColor(bgr, rawPreviewRgba_, cv::COLOR_BGR2RGBA);
-        blitToRawPreview(rawPreviewRgba_);
+        // Publish raw (pre-saturation) frame to the raw preview dispatch thread.
+        // Non-blocking: just drops into the mailbox, dispatch thread does the blit.
+        // Skip the clone entirely when no raw window is configured.
+        {
+            bool hasRawWindow;
+            {
+                std::lock_guard<std::mutex> wlk(windowMu_);
+                hasRawWindow = rawPreviewWindow_ != nullptr;
+            }
+            if (hasRawWindow) {
+                auto rawFrame    = std::make_shared<Frame>();
+                rawFrame->bgr    = bgr.clone();
+                rawFrame->id     = slot.frameId;
+                rawFrame->meta   = slot.meta;
+                rawFrame->width  = slot.width;
+                rawFrame->height = slot.height;
+                rawFrame->stride = static_cast<int>(rawFrame->bgr.step);
+                rawFrame->format = PixelFormat::BGR;
+                publishToRawConsumer(std::move(rawFrame));
+            }
+        }
 
         // Apply saturation (HSV S-channel scaling; identity when saturation ≈ 1).
         if (std::abs(p.saturation - 1.0f) > 1e-4f) {
@@ -287,6 +280,46 @@ void ImagePipeline::processingLoop() {
 // Consumer dispatch
 // ---------------------------------------------------------------------------
 
+void ImagePipeline::startConsumerThread(Consumer* c) {
+    c->dispatchThread = std::thread([c]() {
+        while (true) {
+            SharedFrame frame;
+            {
+                std::unique_lock<std::mutex> lk(c->mu);
+                c->cv.wait(lk, [c] {
+                    return static_cast<bool>(c->pending) || !c->running.load();
+                });
+                if (!c->running.load() && !c->pending) break;
+                frame = std::move(c->pending);
+            }
+            SinkFrame sf;
+            sf.data    = frame->bgr.data;
+            sf.width   = frame->width;
+            sf.height  = frame->height;
+            sf.stride  = frame->stride;
+            sf.format  = frame->format;
+            sf.frameId = frame->id;
+            sf.meta    = frame->meta;
+            c->callback(sf);
+        }
+    });
+}
+
+void ImagePipeline::shutdownConsumer(Consumer* c) {
+    if (!c) return;
+    c->running = false;
+    c->cv.notify_all();
+    if (c->dispatchThread.joinable()) {
+        c->dispatchThread.join();
+    }
+}
+
+void ImagePipeline::publishToRawConsumer(SharedFrame frame) {
+    std::lock_guard<std::mutex> lk(rawConsumer_->mu);
+    rawConsumer_->pending = std::move(frame);
+    rawConsumer_->cv.notify_one();
+}
+
 void ImagePipeline::publishToConsumers(SharedFrame frame) {
     std::lock_guard<std::mutex> lock(consumersMu_);
     for (auto& c : consumers_) {
@@ -308,32 +341,7 @@ void ImagePipeline::addSink(const SinkConfig& config, SinkCallback callback) {
         consumers_.push_back(std::move(consumer));
     }
 
-    raw->dispatchThread = std::thread([raw]() {
-        while (true) {
-            SharedFrame frame;
-            {
-                std::unique_lock<std::mutex> lk(raw->mu);
-                raw->cv.wait(lk, [raw] {
-                    return static_cast<bool>(raw->pending) || !raw->running.load();
-                });
-                if (!raw->running.load() && !raw->pending) break;
-                frame = std::move(raw->pending);  // take exclusive ownership
-            }
-            // Build a SinkFrame view into the shared Frame allocation — no copy.
-            SinkFrame sf;
-            sf.data    = frame->bgr.data;
-            sf.width   = frame->width;
-            sf.height  = frame->height;
-            sf.stride  = frame->stride;
-            sf.format  = frame->format;
-            sf.frameId = frame->id;
-            sf.meta    = frame->meta;
-
-            raw->callback(sf);
-            // frame drops here; if no other consumer still holds it, Frame is freed.
-        }
-    });
-
+    startConsumerThread(raw);
     LOGD("addSink: name=%s", config.name.c_str());
 }
 
@@ -353,26 +361,19 @@ void ImagePipeline::removeSink(const std::string& name) {
     consumers_.erase(it);
     lock.unlock();
 
-    consumer->running = false;
-    consumer->cv.notify_all();
-    if (consumer->dispatchThread.joinable()) {
-        consumer->dispatchThread.join();
-    }
+    shutdownConsumer(consumer.get());
     LOGD("removeSink: '%s' removed", name.c_str());
 }
 
 void ImagePipeline::shutdownConsumers() {
-    std::lock_guard<std::mutex> lock(consumersMu_);
-    for (auto& c : consumers_) {
-        c->running = false;
-        c->cv.notify_all();
+    std::vector<std::unique_ptr<Consumer>> local;
+    {
+        std::lock_guard<std::mutex> lock(consumersMu_);
+        local = std::move(consumers_);
     }
-    for (auto& c : consumers_) {
-        if (c->dispatchThread.joinable()) {
-            c->dispatchThread.join();
-        }
+    for (auto& c : local) {
+        shutdownConsumer(c.get());
     }
-    consumers_.clear();
     LOGD("shutdownConsumers: all consumers removed");
 }
 
