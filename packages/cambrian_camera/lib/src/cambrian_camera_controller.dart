@@ -6,6 +6,7 @@ import 'camera_settings.dart';
 import 'camera_settings_serializer.dart';
 import 'camera_state.dart';
 import 'cambrian_camera_preview.dart';
+import 'frame_result.dart';
 import 'messages.g.dart';
 
 /// The main entry point for the Cambrian camera library.
@@ -44,7 +45,8 @@ class CambrianCamera {
        _capabilities = capabilities,
        _currentState = initialState,
        _stateController = StreamController<CameraState>.broadcast(),
-       _errorController = StreamController<CameraError>.broadcast() {
+       _errorController = StreamController<CameraError>.broadcast(),
+       _frameResultController = StreamController<FrameResult>.broadcast() {
     // Register in the global instance map so FlutterApi callbacks can be
     // routed to the correct camera by handle.
     _instances[handle] = this;
@@ -86,6 +88,7 @@ class CambrianCamera {
   CameraCapabilities _capabilities;
   final StreamController<CameraState> _stateController;
   final StreamController<CameraError> _errorController;
+  final StreamController<FrameResult> _frameResultController;
   late final CameraSettingsSerializer _serializer;
 
   /// The most recent camera lifecycle state. Used as [StreamBuilder.initialData]
@@ -163,6 +166,13 @@ class CambrianCamera {
   /// [CameraError.isFatal] == true: requires [close] and possible reopen.
   Stream<CameraError> get errorStream => _errorController.stream;
 
+  /// Broadcasts actual sensor values reported by the camera hardware.
+  ///
+  /// Emits approximately 3 times per second (throttled in native code to every
+  /// 10th capture result). Use this to display live ISO, exposure time, focus
+  /// distance, and white-balance gains in the UI.
+  Stream<FrameResult> get frameResultStream => _frameResultController.stream;
+
   /// Schedules an ISP-level settings update.
   ///
   /// Only include the fields you want to change — `null` fields are ignored
@@ -220,6 +230,7 @@ class CambrianCamera {
       // arriving after the streams are closed.
       await _stateController.close();
       await _errorController.close();
+      await _frameResultController.close();
     }
   }
 
@@ -234,6 +245,17 @@ class CambrianCamera {
 
   void _onError(CamError error) {
     _errorController.add(CameraError.fromPigeon(error));
+  }
+
+  void _onFrameResult(CamFrameResult result) {
+    _frameResultController.add(FrameResult(
+      iso: result.iso,
+      exposureTimeNs: result.exposureTimeNs,
+      focusDistanceDiopters: result.focusDistanceDiopters,
+      wbGainR: result.wbGainR,
+      wbGainG: result.wbGainG,
+      wbGainB: result.wbGainB,
+    ));
   }
 }
 
@@ -251,5 +273,10 @@ class _FlutterApiDispatcher extends CameraFlutterApi {
   @override
   void onError(int handle, CamError error) {
     CambrianCamera._instances[handle]?._onError(error);
+  }
+
+  @override
+  void onFrameResult(int handle, CamFrameResult result) {
+    CambrianCamera._instances[handle]?._onFrameResult(result);
   }
 }

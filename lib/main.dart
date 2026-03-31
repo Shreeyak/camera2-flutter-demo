@@ -1,3 +1,5 @@
+import 'dart:async' show StreamSubscription;
+
 import 'package:cambrian_camera/cambrian_camera.dart';
 import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -9,6 +11,15 @@ import 'theme/theme_util.dart';
 import 'widgets/bottom_bar.dart';
 import 'widgets/camera_control_overlay.dart';
 import 'widgets/bottom_bar_buttons.dart';
+
+/// Initial camera settings used for both [CambrianCamera.open] and the UI's
+/// initial [CameraSettingsValues]. Keeping them in one place ensures the two
+/// can never diverge at startup.
+const _kInitialSettings = CameraSettings(
+  iso: AutoValue<int>.auto(),
+  exposureTimeNs: AutoValue<int>.auto(),
+  focus: AutoValue<double>.auto(),
+);
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -45,15 +56,21 @@ class _CameraScreenState extends State<CameraScreen> {
   CameraRanges _ranges = const CameraRanges();
   late final CameraCallbacks _callbacks;
   CambrianCamera? _camera;
+  StreamSubscription<FrameResult>? _frameResultSub;
+  StreamSubscription<CameraError>? _errorSub;
 
   // ── UI state
   bool _settingsDrawerOpen = false;
   CameraSettingType? _activeSetting;
 
+  /// True once the first frame result with real AE values has arrived.
+  /// Guards manual ISO/exposure changes to prevent a settingsConflict on open.
+  bool _aeSeeded = false;
+
   @override
   void initState() {
     super.initState();
-    _values = CameraSettingsValues.initialFromRanges(_ranges);
+    _values = CameraSettingsValues.fromSettings(_kInitialSettings, _ranges);
     _openCamera();
     _callbacks = CameraCallbacks(
       onIsoChanged: _onIsoChanged,
@@ -72,7 +89,7 @@ class _CameraScreenState extends State<CameraScreen> {
       return;
     }
     try {
-      final camera = await CambrianCamera.open();
+      final camera = await CambrianCamera.open(settings: _kInitialSettings);
       final caps = camera.capabilities;
       final ranges = CameraRanges(
         isoRange: [caps.isoMin, caps.isoMax],
@@ -85,8 +102,10 @@ class _CameraScreenState extends State<CameraScreen> {
         setState(() {
           _camera = camera;
           _ranges = ranges;
-          _values = CameraSettingsValues.initialFromRanges(ranges);
+          _values = CameraSettingsValues.fromSettings(_kInitialSettings, ranges);
         });
+        _frameResultSub = camera.frameResultStream.listen(_onFrameResult);
+        _errorSub = camera.errorStream.listen(_onCameraError);
       }
     } catch (e) {
       // Camera may not be available in all environments (e.g. emulators).
@@ -97,6 +116,8 @@ class _CameraScreenState extends State<CameraScreen> {
 
   @override
   void dispose() {
+    _frameResultSub?.cancel();
+    _errorSub?.cancel();
     final camera = _camera;
     if (camera != null) {
       camera.close().catchError((Object e) {
@@ -135,15 +156,29 @@ class _CameraScreenState extends State<CameraScreen> {
   }
 
   void _onIsoChanged(int iso) {
-    setState(() => _values = _values.copyWith(isoValue: iso, isoAuto: false));
+    if (!_aeSeeded) return;
+    // ISO and exposure share a single Camera2 AE flag — manual ISO means manual exposure.
+    setState(() => _values = _values.copyWith(isoValue: iso, isoAuto: false, exposureAuto: false));
     _applySettings(CameraSettings(iso: AutoValue.manual(iso)));
   }
 
   void _onExposureTimeNsChanged(int ns) {
+    if (!_aeSeeded) return;
+    // ISO and exposure share a single Camera2 AE flag — manual exposure means manual ISO.
     setState(
-      () => _values = _values.copyWith(exposureTimeNs: ns, exposureAuto: false),
+      () => _values = _values.copyWith(exposureTimeNs: ns, exposureAuto: false, isoAuto: false),
     );
     _applySettings(CameraSettings(exposureTimeNs: AutoValue.manual(ns)));
+  }
+
+  void _onCameraError(CameraError error) {
+    if (!mounted) return;
+    if (error.code == CameraErrorCode.settingsConflict) {
+      setState(() => _values = _values.copyWith(isoAuto: true, exposureAuto: true));
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Camera not ready — settings reverted to auto')),
+      );
+    }
   }
 
   void _onFocusChanged(double dist) {
@@ -156,6 +191,52 @@ class _CameraScreenState extends State<CameraScreen> {
   void _onZoomChanged(double ratio) {
     setState(() => _values = _values.copyWith(zoomRatio: ratio));
     _applySettings(CameraSettings(zoomRatio: ratio));
+  }
+
+  /// Updates slider positions from live hardware sensor values.
+  ///
+  /// Only writes fields whose auto mode is currently active — manual values set
+  /// by the user are never overwritten. [CameraRulerDial.didUpdateWidget] picks
+  /// up the new [initialValue] and snaps the dial to the hardware reading.
+  void _onFrameResult(FrameResult result) {
+    if (!mounted) return;
+    var next = _values;
+    if (_values.isoAuto) {
+      final iso = result.iso;
+      if (iso != null) {
+        final clamped = iso.clamp(_ranges.isoRange[0], _ranges.isoRange[1]).toInt();
+        if (clamped != _values.isoValue) {
+          next = next.copyWith(isoValue: clamped);
+        }
+      }
+    }
+    if (_values.exposureAuto) {
+      final ns = result.exposureTimeNs;
+      if (ns != null) {
+        final clamped = ns
+            .clamp(_ranges.exposureTimeRangeNs[0], _ranges.exposureTimeRangeNs[1])
+            .toInt();
+        if (clamped != _values.exposureTimeNs) {
+          next = next.copyWith(exposureTimeNs: clamped);
+        }
+      }
+    }
+    if (_values.afEnabled) {
+      final focus = result.focusDistanceDiopters;
+      if (focus != null) {
+        final clamped = focus.clamp(0.0, _ranges.minFocusDiopters).toDouble();
+        if (clamped != _values.focusDiopters) {
+          next = next.copyWith(focusDiopters: clamped);
+        }
+      }
+    }
+    final nowSeeded = !_aeSeeded && result.iso != null && result.exposureTimeNs != null;
+    if (!identical(next, _values) || nowSeeded) {
+      setState(() {
+        _values = next;
+        if (nowSeeded) _aeSeeded = true;
+      });
+    }
   }
 
   // ── UI actions
@@ -205,14 +286,16 @@ class _CameraScreenState extends State<CameraScreen> {
     switch (param) {
       case CameraSettingType.iso:
         final nowAuto = !_values.isoAuto;
-        setState(() => _values = _values.copyWith(isoAuto: nowAuto));
+        // Auto is contagious: toggling ISO auto also toggles exposure auto.
+        setState(() => _values = _values.copyWith(isoAuto: nowAuto, exposureAuto: nowAuto));
         _applySettings(CameraSettings(
           iso: nowAuto ? const AutoValue.auto() : AutoValue.manual(_values.isoValue),
         ));
         break;
       case CameraSettingType.shutter:
         final nowAuto = !_values.exposureAuto;
-        setState(() => _values = _values.copyWith(exposureAuto: nowAuto));
+        // Auto is contagious: toggling exposure auto also toggles ISO auto.
+        setState(() => _values = _values.copyWith(exposureAuto: nowAuto, isoAuto: nowAuto));
         _applySettings(CameraSettings(
           exposureTimeNs: nowAuto
               ? const AutoValue.auto()
@@ -296,6 +379,7 @@ class _CameraScreenState extends State<CameraScreen> {
                     color: Theme.of(context).colorScheme.surfaceContainerLowest,
                     child: BottomBar(
                       isSettingsOpen: _settingsDrawerOpen,
+                      isSettingsEnabled: _aeSeeded,
                       activeSetting: _activeSetting,
                       values: _values,
                       callbacks: _callbacks,

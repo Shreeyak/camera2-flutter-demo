@@ -392,6 +392,62 @@ class CamError {
   }
 }
 
+/// Actual sensor values reported by the hardware after each captured frame.
+///
+/// All fields are nullable — null means the hardware did not report that value.
+/// Delivered via [CameraFlutterApi.onFrameResult] at ~3 Hz (every 10th frame).
+class CamFrameResult {
+  CamFrameResult({
+    this.iso,
+    this.exposureTimeNs,
+    this.focusDistanceDiopters,
+    this.wbGainR,
+    this.wbGainG,
+    this.wbGainB,
+  });
+
+  /// Actual sensor sensitivity (ISO) used for this frame.
+  int? iso;
+
+  /// Actual exposure duration in nanoseconds used for this frame.
+  int? exposureTimeNs;
+
+  /// Actual focus distance in diopters (1/metres). 0.0 = infinity.
+  double? focusDistanceDiopters;
+
+  /// Red channel gain from COLOR_CORRECTION_GAINS.
+  double? wbGainR;
+
+  /// Green channel gain (average of greenEven + greenOdd).
+  double? wbGainG;
+
+  /// Blue channel gain from COLOR_CORRECTION_GAINS.
+  double? wbGainB;
+
+  Object encode() {
+    return <Object?>[
+      iso,
+      exposureTimeNs,
+      focusDistanceDiopters,
+      wbGainR,
+      wbGainG,
+      wbGainB,
+    ];
+  }
+
+  static CamFrameResult decode(Object result) {
+    result as List<Object?>;
+    return CamFrameResult(
+      iso: result[0] as int?,
+      exposureTimeNs: result[1] as int?,
+      focusDistanceDiopters: result[2] as double?,
+      wbGainR: result[3] as double?,
+      wbGainG: result[4] as double?,
+      wbGainB: result[5] as double?,
+    );
+  }
+}
+
 
 class _PigeonCodec extends StandardMessageCodec {
   const _PigeonCodec();
@@ -421,6 +477,9 @@ class _PigeonCodec extends StandardMessageCodec {
     }    else if (value is CamError) {
       buffer.putUint8(135);
       writeValue(buffer, value.encode());
+    }    else if (value is CamFrameResult) {
+      buffer.putUint8(136);
+      writeValue(buffer, value.encode());
     } else {
       super.writeValue(buffer, value);
     }
@@ -444,6 +503,8 @@ class _PigeonCodec extends StandardMessageCodec {
         return CamStateUpdate.decode(readValue(buffer)!);
       case 135: 
         return CamError.decode(readValue(buffer)!);
+      case 136: 
+        return CamFrameResult.decode(readValue(buffer)!);
       default:
         return super.readValueOfType(type, buffer);
     }
@@ -640,6 +701,8 @@ abstract class CameraFlutterApi {
 
   void onError(int handle, CamError error);
 
+  void onFrameResult(int handle, CamFrameResult result);
+
   static void setUp(CameraFlutterApi? api, {BinaryMessenger? binaryMessenger, String messageChannelSuffix = '',}) {
     messageChannelSuffix = messageChannelSuffix.isNotEmpty ? '.$messageChannelSuffix' : '';
     {
@@ -689,6 +752,34 @@ abstract class CameraFlutterApi {
               'Argument for dev.flutter.pigeon.cambrian_camera.CameraFlutterApi.onError was null, expected non-null CamError.');
           try {
             api.onError(arg_handle!, arg_error!);
+            return wrapResponse(empty: true);
+          } on PlatformException catch (e) {
+            return wrapResponse(error: e);
+          }          catch (e) {
+            return wrapResponse(error: PlatformException(code: 'error', message: e.toString()));
+          }
+        });
+      }
+    }
+    {
+      final BasicMessageChannel<Object?> pigeonVar_channel = BasicMessageChannel<Object?>(
+          'dev.flutter.pigeon.cambrian_camera.CameraFlutterApi.onFrameResult$messageChannelSuffix', pigeonChannelCodec,
+          binaryMessenger: binaryMessenger);
+      if (api == null) {
+        pigeonVar_channel.setMessageHandler(null);
+      } else {
+        pigeonVar_channel.setMessageHandler((Object? message) async {
+          assert(message != null,
+          'Argument for dev.flutter.pigeon.cambrian_camera.CameraFlutterApi.onFrameResult was null.');
+          final List<Object?> args = (message as List<Object?>?)!;
+          final int? arg_handle = (args[0] as int?);
+          assert(arg_handle != null,
+              'Argument for dev.flutter.pigeon.cambrian_camera.CameraFlutterApi.onFrameResult was null, expected non-null int.');
+          final CamFrameResult? arg_result = (args[1] as CamFrameResult?);
+          assert(arg_result != null,
+              'Argument for dev.flutter.pigeon.cambrian_camera.CameraFlutterApi.onFrameResult was null, expected non-null CamFrameResult.');
+          try {
+            api.onFrameResult(arg_handle!, arg_result!);
             return wrapResponse(empty: true);
           } on PlatformException catch (e) {
             return wrapResponse(error: e);

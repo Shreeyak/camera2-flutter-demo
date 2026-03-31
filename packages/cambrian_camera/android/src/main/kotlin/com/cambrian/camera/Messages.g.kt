@@ -327,6 +327,52 @@ data class CamError (
     )
   }
 }
+
+/**
+ * Actual sensor values reported by the hardware after each captured frame.
+ *
+ * All fields are nullable — null means the hardware did not report that value.
+ * Delivered via [CameraFlutterApi.onFrameResult] at ~3 Hz (every 10th frame).
+ *
+ * Generated class from Pigeon that represents data sent in messages.
+ */
+data class CamFrameResult (
+  /** Actual sensor sensitivity (ISO) used for this frame. */
+  val iso: Long? = null,
+  /** Actual exposure duration in nanoseconds used for this frame. */
+  val exposureTimeNs: Long? = null,
+  /** Actual focus distance in diopters (1/metres). 0.0 = infinity. */
+  val focusDistanceDiopters: Double? = null,
+  /** Red channel gain from COLOR_CORRECTION_GAINS. */
+  val wbGainR: Double? = null,
+  /** Green channel gain (average of greenEven + greenOdd). */
+  val wbGainG: Double? = null,
+  /** Blue channel gain from COLOR_CORRECTION_GAINS. */
+  val wbGainB: Double? = null
+)
+ {
+  companion object {
+    fun fromList(pigeonVar_list: List<Any?>): CamFrameResult {
+      val iso = pigeonVar_list[0] as Long?
+      val exposureTimeNs = pigeonVar_list[1] as Long?
+      val focusDistanceDiopters = pigeonVar_list[2] as Double?
+      val wbGainR = pigeonVar_list[3] as Double?
+      val wbGainG = pigeonVar_list[4] as Double?
+      val wbGainB = pigeonVar_list[5] as Double?
+      return CamFrameResult(iso, exposureTimeNs, focusDistanceDiopters, wbGainR, wbGainG, wbGainB)
+    }
+  }
+  fun toList(): List<Any?> {
+    return listOf(
+      iso,
+      exposureTimeNs,
+      focusDistanceDiopters,
+      wbGainR,
+      wbGainG,
+      wbGainB,
+    )
+  }
+}
 private open class MessagesPigeonCodec : StandardMessageCodec() {
   override fun readValueOfType(type: Byte, buffer: ByteBuffer): Any? {
     return when (type) {
@@ -365,6 +411,11 @@ private open class MessagesPigeonCodec : StandardMessageCodec() {
           CamError.fromList(it)
         }
       }
+      136.toByte() -> {
+        return (readValue(buffer) as? List<Any?>)?.let {
+          CamFrameResult.fromList(it)
+        }
+      }
       else -> super.readValueOfType(type, buffer)
     }
   }
@@ -396,6 +447,10 @@ private open class MessagesPigeonCodec : StandardMessageCodec() {
       }
       is CamError -> {
         stream.write(135)
+        writeValue(stream, value.toList())
+      }
+      is CamFrameResult -> {
+        stream.write(136)
         writeValue(stream, value.toList())
       }
       else -> super.writeValue(stream, value)
@@ -595,6 +650,23 @@ class CameraFlutterApi(private val binaryMessenger: BinaryMessenger, private val
     val channelName = "dev.flutter.pigeon.cambrian_camera.CameraFlutterApi.onError$separatedMessageChannelSuffix"
     val channel = BasicMessageChannel<Any?>(binaryMessenger, channelName, codec)
     channel.send(listOf(handleArg, errorArg)) {
+      if (it is List<*>) {
+        if (it.size > 1) {
+          callback(Result.failure(FlutterError(it[0] as String, it[1] as String, it[2] as String?)))
+        } else {
+          callback(Result.success(Unit))
+        }
+      } else {
+        callback(Result.failure(createConnectionError(channelName)))
+      } 
+    }
+  }
+  fun onFrameResult(handleArg: Long, resultArg: CamFrameResult, callback: (Result<Unit>) -> Unit)
+{
+    val separatedMessageChannelSuffix = if (messageChannelSuffix.isNotEmpty()) ".$messageChannelSuffix" else ""
+    val channelName = "dev.flutter.pigeon.cambrian_camera.CameraFlutterApi.onFrameResult$separatedMessageChannelSuffix"
+    val channel = BasicMessageChannel<Any?>(binaryMessenger, channelName, codec)
+    channel.send(listOf(handleArg, resultArg)) {
       if (it is List<*>) {
         if (it.size > 1) {
           callback(Result.failure(FlutterError(it[0] as String, it[1] as String, it[2] as String?)))

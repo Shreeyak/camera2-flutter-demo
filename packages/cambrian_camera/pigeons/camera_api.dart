@@ -182,6 +182,34 @@ class CamError {
   bool isFatal;
 }
 
+/// Actual sensor values reported by the hardware after each captured frame.
+///
+/// All fields are nullable — null means the hardware did not report that value.
+/// Delivered via [CameraFlutterApi.onFrameResult] at ~3 Hz (every 10th frame).
+class CamFrameResult {
+  CamFrameResult({
+    this.iso,
+    this.exposureTimeNs,
+    this.focusDistanceDiopters,
+    this.wbGainR,
+    this.wbGainG,
+    this.wbGainB,
+  });
+
+  /// Actual sensor sensitivity (ISO) used for this frame.
+  int? iso;
+  /// Actual exposure duration in nanoseconds used for this frame.
+  int? exposureTimeNs;
+  /// Actual focus distance in diopters (1/metres). 0.0 = infinity.
+  double? focusDistanceDiopters;
+  /// Red channel gain from COLOR_CORRECTION_GAINS.
+  double? wbGainR;
+  /// Green channel gain (average of greenEven + greenOdd).
+  double? wbGainG;
+  /// Blue channel gain from COLOR_CORRECTION_GAINS.
+  double? wbGainB;
+}
+
 // ---------------------------------------------------------------------------
 // Host API  (Dart → Kotlin)
 // ---------------------------------------------------------------------------
@@ -216,4 +244,5 @@ abstract class CameraHostApi {
 abstract class CameraFlutterApi {
   void onStateChanged(int handle, CamStateUpdate state);
   void onError(int handle, CamError error);
+  void onFrameResult(int handle, CamFrameResult result);
 }
