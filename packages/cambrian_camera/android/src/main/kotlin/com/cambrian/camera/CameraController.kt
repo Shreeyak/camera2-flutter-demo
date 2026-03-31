@@ -166,7 +166,7 @@ class CameraController(
 
     /**
      * Last sensor values reported by Camera2 capture results.
-     * Updated on every frame while AE is running; preserved when AE is off.
+     * Updated on every frame from the latest TotalCaptureResult.
      * Used to seed manual mode when the user switches one field to manual —
      * the partner is initialised to the last live AE value so exposure is continuous.
      */
