@@ -1299,7 +1299,7 @@ class CameraController(
                         exposureTimeNs = lastKnownExposureTimeNs,
                         focusDistanceDiopters = focusDist?.toDouble(),
                         wbGainR = wbGains?.red?.toDouble(),
-                        wbGainG = wbGains?.let { (it.greenEven + it.greenOdd) / 2.0 },
+                        wbGainG = wbGains?.let { (it.greenEven.toDouble() + it.greenOdd.toDouble()) / 2.0 },
                         wbGainB = wbGains?.blue?.toDouble(),
                     )
                     mainHandler.post { flutterApi.onFrameResult(handle, frameResult) {} }

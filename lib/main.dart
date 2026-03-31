@@ -178,28 +178,30 @@ class _CameraScreenState extends State<CameraScreen> {
     if (_values.isoAuto) {
       final iso = result.iso;
       if (iso != null) {
-        next = next.copyWith(
-          isoValue: iso.clamp(_ranges.isoRange[0], _ranges.isoRange[1]),
-        );
+        final clamped = iso.clamp(_ranges.isoRange[0], _ranges.isoRange[1]).toInt();
+        if (clamped != _values.isoValue) {
+          next = next.copyWith(isoValue: clamped);
+        }
       }
     }
     if (_values.exposureAuto) {
       final ns = result.exposureTimeNs;
       if (ns != null) {
-        next = next.copyWith(
-          exposureTimeNs: ns.clamp(
-            _ranges.exposureTimeRangeNs[0],
-            _ranges.exposureTimeRangeNs[1],
-          ),
-        );
+        final clamped = ns
+            .clamp(_ranges.exposureTimeRangeNs[0], _ranges.exposureTimeRangeNs[1])
+            .toInt();
+        if (clamped != _values.exposureTimeNs) {
+          next = next.copyWith(exposureTimeNs: clamped);
+        }
       }
     }
     if (_values.afEnabled) {
       final focus = result.focusDistanceDiopters;
       if (focus != null) {
-        next = next.copyWith(
-          focusDiopters: focus.clamp(0.0, _ranges.minFocusDiopters),
-        );
+        final clamped = focus.clamp(0.0, _ranges.minFocusDiopters).toDouble();
+        if (clamped != _values.focusDiopters) {
+          next = next.copyWith(focusDiopters: clamped);
+        }
       }
     }
     if (!identical(next, _values)) {
