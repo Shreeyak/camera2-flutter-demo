@@ -161,4 +161,95 @@ Java_com_cambrian_camera_CameraController_nativeSetPreviewWindow(
     }
 }
 
+// ---------------------------------------------------------------------------
+// nativeDeliverYuv
+//
+// Delivers one YUV_420_888 frame to the C++ pipeline for post-processing and
+// preview output.  Called by Kotlin's ImageReader.OnImageAvailableListener on
+// every captured frame.
+//
+// The three DirectByteBuffers wrap ImageReader plane data; their lifetime is
+// guaranteed until image.close(), which Kotlin calls after this function returns.
+//
+// @param pipelinePtr    Handle returned by nativeInit.
+// @param yBuffer        Direct ByteBuffer for the Y plane.
+// @param yRowStride     Row stride of the Y plane in bytes.
+// @param uBuffer        Direct ByteBuffer for the U (Cb) plane.
+// @param uvRowStride    Row stride of the U/V planes in bytes.
+// @param uvPixelStride  Pixel stride of U/V planes (1=I420, 2=NV12/NV21).
+// @param vBuffer        Direct ByteBuffer for the V (Cr) plane.
+// @param width          Frame width in pixels.
+// @param height         Frame height in pixels.
+// ---------------------------------------------------------------------------
+JNIEXPORT void JNICALL
+Java_com_cambrian_camera_CameraController_nativeDeliverYuv(
+        JNIEnv* env, jclass /*clazz*/,
+        jlong pipelinePtr,
+        jobject yBuffer, jint yRowStride,
+        jobject uBuffer, jint uvRowStride, jint uvPixelStride,
+        jobject vBuffer,
+        jint width, jint height) {
+    if (!pipelinePtr) {
+        LOGE("nativeDeliverYuv: null pipeline handle");
+        return;
+    }
+
+    const auto* yData = reinterpret_cast<const uint8_t*>(env->GetDirectBufferAddress(yBuffer));
+    const auto* uData = reinterpret_cast<const uint8_t*>(env->GetDirectBufferAddress(uBuffer));
+    const auto* vData = reinterpret_cast<const uint8_t*>(env->GetDirectBufferAddress(vBuffer));
+
+    if (!yData || !uData || !vData) {
+        LOGE("nativeDeliverYuv: plane buffer returned null from GetDirectBufferAddress — "
+             "ensure all plane buffers are direct ByteBuffers");
+        return;
+    }
+
+    pipelineFromHandle(pipelinePtr)->processFrameYuv(
+            yData, yRowStride,
+            uData, vData,
+            uvRowStride, uvPixelStride,
+            width, height);
+}
+
+// ---------------------------------------------------------------------------
+// nativeSetProcessingParams
+//
+// Updates the C++ pipeline's processing parameters fire-and-forget.  Called
+// from Kotlin whenever the Dart layer calls setProcessingParams().
+//
+// Phase 4 applies only saturation; remaining fields are stored in the struct
+// and will be applied by subsequent phases.
+// ---------------------------------------------------------------------------
+JNIEXPORT void JNICALL
+Java_com_cambrian_camera_CameraController_nativeSetProcessingParams(
+        JNIEnv* /*env*/, jclass /*clazz*/,
+        jlong pipelinePtr,
+        jdouble blackR,  jdouble blackG,  jdouble blackB,
+        jdouble gamma,
+        jdouble histBlackPoint, jdouble histWhitePoint,
+        jboolean autoStretch,
+        jdouble autoStretchLow, jdouble autoStretchHigh,
+        jdouble brightness,
+        jdouble saturation) {
+    if (!pipelinePtr) {
+        LOGE("nativeSetProcessingParams: null pipeline handle");
+        return;
+    }
+
+    cam::ProcessingParams p;
+    p.blackR          = static_cast<float>(blackR);
+    p.blackG          = static_cast<float>(blackG);
+    p.blackB          = static_cast<float>(blackB);
+    p.gamma           = static_cast<float>(gamma);
+    p.histBlackPoint  = static_cast<float>(histBlackPoint);
+    p.histWhitePoint  = static_cast<float>(histWhitePoint);
+    p.autoStretch     = static_cast<bool>(autoStretch);
+    p.autoStretchLow  = static_cast<float>(autoStretchLow);
+    p.autoStretchHigh = static_cast<float>(autoStretchHigh);
+    p.brightness      = static_cast<float>(brightness);
+    p.saturation      = static_cast<float>(saturation);
+
+    pipelineFromHandle(pipelinePtr)->setParams(p);
+}
+
 } // extern "C"
