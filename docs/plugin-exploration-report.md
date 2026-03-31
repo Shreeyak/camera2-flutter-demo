@@ -156,13 +156,13 @@ closed → opening → streaming ⟷ recovering ⟷ error
 ```
 
 **CameraError** (`camera_state.dart`):
-- Error codes: `camera_device`, `camera_service`, `camera_disconnected`, `configuration_failed`, `permission_denied`, `camera_disabled`, `max_cameras_in_use`, `preview_surface_lost`, `pipeline_error`, `unknown`
+- Error codes emitted by `CameraController.kt`: `camera_device`, `camera_service`, `camera_disconnected`, `configuration_failed`, `permission_denied`, `camera_disabled`, `max_cameras_in_use`, `camera_in_use`, `preview_surface_lost`, `pipeline_error`, `unknown`
 - `isFatal: bool` — fatal errors require manual close/reopen; non-fatal trigger auto-recovery
 
 **CameraSettingsSerializer** (`camera_settings_serializer.dart`):
-- In-flight serialization only (no time-based debounce)
-- If a send is in progress, updates coalesce so that only the most recent settings are ultimately sent
-- Ensures that the platform channel never has more than one settings update in flight at a time
+- Latest-value-wins, no debounce timer
+- Sends immediately when idle; if a send is in-flight, replaces any pending value (only the newest reaches the platform)
+- Drains the pending value on completion
 
 ---
 

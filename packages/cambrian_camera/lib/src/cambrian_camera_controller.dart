@@ -81,7 +81,9 @@ class CambrianCamera {
   /// Also serves as the Flutter [Texture] widget's texture ID.
   final int _handle;
   final CameraHostApi _hostApi;
-  final CameraCapabilities _capabilities;
+  // Non-final: set to CameraCapabilities.empty() at construction, then updated
+  // with real values from getCapabilities() before open() resolves.
+  CameraCapabilities _capabilities;
   final StreamController<CameraState> _stateController;
   final StreamController<CameraError> _errorController;
   late final CameraSettingsSerializer _serializer;
@@ -111,16 +113,19 @@ class CambrianCamera {
 
     // The handle returned by the platform is also used as the texture ID.
     final handle = await api.open(cameraId, settings?.toCam());
-    final caps = await api.getCapabilities(handle);
 
-    // open() only resolves after the camera is confirmed streaming on the
-    // Kotlin side, so initialState is always streaming at this point.
-    return CambrianCamera._(
+    // Register the instance immediately after open() so that any state/error
+    // callbacks fired during the getCapabilities round-trip are not dropped.
+    final camera = CambrianCamera._(
       handle: handle,
       hostApi: api,
-      capabilities: CameraCapabilities.fromPigeon(caps),
+      capabilities: CameraCapabilities.empty(), // replaced below
       initialState: CameraState.streaming,
     );
+
+    final caps = await api.getCapabilities(handle);
+    camera._capabilities = CameraCapabilities.fromPigeon(caps);
+    return camera;
   }
 
   // ---------------------------------------------------------------------------

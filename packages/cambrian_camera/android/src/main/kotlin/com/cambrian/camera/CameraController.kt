@@ -717,10 +717,10 @@ class CameraController(
                     }
 
                     override fun onConfigureFailed(session: CameraCaptureSession) {
-                        handleNonFatalError("configure_failed", "CaptureSession configuration failed")
+                        handleNonFatalError("configuration_failed", "CaptureSession configuration failed")
                         mainHandler.post {
                             openCallback(
-                                Result.failure(FlutterError("configure_failed", "Session configuration failed", null)),
+                                Result.failure(FlutterError("configuration_failed", "Session configuration failed", null)),
                             )
                         }
                     }
@@ -812,6 +812,16 @@ class CameraController(
     ): CaptureRequest =
         createRepeatingRequestBuilder(device, surface)
             .apply {
+
+                // CONTROL_AE_MODE must be OFF for SENSOR_SENSITIVITY and SENSOR_EXPOSURE_TIME
+                // to take effect — Camera2 ignores both keys when AE is running.
+                val wantsManualAe = settings.isoMode == "manual" || settings.exposureMode == "manual"
+                val wantsAutoAe   = settings.isoMode == "auto"   || settings.exposureMode == "auto"
+                when {
+                    wantsManualAe -> set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF)
+                    wantsAutoAe   -> set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
+                    // both null: don't touch AE_MODE — preserve whatever the template set
+                }
 
                 // ISO: "auto" = AE controls, "manual" = fixed value.
                 when (settings.isoMode) {
@@ -979,7 +989,7 @@ class CameraController(
                     }
 
                     override fun onConfigureFailed(session: CameraCaptureSession) {
-                        handleNonFatalError("configure_failed", "CaptureSession rebind failed")
+                        handleNonFatalError("configuration_failed", "CaptureSession rebind failed")
                     }
                 },
             ),
@@ -1237,11 +1247,12 @@ class CameraController(
      */
     private fun errorCodeToMessage(error: Int): Pair<String, String> =
         when (error) {
+            // String codes must match CameraErrorCode.fromString() keys in camera_state.dart.
             CameraDevice.StateCallback.ERROR_CAMERA_IN_USE -> Pair("camera_in_use", "Camera is already in use")
             CameraDevice.StateCallback.ERROR_MAX_CAMERAS_IN_USE -> Pair("max_cameras_in_use", "Too many cameras are open")
             CameraDevice.StateCallback.ERROR_CAMERA_DISABLED -> Pair("camera_disabled", "Camera disabled by policy")
-            CameraDevice.StateCallback.ERROR_CAMERA_DEVICE -> Pair("camera_device_error", "Fatal camera device error")
-            CameraDevice.StateCallback.ERROR_CAMERA_SERVICE -> Pair("camera_service_error", "Camera service error")
-            else -> Pair("camera_error", "Unknown camera error: $error")
+            CameraDevice.StateCallback.ERROR_CAMERA_DEVICE -> Pair("camera_device", "Fatal camera device error")
+            CameraDevice.StateCallback.ERROR_CAMERA_SERVICE -> Pair("camera_service", "Camera service error")
+            else -> Pair("unknown", "Unknown camera error: $error")
         }
 }

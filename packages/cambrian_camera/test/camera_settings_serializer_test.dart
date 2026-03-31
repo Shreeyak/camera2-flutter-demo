@@ -173,7 +173,7 @@ void main() {
 
   group('ProcessingParams', () {
     test('defaults are identity (no processing)', () {
-      const p = ProcessingParams();
+      final p = ProcessingParams();
       expect(p.gamma, 1.0);
       expect(p.brightness, 0.0);
       expect(p.saturation, 1.0);
@@ -182,14 +182,14 @@ void main() {
     });
 
     test('copyWith overrides only specified fields', () {
-      const original = ProcessingParams(gamma: 2.2, brightness: 0.1);
+      final original = ProcessingParams(gamma: 2.2, brightness: 0.1);
       final copy = original.copyWith(gamma: 1.0);
       expect(copy.gamma, 1.0);
       expect(copy.brightness, 0.1); // unchanged
     });
 
     test('toCam preserves all fields', () {
-      const p = ProcessingParams(
+      final p = ProcessingParams(
         blackR: 0.05,
         blackG: 0.04,
         blackB: 0.06,

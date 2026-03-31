@@ -53,6 +53,9 @@ enum CameraErrorCode {
   /// Too many cameras open in the system. Fatal.
   maxCamerasInUse,
 
+  /// Camera is already open by another app.
+  cameraInUse,
+
   /// Preview surface was invalidated (Flutter surface recycled).
   previewSurfaceLost,
 
@@ -70,6 +73,7 @@ enum CameraErrorCode {
         'permission_denied' => permissionDenied,
         'camera_disabled' => cameraDisabled,
         'max_cameras_in_use' => maxCamerasInUse,
+        'camera_in_use' => cameraInUse,
         'preview_surface_lost' => previewSurfaceLost,
         'pipeline_error' => pipelineError,
         _ => unknown,
@@ -132,6 +136,25 @@ class CameraCapabilities {
     required this.streamWidth,
     required this.streamHeight,
   });
+
+  /// Empty placeholder used during the open() factory before getCapabilities completes.
+  factory CameraCapabilities.empty() => const CameraCapabilities(
+        supportedSizes: [],
+        isoMin: 0,
+        isoMax: 0,
+        exposureTimeMinNs: 0,
+        exposureTimeMaxNs: 0,
+        focusMin: 0,
+        focusMax: 0,
+        zoomMin: 1,
+        zoomMax: 1,
+        evCompMin: 0,
+        evCompMax: 0,
+        evCompensationStep: 0,
+        estimatedMemoryBytes: 0,
+        streamWidth: 0,
+        streamHeight: 0,
+      );
 
   factory CameraCapabilities.fromPigeon(CamCapabilities c) =>
       CameraCapabilities(

@@ -31,15 +31,12 @@ Phase 3 migrates from the deprecated `createSurfaceTexture()` to `createSurfaceP
 and the lifecycle callbacks (`onSurfaceCreated`, `onSurfaceDestroyed`) map cleanly to the
 auto-recovery state machine's preview rebinding path.
 
-### Frame format: RGBA_8888 preferred, YUV_420_888 fallback
-`resolveStreamFormat()` queries `StreamConfigurationMap.getOutputSizes(PixelFormat.RGBA_8888)`.
-If supported, frames are delivered to C++ via `nativeDeliverFrame` (direct buffer, no conversion).
-If not, falls back to `ImageFormat.YUV_420_888`: frames are drained, and the SurfaceProducer is
-added as a direct Camera2 output so the preview still works. Phase 4 will add YUV→RGBA conversion.
-
-On OPD2403 (Android 16/API 36) the device fell back to YUV_420_888 at 1920×1080. The preview
-runs via Camera2 → SurfaceProducer directly; the C++ pipeline is initialised but not yet in the
-frame path on this device.
+### Frame format: YUV_420_888
+`resolveStreamFormat()` queries `StreamConfigurationMap.getOutputSizes(YUV_420_888)` and selects
+the largest available 4:3 resolution (falling back to 1280×960). The SurfaceProducer is added as a
+direct Camera2 output target so the preview renders without any conversion. The C++ pipeline is
+initialised and connected but Phase 3 is an identity passthrough — no processing is applied.
+Phase 4 will add YUV→RGBA conversion and actual ISP processing in the C++ pipeline.
 
 ### Main-thread dispatching
 All Pigeon callbacks (`CameraFlutterApi.onStateChanged`, `CameraFlutterApi.onError`) and Dart

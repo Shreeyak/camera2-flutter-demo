@@ -247,7 +247,7 @@ class CameraSettings {
 /// C++ pipeline processing parameters.
 /// Applied fire-and-forget: the next frame picks up any changes.
 class ProcessingParams {
-  const ProcessingParams({
+  ProcessingParams({
     this.blackR = 0.0,
     this.blackG = 0.0,
     this.blackB = 0.0,
@@ -259,7 +259,11 @@ class ProcessingParams {
     this.autoStretchHigh = 0.99,
     this.brightness = 0.0,
     this.saturation = 1.0,
-  });
+  })  : assert(gamma > 0 && !gamma.isNaN, 'gamma must be > 0'),
+        assert(histBlackPoint <= histWhitePoint,
+            'histBlackPoint must be <= histWhitePoint'),
+        assert(!autoStretch || autoStretchLow < autoStretchHigh,
+            'autoStretchLow must be < autoStretchHigh when autoStretch is true');
 
   /// Per-channel black level subtraction in [0.0, 0.5].
   final double blackR;

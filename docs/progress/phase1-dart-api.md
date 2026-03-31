@@ -17,7 +17,7 @@ Plugin package at `packages/cambrian_camera/` with full Dart API layer (no nativ
 | `lib/src/cambrian_camera_controller.dart` | `CambrianCamera` — main public API class |
 | `lib/src/cambrian_camera_preview.dart` | `CambrianCameraPreview` — preview widget wrapping Flutter Texture |
 | `lib/cambrian_camera.dart` | Barrel export |
-| `android/build.gradle.kts` | Plugin build config (NDK 25.1.8937393, minSdk 21, API 35) |
+| `android/build.gradle.kts` | Plugin build config (NDK 25.1.8937393, minSdk 33, API 35) |
 | `android/src/main/AndroidManifest.xml` | Camera permission + features declaration |
 | `android/src/main/kotlin/.../CambrianCameraPlugin.kt` | Kotlin stub (Phase 2 will implement) |
 | `ios/Classes/CambrianCameraPlugin.swift` | iOS stub (not supported yet) |
