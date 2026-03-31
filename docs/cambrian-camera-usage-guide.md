@@ -201,7 +201,14 @@ All fields are nullable. `null` means "don't change this setting."
 >   ));
 >   ```
 >   If the camera has not yet delivered a capture result (just opened), single-field manual is rejected with `CameraErrorCode.settingsConflict`.
-> - **Explicit mix is always an error.** Passing manual for one and auto for the other in the same `CameraSettings` object asserts in debug and is rejected at runtime.
+> - **Auto wins over manual in a mixed update.** If one field is `auto` and the other is `manual`, both switch to `auto`. This handles the UI slider case: moving the ISO slider to auto sends `{iso: auto, exposure: manual(lastValue)}` — the stale manual exposure value is correctly discarded.
+>
+> | Intent | Expression |
+> |---|---|
+> | Slide ISO to manual — exposure continuous | `CameraSettings(iso: AutoValue.manual(800))` |
+> | Set both to specific values | `CameraSettings(iso: AutoValue.manual(800), exposureTimeNs: AutoValue.manual(...))` |
+> | Switch back to auto | `CameraSettings(iso: AutoValue.auto())` — or either field; auto wins |
+> | Mixed (one auto, one manual) | Both go to auto — auto wins |
 
 #### Examples
 

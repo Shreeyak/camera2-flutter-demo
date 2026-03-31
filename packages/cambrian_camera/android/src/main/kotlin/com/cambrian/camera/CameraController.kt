@@ -456,43 +456,27 @@ class CameraController(
      * - **Auto is contagious:** setting either field to `"auto"` automatically
      *   propagates to the other field.  You may set only one to `"auto"` in a call —
      *   the partner is pulled along silently.
-     * - **Manual latches from last AE values:** when only one field is set to manual,
-     *   the partner is automatically seeded from the last sensor values reported by
-     *   Camera2 capture results (`lastKnownIso` / `lastKnownExposureTimeNs`).  This
-     *   means setting only `isoMode = "manual"` is enough — the exposure is
-     *   initialised to whatever AE was using, so the image brightness is continuous.
-     *   If no capture result has arrived yet (camera just opened), the call is
-     *   rejected with [CamErrorCode.SETTINGS_CONFLICT].
-     * - **Explicit mix is always rejected:** sending `isoMode = "manual"` and
-     *   `exposureMode = "auto"` (or vice versa) in the same call is an error
-     *   regardless of the prior state.
+     * - **Auto wins over manual:** if one field is `"auto"` and the other is `"manual"`
+     *   after merging, both are pulled to `"auto"`.  This handles the common UI case
+     *   where an ISO slider emits `{iso=auto, exposure=manual(lastValue)}` — the intent
+     *   is to switch to auto mode, and the stale manual value on the other slider is
+     *   correctly discarded.
+     * - **Manual latches from last AE values:** when only one field is set to manual
+     *   (the other is null = "don't change"), the partner is automatically seeded from
+     *   the last sensor values reported by Camera2 capture results
+     *   (`lastKnownIso` / `lastKnownExposureTimeNs`), so brightness is continuous.
+     *   If no capture result has arrived yet, the call is rejected with
+     *   [CamErrorCode.SETTINGS_CONFLICT].
      *
      * @param incoming The settings to merge and apply.
      */
     fun updateSettings(incoming: CamSettings) {
-        // Phase 1: reject an explicitly contradictory update (one manual + one auto in the
-        // same call).  Sending only one side (the other is null = "don't change") is fine —
-        // the auto-propagation step below will make them consistent.
-        val incomingIsoManual = incoming.isoMode == "manual"
-        val incomingExpManual = incoming.exposureMode == "manual"
-        val incomingIsoAuto   = incoming.isoMode == "auto"
-        val incomingExpAuto   = incoming.exposureMode == "auto"
-        if ((incomingIsoManual && incomingExpAuto) || (incomingIsoAuto && incomingExpManual)) {
-            val msg = "Settings conflict in incoming update: isoMode=${incoming.isoMode}, " +
-                "exposureMode=${incoming.exposureMode}. Both must be the same mode — " +
-                "manual ISO and auto exposure (or vice versa) is undefined in Camera2."
-            android.util.Log.e("CambrianCamera", msg)
-            mainHandler.post {
-                flutterApi.onError(handle, CamError(CamErrorCode.SETTINGS_CONFLICT, msg, false)) {}
-            }
-            return
-        }
-
-        // Phase 2: merge and apply auto-propagation.
+        // Phase 1 (merge) + auto-propagation.
         // Camera2 ties ISO and exposure to a single CONTROL_AE_MODE flag (ON = both auto,
-        // OFF = both manual).  Setting one field to "auto" therefore implies the other
-        // should also be "auto" — auto is contagious.  Manual is not propagated; both fields
-        // must be set explicitly when switching to manual.
+        // OFF = both manual).  Auto is contagious: if either field is "auto" after merging,
+        // both are pulled to auto.  This means an incoming {iso=auto, exposure=manual} pair
+        // (e.g. from a UI where the ISO slider was moved to auto while exposure retained its
+        // value) resolves correctly — auto wins and both switch to auto mode.
         var merged = mergeSettings(appliedSettings, incoming)
         val mergedIsoAuto = merged.isoMode == "auto"
         val mergedExpAuto = merged.exposureMode == "auto"

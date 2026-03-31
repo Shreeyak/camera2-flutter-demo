@@ -108,7 +108,7 @@ void main() {
 
   group('CameraSettings', () {
     test('toCam encodes manual values with mode strings', () {
-      final settings = CameraSettings(
+      const settings = CameraSettings(
         iso: AutoValue.manual(400),
         exposureTimeNs: AutoValue.manual(10000000),
         focus: AutoValue.manual(0.5),
@@ -133,7 +133,7 @@ void main() {
     });
 
     test('toCam encodes auto modes correctly', () {
-      final settings = CameraSettings(
+      const settings = CameraSettings(
         iso: AutoValue.auto(),
         exposureTimeNs: AutoValue.auto(),
         focus: AutoValue.auto(),
@@ -150,7 +150,7 @@ void main() {
     });
 
     test('toCam encodes manual white balance gains', () {
-      final settings = CameraSettings(
+      const settings = CameraSettings(
         whiteBalance: WhiteBalance.manual(gainR: 1.82, gainG: 1.0, gainB: 1.45),
       );
       final cam = settings.toCam();
@@ -161,7 +161,7 @@ void main() {
     });
 
     test('toCam leaves null fields as null (don\'t change)', () {
-      final settings = CameraSettings(zoomRatio: 3.0);
+      const settings = CameraSettings(zoomRatio: 3.0);
       final cam = settings.toCam();
       expect(cam.isoMode, isNull);
       expect(cam.iso, isNull);

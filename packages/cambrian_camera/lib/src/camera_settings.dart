@@ -148,15 +148,27 @@ enum EdgeMode {
 ///   ```
 ///   If no capture result has arrived yet (camera just opened), single-field
 ///   manual is rejected with [CameraErrorCode.settingsConflict].
-/// - **Explicit mix is always an error:** passing [Manual] for one and [Auto]
-///   for the other in the same `CameraSettings` object asserts in debug mode.
+/// - **Auto wins over manual in a mixed update:** if one field is [Auto] and
+///   the other is [Manual] in the same call, both switch to auto. This handles
+///   the common UI slider case where moving the ISO slider to auto emits
+///   `{iso: Auto, exposure: Manual(lastValue)}` — the stale manual value on
+///   the exposure slider is correctly discarded.
+///
+/// Quick reference:
+///
+/// | Intent | Expression |
+/// |---|---|
+/// | Slide ISO to manual — exposure continuous | `CameraSettings(iso: AutoValue.manual(800))` |
+/// | Set both to specific values | `CameraSettings(iso: AutoValue.manual(800), exposureTimeNs: AutoValue.manual(...))` |
+/// | Switch back to auto | `CameraSettings(iso: AutoValue.auto())` — or either field; auto wins |
+/// | Mixed (one auto, one manual) | Both go to auto — auto wins |
 ///
 /// ## EV compensation
 ///
 /// [evCompensation] is applied by the AE algorithm and has **no effect** when
 /// either [iso] or [exposureTimeNs] is manual (AE is disabled in that mode).
 class CameraSettings {
-  CameraSettings({
+  const CameraSettings({
     this.iso,
     this.exposureTimeNs,
     this.focus,
@@ -165,30 +177,25 @@ class CameraSettings {
     this.noiseReductionMode,
     this.edgeMode,
     this.evCompensation,
-  }) : assert(
-          !(iso is Manual<int> && exposureTimeNs is Auto<int>) &&
-              !(iso is Auto<int> && exposureTimeNs is Manual<int>),
-          'iso and exposureTimeNs cannot be mixed manual/auto in the same '
-          'CameraSettings object. Set both to the same mode, or leave one null '
-          '(null = don\'t change). Auto propagates automatically on the native side.',
-        );
+  });
 
   /// Sensor sensitivity (e.g. 100–3200).
   ///
   /// [Auto] = Camera2 AE controls ISO. [Manual] = fixed value.
   ///
-  /// Setting this to [Auto] automatically pulls [exposureTimeNs] to auto as
-  /// well. Setting this to [Manual] requires [exposureTimeNs] to also be
-  /// [Manual] in the same call.
+  /// Setting this to [Auto] pulls [exposureTimeNs] to auto as well. Setting
+  /// this to [Manual] latches [exposureTimeNs] from the last AE capture result
+  /// if [exposureTimeNs] is not also provided. If both are provided and one is
+  /// [Auto], both switch to auto.
   final AutoValue<int>? iso;
 
   /// Exposure duration in nanoseconds.
   ///
   /// [Auto] = Camera2 AE controls shutter speed. [Manual] = fixed value.
   ///
-  /// Setting this to [Auto] automatically pulls [iso] to auto as well.
-  /// Setting this to [Manual] requires [iso] to also be [Manual] in the
-  /// same call.
+  /// Setting this to [Auto] pulls [iso] to auto as well. Setting this to
+  /// [Manual] latches [iso] from the last AE capture result if [iso] is not
+  /// also provided. If both are provided and one is [Auto], both switch to auto.
   final AutoValue<int>? exposureTimeNs;
 
   /// Focus distance in diopters (0 = infinity).
