@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 
-import '../camera/camera_callbacks.dart';
-import '../camera/camera_format_utils.dart';
-import '../camera/camera_settings_values.dart';
+import '../camera/camera_callbacks.dart' show CameraCallbacks;
+import '../camera/camera_format_utils.dart' show formatShutterNs;
+import '../camera/camera_settings_values.dart' show CameraSettingType, CameraSettingsValues;
 import 'bottom_bar_buttons.dart';
 
 class CameraSettingsBar extends StatelessWidget {
