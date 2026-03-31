@@ -1,0 +1,1256 @@
+// Copyright (c) 2025 Cambrian. All rights reserved.
+package com.cambrian.camera
+
+import android.Manifest
+import android.content.Context
+import android.content.pm.PackageManager
+import android.graphics.ImageFormat
+import android.hardware.camera2.CameraAccessException
+import android.hardware.camera2.CameraCaptureSession
+import android.hardware.camera2.CameraCharacteristics
+import android.hardware.camera2.CameraDevice
+import android.hardware.camera2.CameraManager
+import android.hardware.camera2.CaptureRequest
+import android.hardware.camera2.CaptureResult
+import android.hardware.camera2.TotalCaptureResult
+import android.hardware.camera2.params.OutputConfiguration
+import android.hardware.camera2.params.SessionConfiguration
+import android.hardware.camera2.params.StreamConfigurationMap
+import android.media.Image
+import android.media.ImageReader
+import android.os.Build
+import android.os.Handler
+import android.os.HandlerThread
+import android.os.Looper
+import android.util.Range
+import android.util.Rational
+import android.util.Size
+import android.view.Surface
+import io.flutter.view.TextureRegistry
+import java.io.File
+import java.io.FileOutputStream
+import java.nio.ByteBuffer
+import java.util.concurrent.Semaphore
+import java.util.concurrent.TimeUnit
+
+/**
+ * Camera2 lifecycle manager for the cambrian_camera plugin.
+ *
+ * Responsibilities:
+ * - Opens a Camera2 device and configures a [CaptureSession] with a YUV_420_888 [ImageReader]
+ *   and a JPEG [ImageReader] for still capture.
+ * - Streams YUV frames via the SurfaceProducer for display; JNI delivery to C++ is a future step.
+ * - Implements an auto-recovery state machine with exponential backoff.
+ * - Applies per-request ISP settings via [updateSettings].
+ * - Provides [takePicture] to capture a single JPEG frame to the app's cache directory.
+ *
+ * @param context     Application or activity context (used for camera manager and cache dir).
+ * @param surfaceProducer  Flutter texture backing the camera preview.
+ * @param flutterApi  Pigeon-generated Flutter API for state/error callbacks to Dart.
+ * @param handle      The camera handle (= [TextureRegistry.SurfaceProducer.id]) returned to Dart.
+ */
+class CameraController(
+    private val context: Context,
+    private val surfaceProducer: TextureRegistry.SurfaceProducer,
+    private val flutterApi: CameraFlutterApi,
+    val handle: Long,
+) {
+    // -------------------------------------------------------------------------
+    // JNI bridge
+    // -------------------------------------------------------------------------
+
+    companion object {
+        init {
+            System.loadLibrary("cambrian_camera")
+        }
+
+        /** Initialises the native pipeline. Returns an opaque pointer used in subsequent calls. */
+        @JvmStatic external fun nativeInit(previewSurface: Surface): Long
+
+        /**
+         * Delivers one RGBA frame to the native pipeline.
+         *
+         * @param pipelinePtr Pointer returned by [nativeInit].
+         * @param data        Direct [ByteBuffer] containing pixel data.
+         * @param width       Frame width in pixels.
+         * @param height      Frame height in pixels.
+         * @param stride      Row stride in bytes (may be > width * 4 due to padding).
+         */
+        @JvmStatic external fun nativeDeliverFrame(
+            pipelinePtr: Long,
+            data: ByteBuffer,
+            width: Int,
+            height: Int,
+            stride: Int,
+        )
+
+        /** Releases all resources held by the native pipeline. */
+        @JvmStatic external fun nativeRelease(pipelinePtr: Long)
+
+        /**
+         * Notifies the native pipeline of a new preview [Surface] (e.g. after a surface
+         * recreation event from [TextureRegistry.SurfaceProducer.Callback]).
+         */
+        @JvmStatic external fun nativeSetPreviewWindow(
+            pipelinePtr: Long,
+            previewSurface: Surface?,
+        )
+    }
+
+    // -------------------------------------------------------------------------
+    // State machine
+    // -------------------------------------------------------------------------
+
+    /** Internal camera lifecycle state. */
+    private enum class State { CLOSED, OPENING, STREAMING, RECOVERING, ERROR }
+
+    @Volatile private var state: State = State.CLOSED
+
+    /** True once [close] or [release] has been called. The instance must not be reused. */
+    @Volatile private var released = false
+
+    // -------------------------------------------------------------------------
+    // Camera2 resources
+    // -------------------------------------------------------------------------
+
+    private val cameraManager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
+
+    /** Serialises concurrent open/close calls so we never open the device twice. */
+    private val openLock = Semaphore(1)
+
+    @Volatile private var cameraDevice: CameraDevice? = null
+
+    @Volatile private var captureSession: CameraCaptureSession? = null
+
+    @Volatile private var imageReader: ImageReader? = null
+
+    @Volatile private var jpegImageReader: ImageReader? = null
+
+    /** Repeating request rebuilt whenever settings change. */
+    @Volatile private var repeatingRequest: CaptureRequest? = null
+
+    /** The surface currently targeted by the repeating request. */
+    @Volatile private var repeatingTargetSurface: Surface? = null
+
+    /** Opaque pointer to the native pipeline, set after [nativeInit]. */
+    @Volatile private var nativePipelinePtr: Long = 0L
+
+    /** Latest preview dimensions configured on [surfaceProducer]. */
+    @Volatile private var previewWidth: Int = 0
+
+    @Volatile private var previewHeight: Int = 0
+
+    /** Camera ID resolved in [open]; stored for reconnect retries. */
+    @Volatile private var resolvedCameraId: String? = null
+
+    /** Settings to apply at session start; updated by [updateSettings]. */
+    @Volatile private var pendingSettings: CamSettings? = null
+
+    /**
+     * Accumulated settings state. Each [updateSettings] call merges non-null
+     * incoming fields into this object so that omitted fields retain their
+     * previous values across calls (instead of reverting to Camera2 template
+     * defaults).
+     */
+    @Volatile private var appliedSettings: CamSettings = CamSettings()
+
+    /** Frame counter used for periodic diagnostics. */
+    @Volatile private var streamFrameCount: Long = 0L
+
+    /** Capture-result counter used for periodic diagnostics. */
+    @Volatile private var captureResultCount: Long = 0L
+
+    // -------------------------------------------------------------------------
+    // Auto-recovery
+    // -------------------------------------------------------------------------
+
+    private var retryCount = 0
+    private val maxRetries = 5
+
+    /** Exponential backoff delays indexed by retry count (capped at index 4). */
+    private val backoffDelaysMs = longArrayOf(500, 1_000, 2_000, 4_000, 8_000)
+
+    // -------------------------------------------------------------------------
+    // Background thread
+    // -------------------------------------------------------------------------
+
+    private val backgroundThread = HandlerThread("CameraBackground").also { it.start() }
+    private val backgroundHandler = Handler(backgroundThread.looper)
+
+    /** Handler for dispatching Pigeon callbacks and Dart API calls to the main thread. */
+    private val mainHandler = Handler(Looper.getMainLooper())
+
+    // -------------------------------------------------------------------------
+    // Preview surface lifecycle
+    // -------------------------------------------------------------------------
+
+    init {
+        // Listen for surface availability/cleanup events (e.g. app moves to background).
+        surfaceProducer.setCallback(
+            object : TextureRegistry.SurfaceProducer.Callback {
+                override fun onSurfaceAvailable() {
+                    // Surface was recreated — resize and reconnect native rendering.
+                    val ptr = nativePipelinePtr
+                    if (ptr == 0L) return
+                    val width = previewWidth
+                    val height = previewHeight
+                    if (width > 0 && height > 0) {
+                        surfaceProducer.setSize(width, height)
+                    }
+                    val surface = surfaceProducer.getSurface()
+                    nativeSetPreviewWindow(ptr, surface)
+                    if (state == State.STREAMING) {
+                        // Camera2 writes directly to SurfaceProducer for YUV preview.
+                        // If SurfaceProducer recreated the surface, recreate session targets.
+                        backgroundHandler.post { rebindYuvPreviewSurface(surface) }
+                    }
+                }
+
+                override fun onSurfaceCleanup() {
+                    // Surface is going away; pause native rendering until recreated.
+                    val ptr = nativePipelinePtr
+                    if (ptr != 0L) {
+                        nativeSetPreviewWindow(ptr, null)
+                    }
+                }
+            },
+        )
+    }
+
+    // -------------------------------------------------------------------------
+    // Public API
+    // -------------------------------------------------------------------------
+
+    /**
+     * Opens the specified camera and starts a preview streaming session.
+     *
+     * If [cameraId] is null the first back-facing camera is selected, falling back to the
+     * first available camera if none is back-facing.
+     *
+     * Initial [settings] are applied to the first repeating [CaptureRequest].
+     *
+     * Emits `"opening"` then (on success) `"streaming"` state events to Dart. On failure,
+     * begins the auto-recovery loop unless the error is fatal.
+     *
+     * @param cameraId  Optional Camera2 device ID. Pass null to auto-select.
+     * @param settings  Optional initial ISP settings.
+     * @param callback  Invoked with the camera handle on success, or a [FlutterError] on failure.
+     */
+    fun open(
+        cameraId: String?,
+        settings: CamSettings?,
+        callback: (Result<Long>) -> Unit,
+    ) {
+        if (released) {
+            callback(Result.failure(FlutterError("already_released", "CameraController cannot be reused after close()", null)))
+            return
+        }
+
+        // Check camera permission before touching Camera2.
+        if (context.checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+            callback(Result.failure(FlutterError("permission_denied", "Camera permission not granted", null)))
+            return
+        }
+
+        pendingSettings = settings
+        resolvedCameraId = cameraId ?: selectDefaultCameraId()
+
+        val id = resolvedCameraId
+        if (id == null) {
+            callback(Result.failure(FlutterError("no_camera", "No camera device found on this device", null)))
+            return
+        }
+
+        emitState("opening")
+        setState(State.OPENING)
+
+        // Guard against Camera2 firing both onDisconnected and onError for the same
+        // open attempt — Pigeon reply channels accept exactly one reply per call.
+        var replied = false
+        val safeCallback: (Result<Long>) -> Unit = { result ->
+            if (!replied) {
+                replied = true
+                callback(result)
+            }
+        }
+
+        try {
+            openLock.acquire()
+        } catch (e: InterruptedException) {
+            safeCallback(Result.failure(FlutterError("interrupted", "Open interrupted", null)))
+            return
+        }
+
+        try {
+            cameraManager.openCamera(
+                id,
+                { command -> backgroundHandler.post(command) },
+                object : CameraDevice.StateCallback() {
+                    override fun onOpened(camera: CameraDevice) {
+                        openLock.release()
+                        cameraDevice = camera
+                        retryCount = 0 // Reset backoff counter on successful open.
+                        startCaptureSession(safeCallback)
+                    }
+
+                    override fun onDisconnected(camera: CameraDevice) {
+                        openLock.release()
+                        camera.close()
+                        cameraDevice = null
+                        // Non-fatal — attempt recovery.
+                        handleNonFatalError(CamErrorCode.CAMERA_DISCONNECTED, "Camera disconnected unexpectedly")
+                        mainHandler.post { safeCallback(Result.failure(FlutterError(CamErrorCode.CAMERA_DISCONNECTED.name, "Camera disconnected", null))) }
+                    }
+
+                    override fun onError(
+                        camera: CameraDevice,
+                        error: Int,
+                    ) {
+                        openLock.release()
+                        camera.close()
+                        cameraDevice = null
+
+                        val (errCode, message) = errorCodeToMessage(error)
+                        val fatal = isFatalDeviceError(error)
+                        if (fatal) {
+                            handleFatalError(errCode, message)
+                        } else {
+                            handleNonFatalError(errCode, message)
+                        }
+                        mainHandler.post { safeCallback(Result.failure(FlutterError(errCode.name, message, null))) }
+                    }
+                },
+            )
+        } catch (e: CameraAccessException) {
+            openLock.release()
+            val fatal = isFatalAccessException(e)
+            val message = e.message ?: "CameraAccessException"
+            if (fatal) {
+                handleFatalError(CamErrorCode.CAMERA_ACCESS_ERROR, message)
+            } else {
+                handleNonFatalError(CamErrorCode.CAMERA_ACCESS_ERROR, message)
+            }
+            safeCallback(Result.failure(FlutterError(CamErrorCode.CAMERA_ACCESS_ERROR.name, message, null)))
+        } catch (e: SecurityException) {
+            openLock.release()
+            handleFatalError(CamErrorCode.PERMISSION_DENIED, e.message ?: "SecurityException")
+            safeCallback(Result.failure(FlutterError(CamErrorCode.PERMISSION_DENIED.name, e.message, null)))
+        }
+    }
+
+    /**
+     * Closes the camera session and releases all Camera2 resources.
+     *
+     * Emits a `"closed"` state event to Dart after teardown completes.
+     *
+     * @param callback Invoked with [Result.success] after resources are released.
+     */
+    fun close(callback: (Result<Unit>) -> Unit) {
+        released = true
+        teardown()
+        backgroundThread.quitSafely()
+        emitState("closed")
+        setState(State.CLOSED)
+        callback(Result.success(Unit))
+    }
+
+    /**
+     * Queries [CameraCharacteristics] and returns real hardware capabilities.
+     *
+     * Reports the three largest JPEG output sizes, sensor sensitivity and exposure ranges,
+     * focus distance range, zoom range, EV compensation range, and an estimate of the
+     * memory used by the 4-slot ring buffer.
+     *
+     * @param callback Invoked with the populated [CamCapabilities] or a [FlutterError].
+     */
+    fun getCapabilities(callback: (Result<CamCapabilities>) -> Unit) {
+        val id = resolvedCameraId ?: selectDefaultCameraId()
+        if (id == null) {
+            callback(Result.failure(FlutterError("no_camera", "No camera device found", null)))
+            return
+        }
+
+        try {
+            val chars = cameraManager.getCameraCharacteristics(id)
+            val configMap = chars.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+
+            // Largest 3 JPEG output sizes, sorted descending by area.
+            val jpegSizes: List<CamSize> =
+                configMap
+                    ?.getOutputSizes(ImageFormat.JPEG)
+                    ?.sortedByDescending { it.width.toLong() * it.height }
+                    ?.take(3)
+                    ?.map { CamSize(it.width.toLong(), it.height.toLong()) }
+                    ?: emptyList()
+
+            val isoRange: Range<Int>? = chars.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE)
+            val expRange: Range<Long>? = chars.get(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE)
+
+            // focusMin = 0.0 means infinity focus. focusMax = closest focus in diopters.
+            val minFocusDist: Float = chars.get(CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE) ?: 0f
+
+            val maxDigitalZoom: Float = chars.get(CameraCharacteristics.SCALER_AVAILABLE_MAX_DIGITAL_ZOOM) ?: 1f
+
+            val evRange: Range<Int>? = chars.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_RANGE)
+            val evStep: Rational? = chars.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_STEP)
+
+            // Largest 4:3 YUV_420_888 output size — matches resolveStreamFormat selection.
+            val largestYuv = configMap
+                ?.getOutputSizes(ImageFormat.YUV_420_888)
+                ?.filter { it.width * 3 == it.height * 4 }
+                ?.maxByOrNull { it.width.toLong() * it.height }
+            val streamWidth: Int = largestYuv?.width ?: 1280
+            val streamHeight: Int = largestYuv?.height ?: 960
+
+            // Estimate 4 ring-buffer slots of YUV at the stream resolution.
+            val estimatedBytes: Long = streamWidth.toLong() * streamHeight * 4L * 4L
+
+            val caps =
+                CamCapabilities(
+                    supportedSizes = jpegSizes,
+                    isoMin = isoRange?.lower?.toLong() ?: 100L,
+                    isoMax = isoRange?.upper?.toLong() ?: 3200L,
+                    exposureTimeMinNs = expRange?.lower ?: 100_000L,
+                    exposureTimeMaxNs = expRange?.upper ?: 1_000_000_000L,
+                    focusMin = 0.0, // 0.0 = infinity
+                    focusMax = minFocusDist.toDouble(), // closest focus in diopters
+                    zoomMin = 1.0,
+                    zoomMax = maxDigitalZoom.toDouble(),
+                    evCompMin = evRange?.lower?.toLong() ?: -6L,
+                    evCompMax = evRange?.upper?.toLong() ?: 6L,
+                    evCompensationStep = evStep?.toDouble() ?: 0.5,
+                    estimatedMemoryBytes = estimatedBytes,
+                    streamWidth = streamWidth.toLong(),
+                    streamHeight = streamHeight.toLong(),
+                )
+            callback(Result.success(caps))
+        } catch (e: CameraAccessException) {
+            callback(Result.failure(FlutterError("camera_access_error", e.message, null)))
+        }
+    }
+
+    /**
+     * Updates per-frame ISP settings by rebuilding the repeating [CaptureRequest].
+     *
+     * Non-null fields in [incoming] are merged into [appliedSettings]; null fields
+     * are left unchanged. This means callers only need to send the fields they
+     * want to change — omitted fields retain their previous values.
+     *
+     * If no session is active the merged settings are stored as [pendingSettings]
+     * and applied when the next session starts.
+     *
+     * @param incoming The settings to merge and apply.
+     */
+    fun updateSettings(incoming: CamSettings) {
+        val merged = mergeSettings(appliedSettings, incoming)
+        appliedSettings = merged
+        pendingSettings = merged
+        val session = captureSession ?: return
+        val device = cameraDevice ?: return
+        val targetSurface = repeatingTargetSurface ?: imageReader?.surface ?: return
+
+        try {
+            val request = buildCaptureRequest(device, targetSurface, merged)
+            repeatingRequest = request
+            if (CambrianCameraConfig.verboseDiagnostics) {
+                android.util.Log.d(
+                    "CambrianCamera",
+                    "updateSettings request target=${describeTargetSurface(targetSurface)} " +
+                        "iso=${merged.isoMode ?: "unchanged"}(${merged.iso ?: "-"}) " +
+                        "exposure=${merged.exposureMode ?: "unchanged"}(${merged.exposureTimeNs ?: "-"})",
+                )
+            }
+            session.setRepeatingRequest(request, repeatingCaptureCallback, backgroundHandler)
+            if (CambrianCameraConfig.verboseSettings) {
+                android.util.Log.d("CambrianCamera", buildSettingsLog(merged))
+            }
+        } catch (e: CameraAccessException) {
+            // Non-fatal; the session may be closing. Log and ignore.
+            android.util.Log.w("CameraController", "updateSettings failed: ${e.message}")
+        } catch (e: IllegalStateException) {
+            android.util.Log.w("CameraController", "updateSettings: session already closed")
+        }
+    }
+
+    /**
+     * Merges [incoming] settings into [base], returning a new [CamSettings] where
+     * non-null fields from [incoming] overwrite those in [base].
+     */
+    private fun mergeSettings(base: CamSettings, incoming: CamSettings): CamSettings = CamSettings(
+        isoMode = incoming.isoMode ?: base.isoMode,
+        iso = if (incoming.isoMode != null) incoming.iso else base.iso,
+        exposureMode = incoming.exposureMode ?: base.exposureMode,
+        exposureTimeNs = if (incoming.exposureMode != null) incoming.exposureTimeNs else base.exposureTimeNs,
+        focusMode = incoming.focusMode ?: base.focusMode,
+        focusDistanceDiopters = if (incoming.focusMode != null) incoming.focusDistanceDiopters else base.focusDistanceDiopters,
+        wbMode = incoming.wbMode ?: base.wbMode,
+        wbGainR = if (incoming.wbMode != null) incoming.wbGainR else base.wbGainR,
+        wbGainG = if (incoming.wbMode != null) incoming.wbGainG else base.wbGainG,
+        wbGainB = if (incoming.wbMode != null) incoming.wbGainB else base.wbGainB,
+        zoomRatio = incoming.zoomRatio ?: base.zoomRatio,
+        noiseReductionMode = incoming.noiseReductionMode ?: base.noiseReductionMode,
+        edgeMode = incoming.edgeMode ?: base.edgeMode,
+        evCompensation = incoming.evCompensation ?: base.evCompensation,
+    )
+
+    /** Formats [settings] fields into a single log line, omitting unchanged fields. */
+    private fun buildSettingsLog(settings: CamSettings): String {
+        val parts = mutableListOf<String>()
+        settings.isoMode?.let { mode ->
+            parts += if (mode == "manual") "iso=${settings.iso}" else "iso=$mode"
+        }
+        settings.exposureMode?.let { mode ->
+            parts += if (mode == "manual") "exposureNs=${settings.exposureTimeNs}" else "exposure=$mode"
+        }
+        settings.focusMode?.let { mode ->
+            parts += if (mode == "manual") "focus=${String.format("%.3f", settings.focusDistanceDiopters ?: 0.0)}dpt" else "focus=$mode"
+        }
+        settings.wbMode?.let { mode ->
+            parts += when (mode) {
+                "manual" -> "wb=manual(R=${settings.wbGainR} G=${settings.wbGainG} B=${settings.wbGainB})"
+                else -> "wb=$mode"
+            }
+        }
+        settings.zoomRatio?.let { parts += "zoom=${String.format("%.2f", it)}x" }
+        settings.evCompensation?.let { parts += "ev=$it" }
+        return "updateSettings: ${parts.joinToString(" ")}"
+    }
+
+    /**
+     * No-op in Phase 3.
+     *
+     * Phase 4 will forward these parameters to the C++ image pipeline via JNI.
+     *
+     * @param params Image processing parameters (tone-mapping, auto-stretch, etc.).
+     */
+    fun setProcessingParams(params: CamProcessingParams) {
+        // Phase 4: forward params to nativeSetProcessingParams(nativePipelinePtr, params)
+    }
+
+    /**
+     * Captures a single JPEG frame and writes it to the app's cache directory.
+     *
+     * Captures via the pre-allocated JPEG [ImageReader], acquires the next image on a
+     * background thread, and writes the bytes to `<cacheDir>/capture_<timestamp>.jpg`.
+     *
+     * @param callback Invoked with the absolute file path on success, or a [FlutterError].
+     */
+    fun takePicture(callback: (Result<String>) -> Unit) {
+        val session = captureSession
+        val device = cameraDevice
+        val jpegReader = jpegImageReader
+
+        if (session == null || device == null || jpegReader == null) {
+            callback(Result.failure(FlutterError("not_streaming", "Camera is not streaming", null)))
+            return
+        }
+
+        try {
+            // Register the listener BEFORE triggering capture so the image can never
+            // arrive before the listener is installed (eliminating the race condition).
+            jpegReader.setOnImageAvailableListener({ reader ->
+                // One-shot: clear immediately so teardown / a subsequent capture don't re-fire.
+                reader.setOnImageAvailableListener(null, null)
+                val image: Image? = try { reader.acquireNextImage() } catch (_: Exception) { null }
+                if (image == null) {
+                    mainHandler.post { callback(Result.failure(FlutterError("capture_failed", "Failed to acquire JPEG image", null))) }
+                    return@setOnImageAvailableListener
+                }
+                try {
+                    val buffer = image.planes[0].buffer
+                    val bytes = ByteArray(buffer.remaining())
+                    buffer.get(bytes)
+                    val timestamp = System.currentTimeMillis()
+                    val file = File(context.cacheDir, "capture_$timestamp.jpg")
+                    FileOutputStream(file).use { it.write(bytes) }
+                    mainHandler.post { callback(Result.success(file.absolutePath)) }
+                } catch (e: Exception) {
+                    mainHandler.post { callback(Result.failure(FlutterError("capture_failed", e.message, null))) }
+                } finally {
+                    image.close()
+                }
+            }, backgroundHandler)
+
+            val jpegRequest =
+                device
+                    .createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE)
+                    .apply {
+                        addTarget(jpegReader.surface)
+                    }.build()
+
+            session.capture(jpegRequest, null, backgroundHandler)
+        } catch (e: CameraAccessException) {
+            jpegReader.setOnImageAvailableListener(null, null) // clear listener on failure
+            callback(Result.failure(FlutterError("camera_access_error", e.message, null)))
+        }
+    }
+
+    /**
+     * Returns the opaque native pipeline pointer for direct JNI interop, or null if
+     * the pipeline has not yet been initialised (i.e. before [open] completes).
+     *
+     * @param callback Invoked with the native pointer, or null when not ready.
+     */
+    fun getNativePipelineHandle(callback: (Result<Long?>) -> Unit) {
+        callback(Result.success(if (nativePipelinePtr != 0L) nativePipelinePtr else null))
+    }
+
+    /**
+     * Tears down all resources without emitting state events.
+     *
+     * Called by the plugin on engine detach. Use [close] for orderly user-initiated shutdown.
+     */
+    fun release() {
+        released = true
+        teardown()
+        backgroundThread.quitSafely()
+    }
+
+    // -------------------------------------------------------------------------
+    // Internal: session setup
+    // -------------------------------------------------------------------------
+
+    /**
+     * Starts a Camera2 [CaptureSession] on the already-opened [cameraDevice].
+     *
+     * Streams YUV_420_888 at the device's largest supported resolution. A separate JPEG [ImageReader] is pre-allocated for
+     * still capture. Preview is routed via [surfaceProducer] added directly to the session.
+     *
+     * Frame path: Camera2 → SurfaceProducer (display) + ImageReader (drained, reserved for JNI)
+     */
+    private fun startCaptureSession(openCallback: (Result<Long>) -> Unit) {
+        val device =
+            cameraDevice ?: run {
+                mainHandler.post {
+                    openCallback(
+                        Result.failure(FlutterError("no_device", "Camera device lost before session start", null)),
+                    )
+                }
+                return
+            }
+
+        val (streamFormat, streamWidth, streamHeight) = resolveStreamFormat(device)
+        streamFrameCount = 0L
+        captureResultCount = 0L
+
+        previewWidth = streamWidth
+        previewHeight = streamHeight
+        surfaceProducer.setSize(streamWidth, streamHeight)
+        if (CambrianCameraConfig.verboseDiagnostics) {
+            android.util.Log.d(
+                "CambrianCamera",
+                "startCaptureSession format=YUV_420_888 size=${streamWidth}x$streamHeight",
+            )
+        }
+
+        // Streaming ImageReader — YUV_420_888 frames are drained to prevent overflow.
+        // Preview is served by Camera2 writing directly to the SurfaceProducer surface.
+        val streamReader = ImageReader.newInstance(streamWidth, streamHeight, streamFormat, 2)
+        imageReader = streamReader
+
+        // JPEG ImageReader — pre-allocated for still capture (use streaming resolution).
+        val jpegReader = ImageReader.newInstance(streamWidth, streamHeight, ImageFormat.JPEG, 1)
+        jpegImageReader = jpegReader
+
+        // Initialise native pipeline with the current SurfaceProducer surface.
+        val previewSurface = surfaceProducer.getSurface()
+        nativePipelinePtr = nativeInit(previewSurface)
+
+        // Drain YUV frames to prevent ImageReader overflow.
+        streamReader.setOnImageAvailableListener({ reader ->
+            val image = reader.acquireLatestImage() ?: return@setOnImageAvailableListener
+            try {
+                streamFrameCount++
+                if (CambrianCameraConfig.verboseDiagnostics && (streamFrameCount == 1L || streamFrameCount % 60L == 0L)) {
+                    android.util.Log.d(
+                        "CambrianCamera",
+                        "stream frame#$streamFrameCount YUV ${image.width}x${image.height}",
+                    )
+                }
+            } finally {
+                image.close()
+            }
+        }, backgroundHandler)
+
+        // Session surfaces: streaming reader + JPEG reader + SurfaceProducer for preview.
+        val surfaces = listOf(streamReader.surface, jpegReader.surface, previewSurface)
+
+        // The repeating request targets the SurfaceProducer; Camera2 writes preview frames directly.
+        val previewTarget = previewSurface
+        repeatingTargetSurface = previewTarget
+
+        val outputs = surfaces.map { OutputConfiguration(it) }
+        device.createCaptureSession(
+            SessionConfiguration(
+                SessionConfiguration.SESSION_REGULAR,
+                outputs,
+                { command -> backgroundHandler.post(command) },
+                object : CameraCaptureSession.StateCallback() {
+                    override fun onConfigured(session: CameraCaptureSession) {
+                        captureSession = session
+                        try {
+                            val settings = pendingSettings
+                            val request =
+                                if (settings != null) {
+                                    buildCaptureRequest(device, previewTarget, settings)
+                                } else {
+                                    buildDefaultCaptureRequest(device, previewTarget)
+                                }
+                            repeatingRequest = request
+                            if (CambrianCameraConfig.verboseDiagnostics) {
+                                android.util.Log.d(
+                                    "CambrianCamera",
+                                    "setRepeatingRequest target=${describeTargetSurface(previewTarget)} " +
+                                        "initialIso=${settings?.isoMode ?: "default"}(${settings?.iso ?: "-"}) " +
+                                        "initialExposure=${settings?.exposureMode ?: "default"}(${settings?.exposureTimeNs ?: "-"})",
+                                )
+                            }
+                            session.setRepeatingRequest(request, repeatingCaptureCallback, backgroundHandler)
+                            setState(State.STREAMING)
+                            emitState("streaming")
+                            mainHandler.post { openCallback(Result.success(handle)) }
+                        } catch (e: CameraAccessException) {
+                            handleNonFatalError(CamErrorCode.CAMERA_ACCESS_ERROR, e.message ?: "CameraAccessException")
+                            mainHandler.post { openCallback(Result.failure(FlutterError(CamErrorCode.CAMERA_ACCESS_ERROR.name, e.message, null))) }
+                        }
+                    }
+
+                    override fun onConfigureFailed(session: CameraCaptureSession) {
+                        handleNonFatalError(CamErrorCode.CONFIGURATION_FAILED, "CaptureSession configuration failed")
+                        mainHandler.post {
+                            openCallback(
+                                Result.failure(FlutterError(CamErrorCode.CONFIGURATION_FAILED.name, "Session configuration failed", null)),
+                            )
+                        }
+                    }
+                },
+            ),
+        )
+    }
+
+    /**
+     * Queries the device's supported YUV_420_888 output sizes and returns the largest 4:3 one.
+     *
+     * 4:3 is preferred because the sensor's native aspect ratio is 4:3 on most Android devices,
+     * giving the highest-quality output without cropping. Falls back to 1280×960 (also 4:3) if
+     * the device does not advertise any 4:3 YUV sizes.
+     *
+     * @return Triple of (format, width, height).
+     */
+    private fun resolveStreamFormat(device: CameraDevice): Triple<Int, Int, Int> {
+        val chars = cameraManager.getCameraCharacteristics(device.id)
+        val configMap = chars.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+        val largest = configMap
+            ?.getOutputSizes(ImageFormat.YUV_420_888)
+            ?.filter { it.width * 3 == it.height * 4 } // exact 4:3 check (no floating-point)
+            ?.maxByOrNull { it.width.toLong() * it.height }
+        return if (largest != null) {
+            Triple(ImageFormat.YUV_420_888, largest.width, largest.height)
+        } else {
+            Triple(ImageFormat.YUV_420_888, 1280, 960)
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Internal: CaptureRequest builders
+    // -------------------------------------------------------------------------
+
+    /**
+     * Creates a [CaptureRequest.Builder] for repeating preview requests.
+     *
+     * Prefers [CameraDevice.TEMPLATE_ZERO_SHUTTER_LAG] for minimal capture latency.
+     * Falls back to [CameraDevice.TEMPLATE_PREVIEW] on devices that do not support ZSL
+     * (i.e. lack PRIVATE_REPROCESSING or YUV_REPROCESSING capabilities), where ZSL would
+     * throw [IllegalArgumentException].
+     *
+     * The returned builder already has [surface] added as a target and
+     * [CaptureRequest.CONTROL_MODE_AUTO] applied.
+     */
+    private fun createRepeatingRequestBuilder(
+        device: CameraDevice,
+        surface: Surface,
+    ): CaptureRequest.Builder {
+        val builder = try {
+            device.createCaptureRequest(CameraDevice.TEMPLATE_ZERO_SHUTTER_LAG)
+        } catch (e: IllegalArgumentException) {
+            android.util.Log.w("CambrianCamera", "TEMPLATE_ZERO_SHUTTER_LAG not supported, falling back to TEMPLATE_PREVIEW")
+            device.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW)
+        }
+        builder.addTarget(surface)
+        builder.set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
+        return builder
+    }
+
+    /**
+     * Builds a default repeating [CaptureRequest] (auto-everything) targeting [surface].
+     */
+    private fun buildDefaultCaptureRequest(
+        device: CameraDevice,
+        surface: Surface,
+    ): CaptureRequest =
+        createRepeatingRequestBuilder(device, surface)
+            .apply {
+                set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
+            }.build()
+
+    /**
+     * Builds a repeating [CaptureRequest] populated from [settings], targeting [surface].
+     *
+     * Auto-capable settings use mode strings:
+     * - `"auto"` — let Camera2 control the parameter (template default).
+     * - `"manual"` — apply the companion value field.
+     * - `null` — field was not included; since [settings] is already merged via
+     *   [mergeSettings], null here means the setting was never set at all.
+     *
+     * Non-auto settings apply their value directly when non-null.
+     */
+    private fun buildCaptureRequest(
+        device: CameraDevice,
+        surface: Surface,
+        settings: CamSettings,
+    ): CaptureRequest =
+        createRepeatingRequestBuilder(device, surface)
+            .apply {
+
+                // CONTROL_AE_MODE must be OFF for SENSOR_SENSITIVITY and SENSOR_EXPOSURE_TIME
+                // to take effect — Camera2 ignores both keys when AE is running.
+                val wantsManualAe = settings.isoMode == "manual" || settings.exposureMode == "manual"
+                val wantsAutoAe   = settings.isoMode == "auto"   || settings.exposureMode == "auto"
+                when {
+                    wantsManualAe -> set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF)
+                    wantsAutoAe   -> set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
+                    // both null: don't touch AE_MODE — preserve whatever the template set
+                }
+
+                // ISO: "auto" = AE controls, "manual" = fixed value.
+                when (settings.isoMode) {
+                    "manual" -> settings.iso?.let { set(CaptureRequest.SENSOR_SENSITIVITY, it.toInt()) }
+                    // "auto" or null: don't set → template default (AE controls ISO)
+                }
+
+                // Exposure time: "auto" = AE controls, "manual" = fixed value.
+                when (settings.exposureMode) {
+                    "manual" -> settings.exposureTimeNs?.let { set(CaptureRequest.SENSOR_EXPOSURE_TIME, it) }
+                    // "auto" or null: don't set → template default (AE controls shutter)
+                }
+
+                // Focus: "auto" = continuous AF, "manual" = fixed distance.
+                when (settings.focusMode) {
+                    "manual" -> {
+                        settings.focusDistanceDiopters?.let {
+                            set(CaptureRequest.LENS_FOCUS_DISTANCE, it.toFloat())
+                        }
+                        set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_OFF)
+                    }
+                    "auto" -> {
+                        set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
+                    }
+                    // null: don't set → template default (continuous AF)
+                }
+
+                // White balance: "auto" = AWB, "locked" = freeze, "manual" = user gains.
+                when (settings.wbMode) {
+                    "auto" -> {
+                        set(CaptureRequest.CONTROL_AWB_MODE, CaptureRequest.CONTROL_AWB_MODE_AUTO)
+                        set(CaptureRequest.CONTROL_AWB_LOCK, false)
+                    }
+                    "locked" -> {
+                        set(CaptureRequest.CONTROL_AWB_LOCK, true)
+                    }
+                    "manual" -> {
+                        set(CaptureRequest.CONTROL_AWB_MODE, CaptureRequest.CONTROL_AWB_MODE_OFF)
+                        val gainR = (settings.wbGainR ?: 1.0).toFloat()
+                        val gainG = (settings.wbGainG ?: 1.0).toFloat()
+                        val gainB = (settings.wbGainB ?: 1.0).toFloat()
+                        set(
+                            CaptureRequest.COLOR_CORRECTION_MODE,
+                            CaptureRequest.COLOR_CORRECTION_MODE_TRANSFORM_MATRIX,
+                        )
+                        set(
+                            CaptureRequest.COLOR_CORRECTION_GAINS,
+                            android.hardware.camera2.params.RggbChannelVector(gainR, gainG, gainG, gainB),
+                        )
+                    }
+                    // null: don't set → template default (AWB auto)
+                }
+
+                // Zoom — use CONTROL_ZOOM_RATIO on API 30+, fall back to SCALER_CROP_REGION.
+                settings.zoomRatio?.let { zoom ->
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                        set(CaptureRequest.CONTROL_ZOOM_RATIO, zoom.toFloat())
+                    } else {
+                        applyZoomViaCropRegion(this, zoom)
+                    }
+                }
+
+                // Noise reduction mode
+                settings.noiseReductionMode?.let {
+                    set(CaptureRequest.NOISE_REDUCTION_MODE, it.toInt())
+                }
+
+                // Edge enhancement mode
+                settings.edgeMode?.let { set(CaptureRequest.EDGE_MODE, it.toInt()) }
+
+                // EV compensation
+                settings.evCompensation?.let {
+                    set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, it.toInt())
+                }
+            }.build()
+
+    /**
+     * Applies digital zoom by computing a centred crop region.
+     *
+     * Used as a fallback on API < 30 where [CaptureRequest.CONTROL_ZOOM_RATIO] is unavailable.
+     *
+     * @param builder  The request builder to modify in place.
+     * @param zoomRatio Desired zoom level (1.0 = no zoom).
+     */
+    private fun applyZoomViaCropRegion(
+        builder: CaptureRequest.Builder,
+        zoomRatio: Double,
+    ) {
+        val id = resolvedCameraId ?: return
+        val chars =
+            try {
+                cameraManager.getCameraCharacteristics(id)
+            } catch (e: CameraAccessException) {
+                return
+            }
+
+        val sensorSize = chars.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE) ?: return
+        val ratio = zoomRatio.coerceAtLeast(1.0)
+        val cropW = (sensorSize.width() / ratio).toInt()
+        val cropH = (sensorSize.height() / ratio).toInt()
+        val offsetX = (sensorSize.width() - cropW) / 2
+        val offsetY = (sensorSize.height() - cropH) / 2
+        builder.set(
+            CaptureRequest.SCALER_CROP_REGION,
+            android.graphics.Rect(offsetX, offsetY, offsetX + cropW, offsetY + cropH),
+        )
+    }
+
+    /**
+     * Recreates the capture session when in YUV fallback and SurfaceProducer provides a new surface.
+     *
+     * In this mode Camera2 writes preview frames directly into SurfaceProducer's surface, so surface
+     * recreation requires capture-session target rebinding.
+     */
+    private fun rebindYuvPreviewSurface(previewSurface: Surface) {
+        val device = cameraDevice ?: return
+        val streamReader = imageReader ?: return
+        val jpegReader = jpegImageReader ?: return
+        val previousSession = captureSession
+
+        try {
+            previousSession?.stopRepeating()
+            previousSession?.abortCaptures()
+        } catch (_: Exception) {
+        }
+        try {
+            previousSession?.close()
+        } catch (_: Exception) {
+        }
+        captureSession = null
+
+        val surfaces = listOf(streamReader.surface, jpegReader.surface, previewSurface)
+        if (CambrianCameraConfig.verboseDiagnostics) {
+            android.util.Log.d("CambrianCamera", "Rebinding YUV preview surface via createCaptureSession")
+        }
+        val outputs = surfaces.map { OutputConfiguration(it) }
+        device.createCaptureSession(
+            SessionConfiguration(
+                SessionConfiguration.SESSION_REGULAR,
+                outputs,
+                { command -> backgroundHandler.post(command) },
+                object : CameraCaptureSession.StateCallback() {
+                    override fun onConfigured(session: CameraCaptureSession) {
+                        captureSession = session
+                        try {
+                            val settings = pendingSettings
+                            val request =
+                                if (settings != null) {
+                                    buildCaptureRequest(device, previewSurface, settings)
+                                } else {
+                                    buildDefaultCaptureRequest(device, previewSurface)
+                                }
+                            repeatingTargetSurface = previewSurface
+                            repeatingRequest = request
+                            session.setRepeatingRequest(request, repeatingCaptureCallback, backgroundHandler)
+                            if (CambrianCameraConfig.verboseDiagnostics) {
+                                android.util.Log.d(
+                                    "CambrianCamera",
+                                    "YUV preview rebind complete target=${describeTargetSurface(previewSurface)}",
+                                )
+                            }
+                        } catch (e: CameraAccessException) {
+                            handleNonFatalError(CamErrorCode.CAMERA_ACCESS_ERROR, e.message ?: "CameraAccessException")
+                        }
+                    }
+
+                    override fun onConfigureFailed(session: CameraCaptureSession) {
+                        handleNonFatalError(CamErrorCode.CONFIGURATION_FAILED, "CaptureSession rebind failed")
+                    }
+                },
+            ),
+        )
+    }
+
+    // -------------------------------------------------------------------------
+    // Internal: resource teardown
+    // -------------------------------------------------------------------------
+
+    /**
+     * Closes all Camera2 resources and resets internal references.
+     *
+     * Safe to call from any state. Does NOT emit state events (callers must do that).
+     */
+    private fun teardown() {
+        // Close capture session first to stop frame delivery before closing the device.
+        try {
+            captureSession?.close()
+        } catch (_: Exception) {
+        }
+        captureSession = null
+
+        try {
+            cameraDevice?.close()
+        } catch (_: Exception) {
+        }
+        cameraDevice = null
+
+        try {
+            imageReader?.close()
+        } catch (_: Exception) {
+        }
+        imageReader = null
+
+        try {
+            jpegImageReader?.close()
+        } catch (_: Exception) {
+        }
+        jpegImageReader = null
+        repeatingTargetSurface = null
+        streamFrameCount = 0L
+        captureResultCount = 0L
+
+        // Release native pipeline.
+        val ptr = nativePipelinePtr
+        if (ptr != 0L) {
+            nativeRelease(ptr)
+            nativePipelinePtr = 0L
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Internal: auto-recovery
+    // -------------------------------------------------------------------------
+
+    /**
+     * Handles a non-fatal error by transitioning to RECOVERING and scheduling a retry.
+     *
+     * @param code    Error code forwarded to Dart.
+     * @param message Human-readable description forwarded to Dart.
+     */
+    private fun handleNonFatalError(
+        code: CamErrorCode,
+        message: String,
+    ) {
+        if (state == State.ERROR) return // Already in a terminal state.
+
+        setState(State.RECOVERING)
+        emitState("recovering")
+        mainHandler.post { flutterApi.onError(handle, CamError(code, message, false)) {} }
+
+        if (retryCount >= maxRetries) {
+            handleFatalError(CamErrorCode.MAX_RETRIES_EXCEEDED, "Camera failed after $maxRetries retries")
+            return
+        }
+
+        val delayMs = backoffDelaysMs[minOf(retryCount, backoffDelaysMs.size - 1)]
+        retryCount++
+
+        backgroundHandler.postDelayed({
+            teardown()
+            val id = resolvedCameraId ?: return@postDelayed
+            if (state != State.RECOVERING) return@postDelayed // Cancelled by explicit close.
+
+            // Check permission again before retrying.
+            if (context.checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+                handleFatalError(CamErrorCode.PERMISSION_DENIED, "Camera permission lost during recovery")
+                return@postDelayed
+            }
+
+            try {
+                openLock.acquire()
+                cameraManager.openCamera(
+                    id,
+                    { command -> backgroundHandler.post(command) },
+                    object : CameraDevice.StateCallback() {
+                        override fun onOpened(camera: CameraDevice) {
+                            openLock.release()
+                            cameraDevice = camera
+                            retryCount = 0
+                            startCaptureSession { result ->
+                                result.onFailure { handleNonFatalError(CamErrorCode.CONFIGURATION_FAILED, it.message ?: "Session error") }
+                            }
+                        }
+
+                        override fun onDisconnected(camera: CameraDevice) {
+                            openLock.release()
+                            camera.close()
+                            cameraDevice = null
+                            handleNonFatalError(CamErrorCode.CAMERA_DISCONNECTED, "Camera disconnected during recovery")
+                        }
+
+                        override fun onError(
+                            camera: CameraDevice,
+                            error: Int,
+                        ) {
+                            openLock.release()
+                            camera.close()
+                            cameraDevice = null
+                            val (errCode, errMsg) = errorCodeToMessage(error)
+                            if (isFatalDeviceError(error)) {
+                                handleFatalError(errCode, errMsg)
+                            } else {
+                                handleNonFatalError(errCode, errMsg)
+                            }
+                        }
+                    },
+                )
+            } catch (e: CameraAccessException) {
+                openLock.release()
+                if (isFatalAccessException(e)) {
+                    handleFatalError(CamErrorCode.CAMERA_ACCESS_ERROR, e.message ?: "CameraAccessException")
+                } else {
+                    handleNonFatalError(CamErrorCode.CAMERA_ACCESS_ERROR, e.message ?: "CameraAccessException")
+                }
+            } catch (e: InterruptedException) {
+                // Lock acquire interrupted; give up gracefully.
+            } catch (e: SecurityException) {
+                openLock.release()
+                handleFatalError(CamErrorCode.PERMISSION_DENIED, e.message ?: "SecurityException")
+            }
+        }, delayMs)
+    }
+
+    /**
+     * Handles a fatal error by transitioning to ERROR (no further retries).
+     *
+     * @param code    Error code forwarded to Dart.
+     * @param message Human-readable description forwarded to Dart.
+     */
+    private fun handleFatalError(
+        code: CamErrorCode,
+        message: String,
+    ) {
+        teardown()
+        setState(State.ERROR)
+        emitState("error")
+        mainHandler.post { flutterApi.onError(handle, CamError(code, message, true)) {} }
+    }
+
+    // -------------------------------------------------------------------------
+    // Internal: helpers
+    // -------------------------------------------------------------------------
+
+    /**
+     * Emits a state-change event to Dart via [flutterApi].
+     *
+     * Always posts to the main thread — Pigeon binary messenger requires it.
+     */
+    private fun emitState(stateName: String) {
+        mainHandler.post {
+            flutterApi.onStateChanged(handle, CamStateUpdate(stateName)) {}
+        }
+    }
+
+    private val repeatingCaptureCallback =
+        object : CameraCaptureSession.CaptureCallback() {
+            override fun onCaptureCompleted(
+                session: CameraCaptureSession,
+                request: CaptureRequest,
+                result: TotalCaptureResult,
+            ) {
+                if (!CambrianCameraConfig.verboseDiagnostics) return
+                captureResultCount++
+                if (captureResultCount != 1L && captureResultCount % 60L != 0L) return
+                val aeMode = result.get(CaptureResult.CONTROL_AE_MODE)
+                val aeState = result.get(CaptureResult.CONTROL_AE_STATE)
+                val iso = result.get(CaptureResult.SENSOR_SENSITIVITY)
+                val exposure = result.get(CaptureResult.SENSOR_EXPOSURE_TIME)
+                android.util.Log.d(
+                    "CambrianCamera",
+                    "capture result#$captureResultCount target=${describeTargetSurface(repeatingTargetSurface)} " +
+                        "aeMode=$aeMode aeState=$aeState iso=$iso exposureNs=$exposure",
+                )
+            }
+        }
+
+    private fun describeTargetSurface(surface: Surface?): String {
+        val imageSurface = imageReader?.surface
+        return when {
+            surface == null -> "null"
+            imageSurface != null && surface === imageSurface -> "imageReader"
+            else -> "surfaceProducer"
+        }
+    }
+
+    /** Updates internal state field (single place to add logging if needed). */
+    private fun setState(newState: State) {
+        state = newState
+    }
+
+    /**
+     * Selects the first back-facing camera ID, or the first camera if none is back-facing.
+     *
+     * @return A camera ID string, or null if no cameras exist.
+     */
+    private fun selectDefaultCameraId(): String? {
+        val ids =
+            try {
+                cameraManager.cameraIdList
+            } catch (e: CameraAccessException) {
+                return null
+            }
+        return ids.firstOrNull { id ->
+            try {
+                cameraManager
+                    .getCameraCharacteristics(id)
+                    .get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_BACK
+            } catch (e: CameraAccessException) {
+                false
+            }
+        } ?: ids.firstOrNull()
+    }
+
+    /**
+     * Returns true if the [CameraDevice] error code indicates a fatal, unrecoverable condition.
+     *
+     * Fatal errors: [CameraDevice.ERROR_CAMERA_DISABLED], [CameraDevice.ERROR_MAX_CAMERAS_IN_USE].
+     * Non-fatal: [CameraDevice.ERROR_CAMERA_DEVICE], [CameraDevice.ERROR_CAMERA_SERVICE].
+     */
+    private fun isFatalDeviceError(error: Int): Boolean =
+        error == CameraDevice.StateCallback.ERROR_CAMERA_DISABLED ||
+            error == CameraDevice.StateCallback.ERROR_MAX_CAMERAS_IN_USE
+
+    /**
+     * Returns true if the [CameraAccessException] indicates a fatal condition.
+     *
+     * [CameraAccessException.CAMERA_DISABLED] is fatal; all others are recoverable.
+     */
+    private fun isFatalAccessException(e: CameraAccessException): Boolean = e.reason == CameraAccessException.CAMERA_DISABLED
+
+    /**
+     * Maps a [CameraDevice] error integer to a (code, message) pair for Dart callbacks.
+     */
+    private fun errorCodeToMessage(error: Int): Pair<CamErrorCode, String> =
+        when (error) {
+            CameraDevice.StateCallback.ERROR_CAMERA_IN_USE      -> Pair(CamErrorCode.CAMERA_IN_USE,       "Camera is already in use")
+            CameraDevice.StateCallback.ERROR_MAX_CAMERAS_IN_USE -> Pair(CamErrorCode.MAX_CAMERAS_IN_USE,  "Too many cameras are open")
+            CameraDevice.StateCallback.ERROR_CAMERA_DISABLED    -> Pair(CamErrorCode.CAMERA_DISABLED,     "Camera disabled by policy")
+            CameraDevice.StateCallback.ERROR_CAMERA_DEVICE      -> Pair(CamErrorCode.CAMERA_DEVICE,       "Fatal camera device error")
+            CameraDevice.StateCallback.ERROR_CAMERA_SERVICE     -> Pair(CamErrorCode.CAMERA_SERVICE,      "Camera service error")
+            else                                                -> Pair(CamErrorCode.UNKNOWN,              "Unknown camera error: $error")
+        }
+}

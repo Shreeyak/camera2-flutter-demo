@@ -52,6 +52,9 @@ dart format lib/            # Format code to match Flutter conventions
 - This is a Flutter demo project for the camera2 library
 - Platform-specific implementations belong in `android/` and `ios/` directories
 - Follow Flutter style conventions enforced by `flutter_lints`
+- Do not use wildcard imports; always import explicit symbols
+  - **Dart:** use `show`/`hide` (e.g. `import 'package:foo/bar.dart' show MyClass;`)
+  - **Kotlin/Java:** no wildcard imports (e.g. avoid `import x.y.*`)
 - Use `flutter pub get` after modifying `pubspec.yaml`
 
 ## Useful Flutter Commands

@@ -1,4 +1,6 @@
+import 'package:cambrian_camera/cambrian_camera.dart';
 import 'package:flutter/material.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 import 'camera/camera_callbacks.dart';
 import 'camera/camera_settings_values.dart';
@@ -40,8 +42,9 @@ class CameraScreen extends StatefulWidget {
 class _CameraScreenState extends State<CameraScreen> {
   // ── Camera state
   late CameraSettingsValues _values;
-  final CameraRanges _ranges = const CameraRanges();
+  CameraRanges _ranges = const CameraRanges();
   late final CameraCallbacks _callbacks;
+  CambrianCamera? _camera;
 
   // ── UI state
   bool _settingsDrawerOpen = false;
@@ -51,6 +54,7 @@ class _CameraScreenState extends State<CameraScreen> {
   void initState() {
     super.initState();
     _values = CameraSettingsValues.initialFromRanges(_ranges);
+    _openCamera();
     _callbacks = CameraCallbacks(
       onIsoChanged: _onIsoChanged,
       onExposureTimeNsChanged: _onExposureTimeNsChanged,
@@ -61,37 +65,97 @@ class _CameraScreenState extends State<CameraScreen> {
     );
   }
 
+  Future<void> _openCamera() async {
+    final status = await Permission.camera.request();
+    if (!status.isGranted) {
+      debugPrint('Camera permission denied: $status');
+      return;
+    }
+    try {
+      final camera = await CambrianCamera.open();
+      final caps = camera.capabilities;
+      final ranges = CameraRanges(
+        isoRange: [caps.isoMin, caps.isoMax],
+        exposureTimeRangeNs: [caps.exposureTimeMinNs, caps.exposureTimeMaxNs],
+        minFocusDiopters: caps.focusMax,
+        minZoomRatio: caps.zoomMin,
+        maxZoomRatio: caps.zoomMax,
+      );
+      if (mounted) {
+        setState(() {
+          _camera = camera;
+          _ranges = ranges;
+          _values = CameraSettingsValues.initialFromRanges(ranges);
+        });
+      }
+    } catch (e) {
+      // Camera may not be available in all environments (e.g. emulators).
+      // The UI degrades gracefully to a black placeholder.
+      debugPrint('CambrianCamera.open failed: $e');
+    }
+  }
+
   @override
   void dispose() {
+    final camera = _camera;
+    if (camera != null) {
+      camera.close().catchError((Object e) {
+        debugPrint('CambrianCamera.close failed during dispose: $e');
+      });
+    }
     super.dispose();
   }
 
   // ── Camera setting callbacks
 
+  /// Sends only the changed setting to the camera.
+  ///
+  /// The plugin accumulates settings on the Kotlin side, so we only need to
+  /// send the fields that actually changed — omitted fields (null) keep their
+  /// previous values.
+  void _applySettings(CameraSettings settings) {
+    _camera?.updateSettings(settings);
+  }
+
   void _setWbLocked(bool locked) {
     setState(() => _values = _values.copyWith(wbLocked: locked));
+    _applySettings(CameraSettings(
+      whiteBalance: locked ? const WhiteBalance.locked() : const WhiteBalance.auto(),
+    ));
   }
 
   void _toggleAf() {
-    setState(() => _values = _values.copyWith(afEnabled: !_values.afEnabled));
+    final nowAf = !_values.afEnabled;
+    setState(() => _values = _values.copyWith(afEnabled: nowAf));
+    _applySettings(CameraSettings(
+      focus: nowAf
+          ? const AutoValue.auto()
+          : AutoValue.manual(_values.focusDiopters),
+    ));
   }
 
   void _onIsoChanged(int iso) {
-    setState(() => _values = _values.copyWith(isoValue: iso));
+    setState(() => _values = _values.copyWith(isoValue: iso, isoAuto: false));
+    _applySettings(CameraSettings(iso: AutoValue.manual(iso)));
   }
 
   void _onExposureTimeNsChanged(int ns) {
-    setState(() => _values = _values.copyWith(exposureTimeNs: ns));
+    setState(
+      () => _values = _values.copyWith(exposureTimeNs: ns, exposureAuto: false),
+    );
+    _applySettings(CameraSettings(exposureTimeNs: AutoValue.manual(ns)));
   }
 
   void _onFocusChanged(double dist) {
     setState(
       () => _values = _values.copyWith(focusDiopters: dist, afEnabled: false),
     );
+    _applySettings(CameraSettings(focus: AutoValue.manual(dist)));
   }
 
   void _onZoomChanged(double ratio) {
     setState(() => _values = _values.copyWith(zoomRatio: ratio));
+    _applySettings(CameraSettings(zoomRatio: ratio));
   }
 
   // ── UI actions
@@ -124,8 +188,9 @@ class _CameraScreenState extends State<CameraScreen> {
     if (param == null) return false;
     switch (param) {
       case CameraSettingType.iso:
+        return _values.isoAuto;
       case CameraSettingType.shutter:
-        return false; // ISO and shutter don't have auto state, just show button
+        return _values.exposureAuto;
       case CameraSettingType.focus:
         return _values.afEnabled;
       case CameraSettingType.wb:
@@ -138,6 +203,22 @@ class _CameraScreenState extends State<CameraScreen> {
   void _onAutoToggleTap(CameraSettingType? param) {
     if (param == null) return;
     switch (param) {
+      case CameraSettingType.iso:
+        final nowAuto = !_values.isoAuto;
+        setState(() => _values = _values.copyWith(isoAuto: nowAuto));
+        _applySettings(CameraSettings(
+          iso: nowAuto ? const AutoValue.auto() : AutoValue.manual(_values.isoValue),
+        ));
+        break;
+      case CameraSettingType.shutter:
+        final nowAuto = !_values.exposureAuto;
+        setState(() => _values = _values.copyWith(exposureAuto: nowAuto));
+        _applySettings(CameraSettings(
+          exposureTimeNs: nowAuto
+              ? const AutoValue.auto()
+              : AutoValue.manual(_values.exposureTimeNs),
+        ));
+        break;
       case CameraSettingType.focus:
         _toggleAf();
         break;
@@ -195,7 +276,10 @@ class _CameraScreenState extends State<CameraScreen> {
                           ),
                           if (_hasAutoMode(_activeSetting))
                             Positioned(
-                              left: (MediaQuery.of(context).size.width / 2) - 400 / 2 - 60,
+                              left:
+                                  (MediaQuery.of(context).size.width / 2) -
+                                  400 / 2 -
+                                  60,
                               child: CameraAutoToggleButton(
                                 isAuto: _isAutoMode(_activeSetting),
                                 onTap: () => _onAutoToggleTap(_activeSetting),
@@ -228,5 +312,15 @@ class _CameraScreenState extends State<CameraScreen> {
     );
   }
 
-  Widget _buildCameraPreview() => Container(color: Colors.black);
+  Widget _buildCameraPreview() {
+    final camera = _camera;
+    if (camera == null) {
+      // Camera not yet opened — show black placeholder.
+      return const ColoredBox(color: Colors.black);
+    }
+    return camera.buildPreview(
+      fit: BoxFit.cover,
+      placeholder: const ColoredBox(color: Colors.black),
+    );
+  }
 }
