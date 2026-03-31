@@ -106,15 +106,19 @@ class _CameraScreenState extends State<CameraScreen> {
         minZoomRatio: caps.zoomMin,
         maxZoomRatio: caps.zoomMax,
       );
-      if (mounted) {
-        setState(() {
-          _camera = camera;
-          _ranges = ranges;
-          _values = CameraSettingsValues.fromSettings(_kInitialSettings, ranges);
-        });
-        _frameResultSub = camera.frameResultStream.listen(_onFrameResult);
-        _errorSub = camera.errorStream.listen(_onCameraError);
+      if (!mounted) {
+        // Widget was disposed while open() was in flight — close the native
+        // session immediately so it isn't leaked.
+        await camera.close();
+        return;
       }
+      setState(() {
+        _camera = camera;
+        _ranges = ranges;
+        _values = CameraSettingsValues.fromSettings(_kInitialSettings, ranges);
+      });
+      _frameResultSub = camera.frameResultStream.listen(_onFrameResult);
+      _errorSub = camera.errorStream.listen(_onCameraError);
     } catch (e) {
       // Camera may not be available in all environments (e.g. emulators).
       // The UI degrades gracefully to a black placeholder.

@@ -6,7 +6,7 @@ import 'camera_settings.dart';
 import 'camera_settings_serializer.dart';
 import 'camera_state.dart';
 import 'cambrian_camera_preview.dart';
-import 'frame_result.dart';
+import 'frame_result.dart' show FrameResult;
 import 'messages.g.dart';
 
 /// The main entry point for the Cambrian camera library.
