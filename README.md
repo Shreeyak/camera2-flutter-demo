@@ -14,7 +14,7 @@ flutter run -d <device_id>    # specific device
 
 - `lib/` — Flutter/Dart app (entry point: `main.dart`)
 - `packages/cambrian_camera/` — Camera plugin
-  - `lib/` — Dart API (`CambrianCamera`, `CameraSettings`, `ProcessingParams`)
+  - `lib/` — Dart API (`CambrianCamera`, `CameraSettings`, `ProcessingParams`, `FrameResult`)
   - `android/src/main/kotlin/` — Kotlin Camera2 implementation
   - `android/src/main/cpp/` — C++ ISP pipeline (JNI bridge + `ImagePipeline`)
 - `android/` — Host app Android config
@@ -28,6 +28,21 @@ flutter build appbundle      # Android App Bundle
 flutter analyze              # Dart linter
 dart format lib/             # Format Dart code
 ```
+
+## Plugin API Highlights
+
+Full reference: [`docs/cambrian-camera-usage-guide.md`](docs/cambrian-camera-usage-guide.md)
+
+| API | Description |
+|-----|-------------|
+| `CambrianCamera.open()` | Open camera, returns when streaming |
+| `camera.buildPreview()` | Live preview widget |
+| `camera.updateSettings()` | ISP settings (ISO, exposure, focus, WB, zoom) |
+| `camera.stateStream` | Lifecycle state changes (`streaming`, `recovering`, …) |
+| `camera.errorStream` | Camera errors with fatal/recoverable flag |
+| `camera.frameResultStream` | Actual sensor values at ~3 Hz (ISO, exposure, focus, WB gains) |
+| `camera.takePicture()` | JPEG still capture |
+| `camera.getNativePipelineHandle()` | C++ consumer registration |
 
 ## Diagnostic Logging
 

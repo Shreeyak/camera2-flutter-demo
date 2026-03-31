@@ -385,6 +385,64 @@ camera.errorStream.listen((error) {
 | `cameraDisabled` | **Yes** | Camera disabled by system policy |
 | `maxCamerasInUse` | **Yes** | Too many cameras open in the system |
 
+#### `camera.frameResultStream`
+
+```dart
+Stream<FrameResult> get frameResultStream
+```
+
+Broadcasts actual sensor values reported by the camera hardware after each captured frame. Emits approximately **3 times per second** (every 10th capture result, throttled in native code).
+
+Use this to keep UI controls — sliders, readouts, overlays — in sync with what the hardware is actually doing. Particularly useful in auto modes, where the hardware is constantly adjusting ISO, exposure, and focus without any app input.
+
+```dart
+camera.frameResultStream.listen((result) {
+  print('ISO: ${result.iso}');
+  print('Exposure: ${result.exposureTimeNs} ns');
+  print('Focus: ${result.focusDistanceDiopters} dpt');
+});
+```
+
+#### `FrameResult`
+
+All fields are nullable — `null` means the hardware did not report that value for this frame (e.g., `focusDistanceDiopters` is null on fixed-focus cameras).
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `iso` | `int?` | Actual sensor sensitivity (ISO) used for this frame |
+| `exposureTimeNs` | `int?` | Actual exposure duration in nanoseconds |
+| `focusDistanceDiopters` | `double?` | Actual focus distance in diopters (0.0 = infinity) |
+| `wbGainR` | `double?` | Red channel gain from `COLOR_CORRECTION_GAINS` |
+| `wbGainG` | `double?` | Green channel gain (average of greenEven + greenOdd) |
+| `wbGainB` | `double?` | Blue channel gain from `COLOR_CORRECTION_GAINS` |
+
+> **Relationship to `updateSettings`:** `FrameResult` reports what the hardware *did*, not what was *requested*. In auto modes the values reflect what the AE/AF algorithms chose. In manual mode the hardware value should match your request within 1–2 frames.
+
+#### Typical pattern: auto-mode slider feedback
+
+In auto mode, update the slider position from the stream. Stop updating as soon as the user touches the slider (which switches to manual mode):
+
+```dart
+camera.frameResultStream.listen((result) {
+  // Only update while the camera is running auto-exposure
+  if (isIsoAuto && result.iso != null) {
+    setState(() => currentIso = result.iso!);
+  }
+  if (isExposureAuto && result.exposureTimeNs != null) {
+    setState(() => currentExposureNs = result.exposureTimeNs!);
+  }
+});
+
+// When the user drags the ISO slider:
+void onIsoSliderChanged(int iso) {
+  setState(() {
+    isIsoAuto = false;   // stop stream updates for ISO
+    currentIso = iso;
+  });
+  camera.updateSettings(CameraSettings(iso: AutoValue.manual(iso)));
+}
+```
+
 ---
 
 ### Device Capabilities

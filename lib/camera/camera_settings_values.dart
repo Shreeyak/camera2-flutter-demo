@@ -59,7 +59,7 @@ class CameraSettingsValues {
       ),
       focusDiopters: clampedFocusDiopters,
       zoomRatio: ranges.minZoomRatio,
-      afEnabled: false,
+      afEnabled: true,
       wbLocked: false,
       isoAuto: true,
       exposureAuto: true,

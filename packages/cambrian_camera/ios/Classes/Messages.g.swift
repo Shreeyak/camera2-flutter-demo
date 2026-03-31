@@ -389,6 +389,57 @@ struct CamError {
   }
 }
 
+/// Actual sensor values reported by the hardware after each captured frame.
+///
+/// All fields are nullable — null means the hardware did not report that value.
+/// Delivered via [CameraFlutterApi.onFrameResult] at ~3 Hz (every 10th frame).
+///
+/// Generated class from Pigeon that represents data sent in messages.
+struct CamFrameResult {
+  /// Actual sensor sensitivity (ISO) used for this frame.
+  var iso: Int64? = nil
+  /// Actual exposure duration in nanoseconds used for this frame.
+  var exposureTimeNs: Int64? = nil
+  /// Actual focus distance in diopters (1/metres). 0.0 = infinity.
+  var focusDistanceDiopters: Double? = nil
+  /// Red channel gain from COLOR_CORRECTION_GAINS.
+  var wbGainR: Double? = nil
+  /// Green channel gain (average of greenEven + greenOdd).
+  var wbGainG: Double? = nil
+  /// Blue channel gain from COLOR_CORRECTION_GAINS.
+  var wbGainB: Double? = nil
+
+
+  // swift-format-ignore: AlwaysUseLowerCamelCase
+  static func fromList(_ pigeonVar_list: [Any?]) -> CamFrameResult? {
+    let iso: Int64? = nilOrValue(pigeonVar_list[0])
+    let exposureTimeNs: Int64? = nilOrValue(pigeonVar_list[1])
+    let focusDistanceDiopters: Double? = nilOrValue(pigeonVar_list[2])
+    let wbGainR: Double? = nilOrValue(pigeonVar_list[3])
+    let wbGainG: Double? = nilOrValue(pigeonVar_list[4])
+    let wbGainB: Double? = nilOrValue(pigeonVar_list[5])
+
+    return CamFrameResult(
+      iso: iso,
+      exposureTimeNs: exposureTimeNs,
+      focusDistanceDiopters: focusDistanceDiopters,
+      wbGainR: wbGainR,
+      wbGainG: wbGainG,
+      wbGainB: wbGainB
+    )
+  }
+  func toList() -> [Any?] {
+    return [
+      iso,
+      exposureTimeNs,
+      focusDistanceDiopters,
+      wbGainR,
+      wbGainG,
+      wbGainB,
+    ]
+  }
+}
+
 private class MessagesPigeonCodecReader: FlutterStandardReader {
   override func readValue(ofType type: UInt8) -> Any? {
     switch type {
@@ -410,6 +461,8 @@ private class MessagesPigeonCodecReader: FlutterStandardReader {
       return CamStateUpdate.fromList(self.readValue() as! [Any?])
     case 135:
       return CamError.fromList(self.readValue() as! [Any?])
+    case 136:
+      return CamFrameResult.fromList(self.readValue() as! [Any?])
     default:
       return super.readValue(ofType: type)
     }
@@ -438,6 +491,9 @@ private class MessagesPigeonCodecWriter: FlutterStandardWriter {
       super.writeValue(value.toList())
     } else if let value = value as? CamError {
       super.writeByte(135)
+      super.writeValue(value.toList())
+    } else if let value = value as? CamFrameResult {
+      super.writeByte(136)
       super.writeValue(value.toList())
     } else {
       super.writeValue(value)
@@ -601,6 +657,7 @@ class CameraHostApiSetup {
 protocol CameraFlutterApiProtocol {
   func onStateChanged(handle handleArg: Int64, state stateArg: CamStateUpdate, completion: @escaping (Result<Void, PigeonError>) -> Void)
   func onError(handle handleArg: Int64, error errorArg: CamError, completion: @escaping (Result<Void, PigeonError>) -> Void)
+  func onFrameResult(handle handleArg: Int64, result resultArg: CamFrameResult, completion: @escaping (Result<Void, PigeonError>) -> Void)
 }
 class CameraFlutterApi: CameraFlutterApiProtocol {
   private let binaryMessenger: FlutterBinaryMessenger
@@ -623,7 +680,7 @@ class CameraFlutterApi: CameraFlutterApiProtocol {
       if listResponse.count > 1 {
         let code: String = listResponse[0] as! String
         let message: String? = nilOrValue(listResponse[1])
-        let details: Any? = isNullish(listResponse[2]) ? nil : listResponse[2]
+        let details: String? = nilOrValue(listResponse[2])
         completion(.failure(PigeonError(code: code, message: message, details: details)))
       } else {
         completion(.success(Void()))
@@ -641,7 +698,25 @@ class CameraFlutterApi: CameraFlutterApiProtocol {
       if listResponse.count > 1 {
         let code: String = listResponse[0] as! String
         let message: String? = nilOrValue(listResponse[1])
-        let details: Any? = isNullish(listResponse[2]) ? nil : listResponse[2]
+        let details: String? = nilOrValue(listResponse[2])
+        completion(.failure(PigeonError(code: code, message: message, details: details)))
+      } else {
+        completion(.success(Void()))
+      }
+    }
+  }
+  func onFrameResult(handle handleArg: Int64, result resultArg: CamFrameResult, completion: @escaping (Result<Void, PigeonError>) -> Void) {
+    let channelName: String = "dev.flutter.pigeon.cambrian_camera.CameraFlutterApi.onFrameResult\(messageChannelSuffix)"
+    let channel = FlutterBasicMessageChannel(name: channelName, binaryMessenger: binaryMessenger, codec: codec)
+    channel.sendMessage([handleArg, resultArg] as [Any?]) { response in
+      guard let listResponse = response as? [Any?] else {
+        completion(.failure(createConnectionError(withChannelName: channelName)))
+        return
+      }
+      if listResponse.count > 1 {
+        let code: String = listResponse[0] as! String
+        let message: String? = nilOrValue(listResponse[1])
+        let details: String? = nilOrValue(listResponse[2])
         completion(.failure(PigeonError(code: code, message: message, details: details)))
       } else {
         completion(.success(Void()))

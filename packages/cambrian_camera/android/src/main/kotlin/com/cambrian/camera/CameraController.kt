@@ -1288,8 +1288,24 @@ class CameraController(
                 result.get(CaptureResult.SENSOR_SENSITIVITY)?.let { lastKnownIso = it }
                 result.get(CaptureResult.SENSOR_EXPOSURE_TIME)?.let { lastKnownExposureTimeNs = it }
 
-                if (!CambrianCameraConfig.verboseDiagnostics) return
                 captureResultCount++
+
+                // Send actual sensor values to Dart at ~3 Hz (every 10th result at 30 fps).
+                if (captureResultCount % 10L == 0L) {
+                    val focusDist = result.get(CaptureResult.LENS_FOCUS_DISTANCE)
+                    val wbGains = result.get(CaptureResult.COLOR_CORRECTION_GAINS)
+                    val frameResult = CamFrameResult(
+                        iso = lastKnownIso?.toLong(),
+                        exposureTimeNs = lastKnownExposureTimeNs,
+                        focusDistanceDiopters = focusDist?.toDouble(),
+                        wbGainR = wbGains?.red?.toDouble(),
+                        wbGainG = wbGains?.let { (it.greenEven + it.greenOdd) / 2.0 },
+                        wbGainB = wbGains?.blue?.toDouble(),
+                    )
+                    mainHandler.post { flutterApi.onFrameResult(handle, frameResult) {} }
+                }
+
+                if (!CambrianCameraConfig.verboseDiagnostics) return
                 if (captureResultCount != 1L && captureResultCount % 60L != 0L) return
                 val aeMode = result.get(CaptureResult.CONTROL_AE_MODE)
                 val aeState = result.get(CaptureResult.CONTROL_AE_STATE)
