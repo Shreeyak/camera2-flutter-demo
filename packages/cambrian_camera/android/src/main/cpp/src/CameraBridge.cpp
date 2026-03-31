@@ -193,6 +193,10 @@ Java_com_cambrian_camera_CameraController_nativeDeliverYuv(
         LOGE("nativeDeliverYuv: null pipeline handle");
         return;
     }
+    if (!yBuffer || !uBuffer || !vBuffer) {
+        LOGE("nativeDeliverYuv: one or more plane buffers are null");
+        return;
+    }
 
     const auto* yData = reinterpret_cast<const uint8_t*>(env->GetDirectBufferAddress(yBuffer));
     const auto* uData = reinterpret_cast<const uint8_t*>(env->GetDirectBufferAddress(uBuffer));
