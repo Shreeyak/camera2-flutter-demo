@@ -147,6 +147,26 @@ class CamStateUpdate {
   String state;
 }
 
+/// Typed error codes for camera errors delivered via [CameraFlutterApi.onError].
+///
+/// Values are serialized as integer indices — do NOT reorder or insert in the
+/// middle; only append before [unknown] to preserve wire compatibility.
+enum CamErrorCode {
+  cameraDevice,        // ERROR_CAMERA_DEVICE — fatal hardware failure
+  cameraService,       // ERROR_CAMERA_SERVICE — camera service error
+  cameraDisconnected,  // camera lost unexpectedly (system reclaim, USB)
+  configurationFailed, // session configuration or rebind failed
+  permissionDenied,    // CAMERA permission denied or revoked — fatal
+  cameraDisabled,      // ERROR_CAMERA_DISABLED — disabled by policy — fatal
+  maxCamerasInUse,     // ERROR_MAX_CAMERAS_IN_USE — too many open — fatal
+  cameraInUse,         // ERROR_CAMERA_IN_USE — another app holds the camera
+  cameraAccessError,   // CameraAccessException (transient access failure)
+  maxRetriesExceeded,  // auto-recovery gave up after max retries — fatal
+  previewSurfaceLost,  // Flutter SurfaceProducer was invalidated
+  pipelineError,       // C++ processing pipeline error
+  unknown,             // catch-all; keep last
+}
+
 class CamError {
   CamError({
     required this.code,
@@ -154,7 +174,7 @@ class CamError {
     required this.isFatal,
   });
 
-  String code;
+  CamErrorCode code;
   String message;
   bool isFatal;
 }

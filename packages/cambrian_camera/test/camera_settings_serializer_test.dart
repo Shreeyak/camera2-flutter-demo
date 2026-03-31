@@ -2,6 +2,7 @@ import 'dart:async';
 
 // Import the internal serializer directly (it is not part of the public API).
 import 'package:cambrian_camera/src/camera_settings_serializer.dart';
+import 'package:cambrian_camera/src/messages.g.dart' show CamError, CamErrorCode;
 import 'package:cambrian_camera/cambrian_camera.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -225,18 +226,23 @@ void main() {
   });
 
   group('CameraErrorCode', () {
-    test('parses known error codes', () {
-      expect(CameraErrorCode.fromString('camera_device'),
-          CameraErrorCode.cameraDevice);
-      expect(CameraErrorCode.fromString('permission_denied'),
-          CameraErrorCode.permissionDenied);
-      expect(CameraErrorCode.fromString('pipeline_error'),
-          CameraErrorCode.pipelineError);
+    test('typedef matches Pigeon CamErrorCode values', () {
+      // CameraErrorCode is a typedef for CamErrorCode — verify the alias
+      // exposes the expected variants without fromString indirection.
+      expect(CameraErrorCode.cameraDevice, CamErrorCode.cameraDevice);
+      expect(CameraErrorCode.permissionDenied, CamErrorCode.permissionDenied);
+      expect(CameraErrorCode.unknown, CamErrorCode.unknown);
     });
 
-    test('unknown code maps to unknown', () {
-      expect(
-          CameraErrorCode.fromString('banana'), CameraErrorCode.unknown);
+    test('CameraError.fromPigeon maps code directly', () {
+      final pigeon = CamError(
+        code: CamErrorCode.configurationFailed,
+        message: 'test',
+        isFatal: false,
+      );
+      final err = CameraError.fromPigeon(pigeon);
+      expect(err.code, CameraErrorCode.configurationFailed);
+      expect(err.isFatal, false);
     });
   });
 }

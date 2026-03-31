@@ -26,6 +26,26 @@ List<Object?> wrapResponse({Object? result, PlatformException? error, bool empty
   return <Object?>[error.code, error.message, error.details];
 }
 
+/// Typed error codes for camera errors delivered via [CameraFlutterApi.onError].
+///
+/// Values are serialized as integer indices — do NOT reorder or insert in the
+/// middle; only append before [unknown] to preserve wire compatibility.
+enum CamErrorCode {
+  cameraDevice,
+  cameraService,
+  cameraDisconnected,
+  configurationFailed,
+  permissionDenied,
+  cameraDisabled,
+  maxCamerasInUse,
+  cameraInUse,
+  cameraAccessError,
+  maxRetriesExceeded,
+  previewSurfaceLost,
+  pipelineError,
+  unknown,
+}
+
 class CamSize {
   CamSize({
     required this.width,
@@ -345,7 +365,7 @@ class CamError {
     required this.isFatal,
   });
 
-  String code;
+  CamErrorCode code;
 
   String message;
 
@@ -362,7 +382,7 @@ class CamError {
   static CamError decode(Object result) {
     result as List<Object?>;
     return CamError(
-      code: result[0]! as String,
+      code: result[0]! as CamErrorCode,
       message: result[1]! as String,
       isFatal: result[2]! as bool,
     );
@@ -377,23 +397,26 @@ class _PigeonCodec extends StandardMessageCodec {
     if (value is int) {
       buffer.putUint8(4);
       buffer.putInt64(value);
-    }    else if (value is CamSize) {
+    }    else if (value is CamErrorCode) {
       buffer.putUint8(129);
-      writeValue(buffer, value.encode());
-    }    else if (value is CamSettings) {
+      writeValue(buffer, value.index);
+    }    else if (value is CamSize) {
       buffer.putUint8(130);
       writeValue(buffer, value.encode());
-    }    else if (value is CamProcessingParams) {
+    }    else if (value is CamSettings) {
       buffer.putUint8(131);
       writeValue(buffer, value.encode());
-    }    else if (value is CamCapabilities) {
+    }    else if (value is CamProcessingParams) {
       buffer.putUint8(132);
       writeValue(buffer, value.encode());
-    }    else if (value is CamStateUpdate) {
+    }    else if (value is CamCapabilities) {
       buffer.putUint8(133);
       writeValue(buffer, value.encode());
-    }    else if (value is CamError) {
+    }    else if (value is CamStateUpdate) {
       buffer.putUint8(134);
+      writeValue(buffer, value.encode());
+    }    else if (value is CamError) {
+      buffer.putUint8(135);
       writeValue(buffer, value.encode());
     } else {
       super.writeValue(buffer, value);
@@ -404,16 +427,19 @@ class _PigeonCodec extends StandardMessageCodec {
   Object? readValueOfType(int type, ReadBuffer buffer) {
     switch (type) {
       case 129: 
-        return CamSize.decode(readValue(buffer)!);
+        final int? value = readValue(buffer) as int?;
+        return value == null ? null : CamErrorCode.values[value];
       case 130: 
-        return CamSettings.decode(readValue(buffer)!);
+        return CamSize.decode(readValue(buffer)!);
       case 131: 
-        return CamProcessingParams.decode(readValue(buffer)!);
+        return CamSettings.decode(readValue(buffer)!);
       case 132: 
-        return CamCapabilities.decode(readValue(buffer)!);
+        return CamProcessingParams.decode(readValue(buffer)!);
       case 133: 
-        return CamStateUpdate.decode(readValue(buffer)!);
+        return CamCapabilities.decode(readValue(buffer)!);
       case 134: 
+        return CamStateUpdate.decode(readValue(buffer)!);
+      case 135: 
         return CamError.decode(readValue(buffer)!);
       default:
         return super.readValueOfType(type, buffer);

@@ -31,54 +31,10 @@ enum CameraState {
 }
 
 /// Identifies the type of camera error.
-enum CameraErrorCode {
-  /// Hardware camera device error.
-  cameraDevice,
-
-  /// Android camera service error.
-  cameraService,
-
-  /// Camera was disconnected (USB disconnect, system reclaim).
-  cameraDisconnected,
-
-  /// Camera2 session configuration failed.
-  configurationFailed,
-
-  /// Camera permission was denied or revoked. Fatal.
-  permissionDenied,
-
-  /// Camera disabled by system policy. Fatal.
-  cameraDisabled,
-
-  /// Too many cameras open in the system. Fatal.
-  maxCamerasInUse,
-
-  /// Camera is already open by another app.
-  cameraInUse,
-
-  /// Preview surface was invalidated (Flutter surface recycled).
-  previewSurfaceLost,
-
-  /// An error in the C++ processing pipeline.
-  pipelineError,
-
-  /// Unrecognised error code.
-  unknown;
-
-  static CameraErrorCode fromString(String s) => switch (s) {
-        'camera_device' => cameraDevice,
-        'camera_service' => cameraService,
-        'camera_disconnected' => cameraDisconnected,
-        'configuration_failed' => configurationFailed,
-        'permission_denied' => permissionDenied,
-        'camera_disabled' => cameraDisabled,
-        'max_cameras_in_use' => maxCamerasInUse,
-        'camera_in_use' => cameraInUse,
-        'preview_surface_lost' => previewSurfaceLost,
-        'pipeline_error' => pipelineError,
-        _ => unknown,
-      };
-}
+///
+/// Values are the Pigeon-generated [CamErrorCode] enum serialized as integer
+/// indices over the wire — do NOT reorder; only append before [CamErrorCode.unknown].
+typedef CameraErrorCode = CamErrorCode;
 
 /// Describes a camera error.
 ///
@@ -92,7 +48,7 @@ class CameraError {
   });
 
   factory CameraError.fromPigeon(CamError e) => CameraError(
-        code: CameraErrorCode.fromString(e.code),
+        code: e.code,
         message: e.message,
         isFatal: e.isFatal,
       );

@@ -298,8 +298,8 @@ class CameraController(
                         camera.close()
                         cameraDevice = null
                         // Non-fatal — attempt recovery.
-                        handleNonFatalError("camera_disconnected", "Camera disconnected unexpectedly")
-                        mainHandler.post { safeCallback(Result.failure(FlutterError("camera_disconnected", "Camera disconnected", null))) }
+                        handleNonFatalError(CamErrorCode.CAMERA_DISCONNECTED, "Camera disconnected unexpectedly")
+                        mainHandler.post { safeCallback(Result.failure(FlutterError(CamErrorCode.CAMERA_DISCONNECTED.name, "Camera disconnected", null))) }
                     }
 
                     override fun onError(
@@ -310,32 +310,31 @@ class CameraController(
                         camera.close()
                         cameraDevice = null
 
-                        val (code, message) = errorCodeToMessage(error)
+                        val (errCode, message) = errorCodeToMessage(error)
                         val fatal = isFatalDeviceError(error)
                         if (fatal) {
-                            handleFatalError(code, message)
+                            handleFatalError(errCode, message)
                         } else {
-                            handleNonFatalError(code, message)
+                            handleNonFatalError(errCode, message)
                         }
-                        mainHandler.post { safeCallback(Result.failure(FlutterError(code, message, null))) }
+                        mainHandler.post { safeCallback(Result.failure(FlutterError(errCode.name, message, null))) }
                     }
                 },
             )
         } catch (e: CameraAccessException) {
             openLock.release()
             val fatal = isFatalAccessException(e)
-            val code = "camera_access_error"
             val message = e.message ?: "CameraAccessException"
             if (fatal) {
-                handleFatalError(code, message)
+                handleFatalError(CamErrorCode.CAMERA_ACCESS_ERROR, message)
             } else {
-                handleNonFatalError(code, message)
+                handleNonFatalError(CamErrorCode.CAMERA_ACCESS_ERROR, message)
             }
-            safeCallback(Result.failure(FlutterError(code, message, null)))
+            safeCallback(Result.failure(FlutterError(CamErrorCode.CAMERA_ACCESS_ERROR.name, message, null)))
         } catch (e: SecurityException) {
             openLock.release()
-            handleFatalError("permission_denied", e.message ?: "SecurityException")
-            safeCallback(Result.failure(FlutterError("permission_denied", e.message, null)))
+            handleFatalError(CamErrorCode.PERMISSION_DENIED, e.message ?: "SecurityException")
+            safeCallback(Result.failure(FlutterError(CamErrorCode.PERMISSION_DENIED.name, e.message, null)))
         }
     }
 
@@ -711,16 +710,16 @@ class CameraController(
                             emitState("streaming")
                             mainHandler.post { openCallback(Result.success(handle)) }
                         } catch (e: CameraAccessException) {
-                            handleNonFatalError("camera_access_error", e.message ?: "CameraAccessException")
-                            mainHandler.post { openCallback(Result.failure(FlutterError("camera_access_error", e.message, null))) }
+                            handleNonFatalError(CamErrorCode.CAMERA_ACCESS_ERROR, e.message ?: "CameraAccessException")
+                            mainHandler.post { openCallback(Result.failure(FlutterError(CamErrorCode.CAMERA_ACCESS_ERROR.name, e.message, null))) }
                         }
                     }
 
                     override fun onConfigureFailed(session: CameraCaptureSession) {
-                        handleNonFatalError("configuration_failed", "CaptureSession configuration failed")
+                        handleNonFatalError(CamErrorCode.CONFIGURATION_FAILED, "CaptureSession configuration failed")
                         mainHandler.post {
                             openCallback(
-                                Result.failure(FlutterError("configuration_failed", "Session configuration failed", null)),
+                                Result.failure(FlutterError(CamErrorCode.CONFIGURATION_FAILED.name, "Session configuration failed", null)),
                             )
                         }
                     }
@@ -984,12 +983,12 @@ class CameraController(
                                 )
                             }
                         } catch (e: CameraAccessException) {
-                            handleNonFatalError("camera_access_error", e.message ?: "CameraAccessException")
+                            handleNonFatalError(CamErrorCode.CAMERA_ACCESS_ERROR, e.message ?: "CameraAccessException")
                         }
                     }
 
                     override fun onConfigureFailed(session: CameraCaptureSession) {
-                        handleNonFatalError("configuration_failed", "CaptureSession rebind failed")
+                        handleNonFatalError(CamErrorCode.CONFIGURATION_FAILED, "CaptureSession rebind failed")
                     }
                 },
             ),
@@ -1053,7 +1052,7 @@ class CameraController(
      * @param message Human-readable description forwarded to Dart.
      */
     private fun handleNonFatalError(
-        code: String,
+        code: CamErrorCode,
         message: String,
     ) {
         if (state == State.ERROR) return // Already in a terminal state.
@@ -1063,7 +1062,7 @@ class CameraController(
         mainHandler.post { flutterApi.onError(handle, CamError(code, message, false)) {} }
 
         if (retryCount >= maxRetries) {
-            handleFatalError("max_retries_exceeded", "Camera failed after $maxRetries retries")
+            handleFatalError(CamErrorCode.MAX_RETRIES_EXCEEDED, "Camera failed after $maxRetries retries")
             return
         }
 
@@ -1077,7 +1076,7 @@ class CameraController(
 
             // Check permission again before retrying.
             if (context.checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
-                handleFatalError("permission_denied", "Camera permission lost during recovery")
+                handleFatalError(CamErrorCode.PERMISSION_DENIED, "Camera permission lost during recovery")
                 return@postDelayed
             }
 
@@ -1092,7 +1091,7 @@ class CameraController(
                             cameraDevice = camera
                             retryCount = 0
                             startCaptureSession { result ->
-                                result.onFailure { handleNonFatalError("session_error", it.message ?: "Session error") }
+                                result.onFailure { handleNonFatalError(CamErrorCode.CONFIGURATION_FAILED, it.message ?: "Session error") }
                             }
                         }
 
@@ -1100,7 +1099,7 @@ class CameraController(
                             openLock.release()
                             camera.close()
                             cameraDevice = null
-                            handleNonFatalError("camera_disconnected", "Camera disconnected during recovery")
+                            handleNonFatalError(CamErrorCode.CAMERA_DISCONNECTED, "Camera disconnected during recovery")
                         }
 
                         override fun onError(
@@ -1122,15 +1121,15 @@ class CameraController(
             } catch (e: CameraAccessException) {
                 openLock.release()
                 if (isFatalAccessException(e)) {
-                    handleFatalError("camera_access_error", e.message ?: "CameraAccessException")
+                    handleFatalError(CamErrorCode.CAMERA_ACCESS_ERROR, e.message ?: "CameraAccessException")
                 } else {
-                    handleNonFatalError("camera_access_error", e.message ?: "CameraAccessException")
+                    handleNonFatalError(CamErrorCode.CAMERA_ACCESS_ERROR, e.message ?: "CameraAccessException")
                 }
             } catch (e: InterruptedException) {
                 // Lock acquire interrupted; give up gracefully.
             } catch (e: SecurityException) {
                 openLock.release()
-                handleFatalError("permission_denied", e.message ?: "SecurityException")
+                handleFatalError(CamErrorCode.PERMISSION_DENIED, e.message ?: "SecurityException")
             }
         }, delayMs)
     }
@@ -1142,7 +1141,7 @@ class CameraController(
      * @param message Human-readable description forwarded to Dart.
      */
     private fun handleFatalError(
-        code: String,
+        code: CamErrorCode,
         message: String,
     ) {
         teardown()
@@ -1245,14 +1244,13 @@ class CameraController(
     /**
      * Maps a [CameraDevice] error integer to a (code, message) pair for Dart callbacks.
      */
-    private fun errorCodeToMessage(error: Int): Pair<String, String> =
+    private fun errorCodeToMessage(error: Int): Pair<CamErrorCode, String> =
         when (error) {
-            // String codes must match CameraErrorCode.fromString() keys in camera_state.dart.
-            CameraDevice.StateCallback.ERROR_CAMERA_IN_USE -> Pair("camera_in_use", "Camera is already in use")
-            CameraDevice.StateCallback.ERROR_MAX_CAMERAS_IN_USE -> Pair("max_cameras_in_use", "Too many cameras are open")
-            CameraDevice.StateCallback.ERROR_CAMERA_DISABLED -> Pair("camera_disabled", "Camera disabled by policy")
-            CameraDevice.StateCallback.ERROR_CAMERA_DEVICE -> Pair("camera_device", "Fatal camera device error")
-            CameraDevice.StateCallback.ERROR_CAMERA_SERVICE -> Pair("camera_service", "Camera service error")
-            else -> Pair("unknown", "Unknown camera error: $error")
+            CameraDevice.StateCallback.ERROR_CAMERA_IN_USE      -> Pair(CamErrorCode.CAMERA_IN_USE,       "Camera is already in use")
+            CameraDevice.StateCallback.ERROR_MAX_CAMERAS_IN_USE -> Pair(CamErrorCode.MAX_CAMERAS_IN_USE,  "Too many cameras are open")
+            CameraDevice.StateCallback.ERROR_CAMERA_DISABLED    -> Pair(CamErrorCode.CAMERA_DISABLED,     "Camera disabled by policy")
+            CameraDevice.StateCallback.ERROR_CAMERA_DEVICE      -> Pair(CamErrorCode.CAMERA_DEVICE,       "Fatal camera device error")
+            CameraDevice.StateCallback.ERROR_CAMERA_SERVICE     -> Pair(CamErrorCode.CAMERA_SERVICE,      "Camera service error")
+            else                                                -> Pair(CamErrorCode.UNKNOWN,              "Unknown camera error: $error")
         }
 }

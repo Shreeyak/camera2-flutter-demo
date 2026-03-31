@@ -69,6 +69,26 @@ private func nilOrValue<T>(_ value: Any?) -> T? {
   return value as! T?
 }
 
+/// Typed error codes for camera errors delivered via [CameraFlutterApi.onError].
+///
+/// Values are serialized as integer indices — do NOT reorder or insert in the
+/// middle; only append before [unknown] to preserve wire compatibility.
+enum CamErrorCode: Int {
+  case cameraDevice = 0
+  case cameraService = 1
+  case cameraDisconnected = 2
+  case configurationFailed = 3
+  case permissionDenied = 4
+  case cameraDisabled = 5
+  case maxCamerasInUse = 6
+  case cameraInUse = 7
+  case cameraAccessError = 8
+  case maxRetriesExceeded = 9
+  case previewSurfaceLost = 10
+  case pipelineError = 11
+  case unknown = 12
+}
+
 /// Generated class from Pigeon that represents data sent in messages.
 struct CamSize {
   var width: Int64
@@ -340,14 +360,14 @@ struct CamStateUpdate {
 
 /// Generated class from Pigeon that represents data sent in messages.
 struct CamError {
-  var code: String
+  var code: CamErrorCode
   var message: String
   var isFatal: Bool
 
 
   // swift-format-ignore: AlwaysUseLowerCamelCase
   static func fromList(_ pigeonVar_list: [Any?]) -> CamError? {
-    let code = pigeonVar_list[0] as! String
+    let code = pigeonVar_list[0] as! CamErrorCode
     let message = pigeonVar_list[1] as! String
     let isFatal = pigeonVar_list[2] as! Bool
 
@@ -370,16 +390,22 @@ private class MessagesPigeonCodecReader: FlutterStandardReader {
   override func readValue(ofType type: UInt8) -> Any? {
     switch type {
     case 129:
-      return CamSize.fromList(self.readValue() as! [Any?])
+      let enumResultAsInt: Int? = nilOrValue(self.readValue() as! Int?)
+      if let enumResultAsInt = enumResultAsInt {
+        return CamErrorCode(rawValue: enumResultAsInt)
+      }
+      return nil
     case 130:
-      return CamSettings.fromList(self.readValue() as! [Any?])
+      return CamSize.fromList(self.readValue() as! [Any?])
     case 131:
-      return CamProcessingParams.fromList(self.readValue() as! [Any?])
+      return CamSettings.fromList(self.readValue() as! [Any?])
     case 132:
-      return CamCapabilities.fromList(self.readValue() as! [Any?])
+      return CamProcessingParams.fromList(self.readValue() as! [Any?])
     case 133:
-      return CamStateUpdate.fromList(self.readValue() as! [Any?])
+      return CamCapabilities.fromList(self.readValue() as! [Any?])
     case 134:
+      return CamStateUpdate.fromList(self.readValue() as! [Any?])
+    case 135:
       return CamError.fromList(self.readValue() as! [Any?])
     default:
       return super.readValue(ofType: type)
@@ -389,23 +415,26 @@ private class MessagesPigeonCodecReader: FlutterStandardReader {
 
 private class MessagesPigeonCodecWriter: FlutterStandardWriter {
   override func writeValue(_ value: Any) {
-    if let value = value as? CamSize {
+    if let value = value as? CamErrorCode {
       super.writeByte(129)
-      super.writeValue(value.toList())
-    } else if let value = value as? CamSettings {
+      super.writeValue(value.rawValue)
+    } else if let value = value as? CamSize {
       super.writeByte(130)
       super.writeValue(value.toList())
-    } else if let value = value as? CamProcessingParams {
+    } else if let value = value as? CamSettings {
       super.writeByte(131)
       super.writeValue(value.toList())
-    } else if let value = value as? CamCapabilities {
+    } else if let value = value as? CamProcessingParams {
       super.writeByte(132)
       super.writeValue(value.toList())
-    } else if let value = value as? CamStateUpdate {
+    } else if let value = value as? CamCapabilities {
       super.writeByte(133)
       super.writeValue(value.toList())
-    } else if let value = value as? CamError {
+    } else if let value = value as? CamStateUpdate {
       super.writeByte(134)
+      super.writeValue(value.toList())
+    } else if let value = value as? CamError {
+      super.writeByte(135)
       super.writeValue(value.toList())
     } else {
       super.writeValue(value)

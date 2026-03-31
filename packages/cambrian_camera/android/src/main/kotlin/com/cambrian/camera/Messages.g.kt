@@ -50,6 +50,34 @@ class FlutterError (
   val details: Any? = null
 ) : Throwable()
 
+/**
+ * Typed error codes for camera errors delivered via [CameraFlutterApi.onError].
+ *
+ * Values are serialized as integer indices — do NOT reorder or insert in the
+ * middle; only append before [unknown] to preserve wire compatibility.
+ */
+enum class CamErrorCode(val raw: Int) {
+  CAMERA_DEVICE(0),
+  CAMERA_SERVICE(1),
+  CAMERA_DISCONNECTED(2),
+  CONFIGURATION_FAILED(3),
+  PERMISSION_DENIED(4),
+  CAMERA_DISABLED(5),
+  MAX_CAMERAS_IN_USE(6),
+  CAMERA_IN_USE(7),
+  CAMERA_ACCESS_ERROR(8),
+  MAX_RETRIES_EXCEEDED(9),
+  PREVIEW_SURFACE_LOST(10),
+  PIPELINE_ERROR(11),
+  UNKNOWN(12);
+
+  companion object {
+    fun ofRaw(raw: Int): CamErrorCode? {
+      return values().firstOrNull { it.raw == raw }
+    }
+  }
+}
+
 /** Generated class from Pigeon that represents data sent in messages. */
 data class CamSize (
   val width: Long,
@@ -273,14 +301,14 @@ data class CamStateUpdate (
 
 /** Generated class from Pigeon that represents data sent in messages. */
 data class CamError (
-  val code: String,
+  val code: CamErrorCode,
   val message: String,
   val isFatal: Boolean
 )
  {
   companion object {
     fun fromList(pigeonVar_list: List<Any?>): CamError {
-      val code = pigeonVar_list[0] as String
+      val code = pigeonVar_list[0] as CamErrorCode
       val message = pigeonVar_list[1] as String
       val isFatal = pigeonVar_list[2] as Boolean
       return CamError(code, message, isFatal)
@@ -298,31 +326,36 @@ private open class MessagesPigeonCodec : StandardMessageCodec() {
   override fun readValueOfType(type: Byte, buffer: ByteBuffer): Any? {
     return when (type) {
       129.toByte() -> {
-        return (readValue(buffer) as? List<Any?>)?.let {
-          CamSize.fromList(it)
+        return (readValue(buffer) as Long?)?.let {
+          CamErrorCode.ofRaw(it.toInt())
         }
       }
       130.toByte() -> {
         return (readValue(buffer) as? List<Any?>)?.let {
-          CamSettings.fromList(it)
+          CamSize.fromList(it)
         }
       }
       131.toByte() -> {
         return (readValue(buffer) as? List<Any?>)?.let {
-          CamProcessingParams.fromList(it)
+          CamSettings.fromList(it)
         }
       }
       132.toByte() -> {
         return (readValue(buffer) as? List<Any?>)?.let {
-          CamCapabilities.fromList(it)
+          CamProcessingParams.fromList(it)
         }
       }
       133.toByte() -> {
         return (readValue(buffer) as? List<Any?>)?.let {
-          CamStateUpdate.fromList(it)
+          CamCapabilities.fromList(it)
         }
       }
       134.toByte() -> {
+        return (readValue(buffer) as? List<Any?>)?.let {
+          CamStateUpdate.fromList(it)
+        }
+      }
+      135.toByte() -> {
         return (readValue(buffer) as? List<Any?>)?.let {
           CamError.fromList(it)
         }
@@ -332,28 +365,32 @@ private open class MessagesPigeonCodec : StandardMessageCodec() {
   }
   override fun writeValue(stream: ByteArrayOutputStream, value: Any?)   {
     when (value) {
-      is CamSize -> {
+      is CamErrorCode -> {
         stream.write(129)
-        writeValue(stream, value.toList())
+        writeValue(stream, value.raw)
       }
-      is CamSettings -> {
+      is CamSize -> {
         stream.write(130)
         writeValue(stream, value.toList())
       }
-      is CamProcessingParams -> {
+      is CamSettings -> {
         stream.write(131)
         writeValue(stream, value.toList())
       }
-      is CamCapabilities -> {
+      is CamProcessingParams -> {
         stream.write(132)
         writeValue(stream, value.toList())
       }
-      is CamStateUpdate -> {
+      is CamCapabilities -> {
         stream.write(133)
         writeValue(stream, value.toList())
       }
-      is CamError -> {
+      is CamStateUpdate -> {
         stream.write(134)
+        writeValue(stream, value.toList())
+      }
+      is CamError -> {
+        stream.write(135)
         writeValue(stream, value.toList())
       }
       else -> super.writeValue(stream, value)
