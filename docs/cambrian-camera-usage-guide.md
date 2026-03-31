@@ -572,14 +572,11 @@ Then use `cam::getPipeline()` from C++ directly (no Dart pointer needed).
 
 #### Step 3: Register consumer sinks in C++
 
-Include the public header `cambrian_camera_native.h` and register sinks. Each sink receives post-processed frames independently, at the resolution and channel configuration you specify.
+Include the public header `cambrian_camera_native.h` and register sinks. Each sink receives full-resolution processed BGR frames independently via a dedicated dispatch thread.
 
 ```cpp
 // In your application's native library (e.g., my_consumers.cpp)
 #include <cambrian_camera_native.h>
-
-static int g_stitchSinkId = -1;
-static int g_trackSinkId  = -1;
 
 // Called from Dart FFI or JNI with the pipeline pointer
 extern "C" void registerConsumers(int64_t pipelinePtr) {
@@ -587,37 +584,29 @@ extern "C" void registerConsumers(int64_t pipelinePtr) {
             static_cast<uintptr_t>(pipelinePtr));
     if (!pipeline) return;
 
-    // ── Consumer 1: Full-resolution RGBA for stitching ──────────────
+    // ── Consumer 1: Full-resolution BGR for stitching ──────────────
     cam::SinkConfig stitchCfg;
-    stitchCfg.name       = "stitcher";
-    stitchCfg.width      = 0;      // 0 = match source (full resolution)
-    stitchCfg.height     = 0;      // 0 = match source
-    stitchCfg.channels   = 4;      // RGBA
-    stitchCfg.ringSize   = 4;      // 4 pre-allocated ring buffer slots
-    stitchCfg.dropOnFull = false;   // log warning on backpressure
+    stitchCfg.name = "stitcher";
 
-    g_stitchSinkId = pipeline->addSink(stitchCfg, [](cam::SinkFrame& frame) {
-        // frame.data   → pixel buffer (row-major RGBA)
-        // frame.width  → image width in pixels
-        // frame.height → image height in pixels
-        // frame.stride → row stride in bytes (>= width * channels)
-        // frame.meta   → sensor metadata (timestamp, ISO, exposure, etc.)
-
+    pipeline->addSink(stitchCfg, [](const cam::SinkFrame& frame) {
+        // frame.data    → pixel buffer (row-major BGR, CV_8UC3)
+        // frame.width   → image width in pixels
+        // frame.height  → image height in pixels
+        // frame.stride  → row stride in bytes (may exceed width * 3)
+        // frame.format  → cam::PixelFormat::BGR
+        // frame.frameId → monotonic frame counter
+        // frame.meta    → sensor metadata (timestamp, ISO, exposure)
+        //
+        // data is valid only for the duration of this callback.
+        // Copy it if you need it longer.
         processForStitching(frame.data, frame.width, frame.height, frame.stride);
-        // No need to call frame.release() — the dispatch thread manages the ring
-        // buffer slot automatically. Copy the data if you need it past the callback.
     });
 
-    // ── Consumer 2: Second full-res RGBA sink for tracking ─────────
+    // ── Consumer 2: Second BGR sink for tracking ────────────────────
     cam::SinkConfig trackCfg;
-    trackCfg.name       = "tracker";
-    trackCfg.width      = 0;       // 0 = match source (full resolution)
-    trackCfg.height     = 0;       // 0 = match source
-    trackCfg.channels   = 4;       // RGBA
-    trackCfg.ringSize   = 8;       // deeper ring — tracker may lag
-    trackCfg.dropOnFull = true;    // drop stale frames silently
+    trackCfg.name = "tracker";
 
-    g_trackSinkId = pipeline->addSink(trackCfg, [](cam::SinkFrame& frame) {
+    pipeline->addSink(trackCfg, [](const cam::SinkFrame& frame) {
         runTrackingAlgorithm(frame.data, frame.width, frame.height);
     });
 }
@@ -628,38 +617,28 @@ extern "C" void unregisterConsumers(int64_t pipelinePtr) {
             static_cast<uintptr_t>(pipelinePtr));
     if (!pipeline) return;
 
-    if (g_stitchSinkId >= 0) pipeline->removeSink(g_stitchSinkId);
-    if (g_trackSinkId  >= 0) pipeline->removeSink(g_trackSinkId);
-    g_stitchSinkId = -1;
-    g_trackSinkId  = -1;
+    pipeline->removeSink("stitcher");  // blocks until dispatch thread exits
+    pipeline->removeSink("tracker");
 }
 ```
 
 #### `SinkConfig` reference
 
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `name` | `string` | — | Human-readable label (used in log messages) |
-| `width` | `int` | 0 | Output width. 0 = match source (full resolution). |
-| `height` | `int` | 0 | Output height. 0 = match source. |
-| `channels` | `int` | 4 | Bytes per pixel. 4 = RGBA. |
-| `channelIndex` | `int` | -1 | Reserved for future single-channel extraction. Currently ignored. |
-| `ringSize` | `int` | 4 | Number of pre-allocated ring buffer slots. |
-| `dropOnFull` | `bool` | true | `true`: silently drop newest frame when ring is full. `false`: currently also drops (blocking not yet implemented). |
-
-> **Not yet implemented:** Downscaling (width/height smaller than source crops rather than scales), single-channel extraction (`channelIndex`), and blocking on full ring (`dropOnFull=false`). These are defined in the API for forward compatibility.
+| Field | Type | Description |
+|-------|------|-------------|
+| `name` | `std::string` | Unique identifier for this sink. Used as the key for `removeSink()`. |
 
 #### `SinkFrame` reference
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `data` | `const uint8_t*` | Pixel buffer pointer (row-major, tightly packed per channel) |
+| `data` | `const uint8_t*` | Pixel buffer pointer (row-major). Valid only for the duration of the callback. |
 | `width` | `int` | Frame width in pixels |
 | `height` | `int` | Frame height in pixels |
-| `stride` | `int` | Row stride in bytes (may be > width * channels due to alignment) |
-| `channels` | `int` | Bytes per pixel (4 = RGBA, 1 = single channel) |
-| `meta` | `FrameMetadata` | Sensor metadata for this frame |
-| `release` | `function<void()>` | Reserved for future use. Currently a no-op — ring buffer slots are managed automatically by the dispatch thread. |
+| `stride` | `int` | Row stride in bytes (may exceed `width * 3` due to OpenCV alignment) |
+| `format` | `PixelFormat` | Pixel layout — `PixelFormat::BGR` for external sinks |
+| `frameId` | `uint64_t` | Monotonic frame counter |
+| `meta` | `FrameMetadata` | Per-frame sensor metadata |
 
 #### `FrameMetadata` reference
 
@@ -681,21 +660,23 @@ extern "C" void unregisterConsumers(int64_t pipelinePtr) {
 
 #### Memory budget
 
-All ring buffers are pre-allocated at `addSink()` time. Memory per sink:
+Processed frames are shared across all consumers via `shared_ptr` — there is only one BGR allocation per frame regardless of the number of registered sinks. Each sink holds at most one pending frame at a time (latest-frame-wins mailbox).
+
+Memory per frame (BGR, 3 bytes/pixel):
 
 ```
-width * height * channels * ringSize bytes
+width * height * 3 bytes per frame × (up to consumers + 1 in-flight) frames
 ```
 
-Example for a whole-slide imaging app at 4K (3840x2160):
+Example at 4K (4160×3120, as reported by `streamWidth`/`streamHeight`):
 
-| Sink | Resolution | Channels | Ring | Memory |
-|------|-----------|----------|------|--------|
-| "stitcher" | 3840x2160 | 4 (RGBA) | 4 | 133 MB |
-| "tracker" | 3840x2160 | 4 (RGBA) | 8 | 265 MB |
-| **Total consumer memory** | | | | **~398 MB** |
+| Allocation | Size |
+|-----------|------|
+| Input ring (4 YUV slots, Y+UV) | ~78 MB |
+| Per-frame BGR (shared across all consumers) | ~37 MB |
+| Preview RGBA conversion buffer | ~49 MB |
 
-> **Tip:** Keep ring sizes small and callbacks fast to minimize memory usage. For heavy processing, copy the frame data in the callback and process on your own thread.
+> **Tip:** Keep sink callbacks fast. Each sink has a dedicated dispatch thread and a 1-slot mailbox — a slow callback causes frames to be dropped, not queued.
 
 Use `camera.capabilities.estimatedMemoryBytes` to check the plugin's own memory usage (input ring + preview). Plan your sink budgets accordingly.
 
@@ -826,12 +807,12 @@ Kotlin: CameraController
   |
   |  (JNI: nativeDeliverYuv)
 C++: ImagePipeline
-  |  (YUV→RGBA conversion, per-frame processing, consumer dispatch)
-  +-> ANativeWindow (Flutter preview — written via ANativeWindow_lock)
-  +-> Registered sinks (per-sink ring buffer + dispatch thread)
+  |  (InputRing → processing thread → YUV→BGR, saturation → SharedFrame fan-out)
+  +-> ANativeWindow (Flutter preview — BGR→RGBA, written via ANativeWindow_lock)
+  +-> Registered sinks (per-sink mailbox + dispatch thread, BGR frames)
 ```
 
-**Frame path:** Camera2 → YUV ImageReader → `nativeDeliverYuv` (JNI) → `processFrameYuv` (C++) → ANativeWindow + sinks
+**Frame path:** Camera2 → YUV ImageReader → `nativeDeliverYuv` (JNI) → InputRing → processing thread → BGR `SharedFrame` → preview sink + registered sinks
 
 **Surface ownership invariant:** A BufferQueue surface can only have one producer. Camera2 session outputs claim surfaces via `connect(NATIVE_WINDOW_API_CAMERA)`. `ANativeWindow_lock` claims via `connect(NATIVE_WINDOW_API_CPU)`. The preview surface must be in one or the other — never both. In the current architecture, the C++ pipeline owns it.
 

@@ -57,6 +57,17 @@ dart format lib/            # Format code to match Flutter conventions
   - **Kotlin/Java:** no wildcard imports (e.g. avoid `import x.y.*`)
 - Use `flutter pub get` after modifying `pubspec.yaml`
 
+## OpenCV (Android)
+
+The native pipeline uses OpenCV. The SDK is **not** checked in; it is symlinked from a host build:
+
+```bash
+ln -s /Users/shrek/software/opencv-build-android/opencv-android-sdk \
+      packages/cambrian_camera/android/opencv
+```
+
+Run this once per worktree clone. The symlink is git-ignored. Without it, the NDK build will fail with a missing `OpenCV_DIR` error.
+
 ## Useful Flutter Commands
 
 - `flutter doctor` — Verify Flutter setup

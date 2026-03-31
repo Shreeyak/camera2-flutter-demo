@@ -20,7 +20,6 @@
 
 // ---------------------------------------------------------------------------
 // Helper to cast the opaque jlong handle back to an ImagePipeline pointer.
-// Using a named helper avoids scattered reinterpret_casts in every function.
 // ---------------------------------------------------------------------------
 static cam::ImagePipeline* pipelineFromHandle(jlong handle) {
     return reinterpret_cast<cam::ImagePipeline*>(static_cast<uintptr_t>(handle));
@@ -31,37 +30,41 @@ extern "C" {
 // ---------------------------------------------------------------------------
 // nativeInit
 //
-// Called once when CameraController is constructed.  Creates the pipeline and
-// returns an opaque pointer (as jlong) that Kotlin stores and passes back on
-// every subsequent JNI call.
+// Called once when the Camera2 capture session is configured.  Creates the
+// pipeline, pre-allocates the InputRing for the given stream dimensions, and
+// returns an opaque pointer (as jlong) that Kotlin stores for all subsequent
+// JNI calls.
 //
-// @param previewSurface  The Android Surface that backs the Flutter preview widget.
+// @param previewSurface  Android Surface backing the Flutter preview widget.
+// @param width           Stream width in pixels.
+// @param height          Stream height in pixels.
 // @return  Non-zero handle on success; 0 on failure.
 // ---------------------------------------------------------------------------
 JNIEXPORT jlong JNICALL
 Java_com_cambrian_camera_CameraController_nativeInit(
-        JNIEnv* env, jclass /*clazz*/, jobject previewSurface) {
+        JNIEnv* env, jclass /*clazz*/,
+        jobject previewSurface,
+        jint width, jint height) {
     if (!previewSurface) {
         LOGE("nativeInit: previewSurface is null");
         return 0;
     }
 
-    // Obtain a native window from the Java Surface object.
-    // ANativeWindow_fromSurface acquires a reference; we transfer that
-    // reference to ImagePipeline (which acquires its own in its constructor).
     ANativeWindow* window = ANativeWindow_fromSurface(env, previewSurface);
     if (!window) {
         LOGE("nativeInit: ANativeWindow_fromSurface returned null");
         return 0;
     }
 
-    auto* pipeline = new cam::ImagePipeline(window);
+    auto* pipeline = new cam::ImagePipeline(window,
+                                            static_cast<int>(width),
+                                            static_cast<int>(height));
 
-    // ImagePipeline::ImagePipeline() acquires its own reference, so we release
-    // the one we got from ANativeWindow_fromSurface.
+    // ImagePipeline acquires its own reference; release the one from fromSurface.
     ANativeWindow_release(window);
 
-    LOGD("nativeInit: pipeline created at %p", pipeline);
+    LOGD("nativeInit: pipeline created at %p dims=%dx%d", pipeline,
+         static_cast<int>(width), static_cast<int>(height));
     return static_cast<jlong>(reinterpret_cast<uintptr_t>(pipeline));
 }
 
@@ -69,7 +72,7 @@ Java_com_cambrian_camera_CameraController_nativeInit(
 // nativeRelease
 //
 // Called when CameraController is disposed.  Deletes the pipeline and frees
-// the ANativeWindow reference it holds.
+// all resources it holds.
 //
 // @param pipelinePtr  Handle returned by nativeInit.
 // ---------------------------------------------------------------------------
@@ -104,7 +107,6 @@ Java_com_cambrian_camera_CameraController_nativeSetPreviewWindow(
         return;
     }
 
-    // previewSurface may legitimately be null (surface destroyed).
     ANativeWindow* window = nullptr;
     if (previewSurface) {
         window = ANativeWindow_fromSurface(env, previewSurface);
@@ -125,31 +127,36 @@ Java_com_cambrian_camera_CameraController_nativeSetPreviewWindow(
 // ---------------------------------------------------------------------------
 // nativeDeliverYuv
 //
-// Delivers one YUV_420_888 frame to the C++ pipeline for post-processing and
-// preview output.  Called by Kotlin's ImageReader.OnImageAvailableListener on
-// every captured frame.
+// Copies one YUV_420_888 frame into the C++ input ring and returns immediately.
+// The camera Image may be closed right after this call returns.
 //
-// The three DirectByteBuffers wrap ImageReader plane data; their lifetime is
-// guaranteed until image.close(), which Kotlin calls after this function returns.
-//
-// @param pipelinePtr    Handle returned by nativeInit.
-// @param yBuffer        Direct ByteBuffer for the Y plane.
-// @param yRowStride     Row stride of the Y plane in bytes.
-// @param uBuffer        Direct ByteBuffer for the U (Cb) plane.
-// @param uvRowStride    Row stride of the U/V planes in bytes.
-// @param uvPixelStride  Pixel stride of U/V planes (1=I420, 2=NV12/NV21).
-// @param vBuffer        Direct ByteBuffer for the V (Cr) plane.
-// @param width          Frame width in pixels.
-// @param height         Frame height in pixels.
+// @param pipelinePtr      Handle returned by nativeInit.
+// @param yBuffer          Direct ByteBuffer for the Y plane.
+// @param yRowStride       Row stride of the Y plane in bytes.
+// @param uBuffer          Direct ByteBuffer for the U (Cb) plane.
+// @param uvRowStride      Row stride of the U/V planes in bytes.
+// @param uvPixelStride    Pixel stride of U/V planes (1=I420, 2=NV12/NV21).
+//                         Not used by C++; format is determined by yuvFormat.
+// @param vBuffer          Direct ByteBuffer for the V (Cr) plane.
+// @param width            Frame width in pixels.
+// @param height           Frame height in pixels.
+// @param frameId          Monotonic frame counter (from streamFrameCount).
+// @param iso              Sensor sensitivity from latest capture result (0 if unknown).
+// @param exposureTimeNs   Exposure duration in nanoseconds (0 if unknown).
+// @param sensorTimestamp  Sensor capture timestamp from Image.getTimestamp().
+// @param yuvFormat        YUV layout constant (YUV_FORMAT_NV21/NV12/I420).
 // ---------------------------------------------------------------------------
 JNIEXPORT void JNICALL
 Java_com_cambrian_camera_CameraController_nativeDeliverYuv(
         JNIEnv* env, jclass /*clazz*/,
         jlong pipelinePtr,
         jobject yBuffer, jint yRowStride,
-        jobject uBuffer, jint uvRowStride, jint uvPixelStride,
+        jobject uBuffer, jint uvRowStride, jint /*uvPixelStride*/,
         jobject vBuffer,
-        jint width, jint height) {
+        jint width, jint height,
+        jlong frameId,
+        jint iso, jlong exposureTimeNs, jlong sensorTimestamp,
+        jint yuvFormat) {
     if (!pipelinePtr) {
         LOGE("nativeDeliverYuv: null pipeline handle");
         return;
@@ -164,26 +171,31 @@ Java_com_cambrian_camera_CameraController_nativeDeliverYuv(
     const auto* vData = reinterpret_cast<const uint8_t*>(env->GetDirectBufferAddress(vBuffer));
 
     if (!yData || !uData || !vData) {
-        LOGE("nativeDeliverYuv: plane buffer returned null from GetDirectBufferAddress — "
+        LOGE("nativeDeliverYuv: GetDirectBufferAddress returned null — "
              "ensure all plane buffers are direct ByteBuffers");
         return;
     }
 
-    pipelineFromHandle(pipelinePtr)->processFrameYuv(
-            yData, yRowStride,
+    cam::FrameMetadata meta;
+    meta.frameNumber       = static_cast<int64_t>(frameId);
+    meta.sensorTimestampNs = static_cast<int64_t>(sensorTimestamp);
+    meta.exposureTimeNs    = static_cast<int64_t>(exposureTimeNs);
+    meta.iso               = static_cast<int32_t>(iso);
+
+    pipelineFromHandle(pipelinePtr)->deliverYuv(
+            yData, static_cast<int>(yRowStride),
             uData, vData,
-            uvRowStride, uvPixelStride,
-            width, height);
+            static_cast<int>(uvRowStride),
+            static_cast<int>(width), static_cast<int>(height),
+            static_cast<int>(yuvFormat),
+            static_cast<uint64_t>(frameId),
+            meta);
 }
 
 // ---------------------------------------------------------------------------
 // nativeSetProcessingParams
 //
-// Updates the C++ pipeline's processing parameters fire-and-forget.  Called
-// from Kotlin whenever the Dart layer calls setProcessingParams().
-//
-// Currently only saturation is applied; remaining fields are stored and will
-// be wired incrementally.
+// Updates the C++ pipeline's processing parameters fire-and-forget.
 // ---------------------------------------------------------------------------
 JNIEXPORT void JNICALL
 Java_com_cambrian_camera_CameraController_nativeSetProcessingParams(

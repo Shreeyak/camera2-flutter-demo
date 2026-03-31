@@ -65,8 +65,14 @@ class CameraController(
             System.loadLibrary("cambrian_camera")
         }
 
-        /** Initialises the native pipeline. Returns an opaque pointer used in subsequent calls. */
-        @JvmStatic external fun nativeInit(previewSurface: Surface): Long
+        /** Initialises the native pipeline and pre-allocates the input ring for the given dims. */
+        @JvmStatic external fun nativeInit(previewSurface: Surface, width: Int, height: Int): Long
+
+        // YUV layout constants — kept in sync with InputRing.h.
+        const val YUV_FORMAT_UNKNOWN = 0
+        const val YUV_FORMAT_NV21    = 1  // VU interleaved (Android default)
+        const val YUV_FORMAT_NV12    = 2  // UV interleaved
+        const val YUV_FORMAT_I420    = 3  // Planar
 
         /** Releases all resources held by the native pipeline. */
         @JvmStatic external fun nativeRelease(pipelinePtr: Long)
@@ -81,19 +87,23 @@ class CameraController(
         )
 
         /**
-         * Delivers one YUV_420_888 frame to the native pipeline for post-processing.
-         * The three ByteBuffers are the direct buffers from [android.media.Image.Plane].
-         * All plane buffers are valid until [android.media.Image.close] is called.
+         * Copies one YUV_420_888 frame into the C++ input ring. Returns immediately;
+         * the caller may close the camera Image right after this call returns.
          *
-         * @param pipelinePtr    Pointer returned by [nativeInit].
-         * @param yBuffer        Direct ByteBuffer for the Y plane.
-         * @param yRowStride     Row stride of the Y plane in bytes.
-         * @param uBuffer        Direct ByteBuffer for the U (Cb) plane.
-         * @param uvRowStride    Row stride of U/V planes in bytes.
-         * @param uvPixelStride  Pixel stride of U/V planes (1=I420, 2=NV12/NV21).
-         * @param vBuffer        Direct ByteBuffer for the V (Cr) plane.
-         * @param width          Frame width in pixels.
-         * @param height         Frame height in pixels.
+         * @param pipelinePtr      Pointer returned by [nativeInit].
+         * @param yBuffer          Direct ByteBuffer for the Y plane.
+         * @param yRowStride       Row stride of the Y plane in bytes.
+         * @param uBuffer          Direct ByteBuffer for the U (Cb) plane.
+         * @param uvRowStride      Row stride of U/V planes in bytes.
+         * @param uvPixelStride    Pixel stride of U/V planes (1=I420, 2=NV12/NV21).
+         * @param vBuffer          Direct ByteBuffer for the V (Cr) plane.
+         * @param width            Frame width in pixels.
+         * @param height           Frame height in pixels.
+         * @param frameId          Monotonic frame counter (streamFrameCount).
+         * @param iso              Sensor ISO from latest capture result; 0 if not yet known.
+         * @param exposureTimeNs   Exposure duration in ns from latest capture result; 0 if unknown.
+         * @param sensorTimestamp  Sensor timestamp from [android.media.Image.getTimestamp].
+         * @param yuvFormat        YUV layout constant ([YUV_FORMAT_NV21]/NV12/I420).
          */
         @JvmStatic external fun nativeDeliverYuv(
             pipelinePtr: Long,
@@ -101,6 +111,9 @@ class CameraController(
             uBuffer: ByteBuffer, uvRowStride: Int, uvPixelStride: Int,
             vBuffer: ByteBuffer,
             width: Int, height: Int,
+            frameId: Long,
+            iso: Int, exposureTimeNs: Long, sensorTimestamp: Long,
+            yuvFormat: Int,
         )
 
         /**
@@ -179,11 +192,18 @@ class CameraController(
      */
     @Volatile private var appliedSettings: CamSettings = CamSettings()
 
-    /** Frame counter used for periodic diagnostics. */
+    /** Frame counter used for periodic diagnostics and as frameId for the native pipeline. */
     @Volatile private var streamFrameCount: Long = 0L
 
     /** Capture-result counter used for periodic diagnostics. */
     @Volatile private var captureResultCount: Long = 0L
+
+    /**
+     * YUV layout of the Camera2 stream, detected from plane strides on the first frame
+     * and cached for all subsequent frames. Reset to [YUV_FORMAT_UNKNOWN] at each
+     * session start. Accessed only from the camera background thread; no @Volatile needed.
+     */
+    private var detectedYuvFormat: Int = YUV_FORMAT_UNKNOWN
 
     /**
      * Last sensor values reported by Camera2 capture results.
@@ -756,6 +776,7 @@ class CameraController(
         val (streamFormat, streamWidth, streamHeight) = resolveStreamFormat(device)
         streamFrameCount = 0L
         captureResultCount = 0L
+        detectedYuvFormat = YUV_FORMAT_UNKNOWN
 
         previewWidth = streamWidth
         previewHeight = streamHeight
@@ -776,9 +797,9 @@ class CameraController(
         val jpegReader = ImageReader.newInstance(streamWidth, streamHeight, ImageFormat.JPEG, 1)
         jpegImageReader = jpegReader
 
-        // Initialise native pipeline with the current SurfaceProducer surface.
+        // Initialise native pipeline with the current SurfaceProducer surface and stream dims.
         val previewSurface = surfaceProducer.getSurface()
-        nativePipelinePtr = nativeInit(previewSurface)
+        nativePipelinePtr = nativeInit(previewSurface, streamWidth, streamHeight)
 
         // Deliver YUV frames to the C++ pipeline for post-processing and preview output.
         streamReader.setOnImageAvailableListener({ reader ->
@@ -791,19 +812,36 @@ class CameraController(
                         "stream frame#$streamFrameCount YUV ${image.width}x${image.height}",
                     )
                 }
-                // Deliver raw YUV planes to C++ for post-processing and preview output.
-                // image.planes[*].buffer pointers are valid until image.close() below.
+                // Copy YUV planes into the C++ input ring; image.close() below releases
+                // the camera buffer — the native side has already memcpy'd the data.
                 val ptr = nativePipelinePtr
                 if (ptr != 0L) {
                     val yPlane = image.planes[0]
                     val uPlane = image.planes[1]
                     val vPlane = image.planes[2]
+
+                    // Detect YUV layout from plane strides on the first frame; cache it.
+                    // The layout is a hardware property of the device and never changes
+                    // mid-session, so we lock in the result and assert in debug builds.
+                    if (detectedYuvFormat == YUV_FORMAT_UNKNOWN) {
+                        detectedYuvFormat = detectYuvFormat(image)
+                        android.util.Log.d(
+                            "CambrianCamera",
+                            "Detected YUV format: ${yuvFormatName(detectedYuvFormat)}",
+                        )
+                    }
+
                     nativeDeliverYuv(
                         ptr,
                         yPlane.buffer, yPlane.rowStride,
                         uPlane.buffer, uPlane.rowStride, uPlane.pixelStride,
                         vPlane.buffer,
                         image.width, image.height,
+                        streamFrameCount,
+                        lastKnownIso ?: 0,
+                        lastKnownExposureTimeNs ?: 0L,
+                        image.timestamp,
+                        detectedYuvFormat,
                     )
                 }
             } finally {
@@ -866,6 +904,32 @@ class CameraController(
                 },
             ),
         )
+    }
+
+    /**
+     * Detects the YUV interleaving layout by inspecting plane strides.
+     *
+     * Camera2 YUV_420_888 is device-agnostic and doesn't advertise its internal layout
+     * directly. We infer it from pixelStride and the relative sizes of the U and V buffers:
+     * - pixelStride == 1 → I420 (planar, separate U and V planes)
+     * - pixelStride == 2 and V buffer larger → NV21 (V starts 1 byte before U in memory)
+     * - pixelStride == 2 otherwise → NV12 (U starts 1 byte before V in memory)
+     */
+    private fun detectYuvFormat(image: android.media.Image): Int {
+        val uPlane = image.planes[1]
+        val vPlane = image.planes[2]
+        return when {
+            uPlane.pixelStride == 1 -> YUV_FORMAT_I420
+            vPlane.buffer.remaining() > uPlane.buffer.remaining() -> YUV_FORMAT_NV21
+            else -> YUV_FORMAT_NV12
+        }
+    }
+
+    private fun yuvFormatName(format: Int): String = when (format) {
+        YUV_FORMAT_NV21 -> "NV21"
+        YUV_FORMAT_NV12 -> "NV12"
+        YUV_FORMAT_I420 -> "I420"
+        else -> "UNKNOWN($format)"
     }
 
     /**
@@ -1120,6 +1184,7 @@ class CameraController(
         repeatingTargetSurface = null
         streamFrameCount = 0L
         captureResultCount = 0L
+        detectedYuvFormat = YUV_FORMAT_UNKNOWN
         lastKnownIso = null
         lastKnownExposureTimeNs = null
 
