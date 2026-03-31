@@ -1,5 +1,8 @@
 import 'dart:math' show max, min;
 
+import 'package:cambrian_camera/cambrian_camera.dart'
+    show CameraSettings, Manual;
+
 enum CameraSettingType { af, iso, shutter, focus, wb, zoom }
 
 class CameraRanges {
@@ -48,6 +51,45 @@ class CameraSettingsValues {
     this.isoAuto = true,
     this.exposureAuto = true,
   });
+
+  /// Constructs the initial UI state from the [CameraSettings] passed to
+  /// [CambrianCamera.open] and the device capability [ranges].
+  ///
+  /// This keeps the open() call and the UI's initial display in sync: whatever
+  /// is passed to the camera is exactly what the UI reflects.
+  factory CameraSettingsValues.fromSettings(
+    CameraSettings settings,
+    CameraRanges ranges,
+  ) {
+    final isoAuto = settings.iso is! Manual<int>;
+    final isoValue = settings.iso is Manual<int>
+        ? (settings.iso as Manual<int>).value
+        : max(ranges.isoRange[0], min(200, ranges.isoRange[1]));
+
+    final exposureAuto = settings.exposureTimeNs is! Manual<int>;
+    final exposureTimeNs = settings.exposureTimeNs is Manual<int>
+        ? (settings.exposureTimeNs as Manual<int>).value
+        : max(
+            ranges.exposureTimeRangeNs[0],
+            min(250000, ranges.exposureTimeRangeNs[1]),
+          );
+
+    final afEnabled = settings.focus is! Manual<double>;
+    final focusDiopters = settings.focus is Manual<double>
+        ? (settings.focus as Manual<double>).value
+        : min(0.1, ranges.minFocusDiopters);
+
+    return CameraSettingsValues(
+      isoValue: isoValue,
+      exposureTimeNs: exposureTimeNs,
+      focusDiopters: focusDiopters,
+      zoomRatio: settings.zoomRatio ?? ranges.minZoomRatio,
+      afEnabled: afEnabled,
+      wbLocked: false,
+      isoAuto: isoAuto,
+      exposureAuto: exposureAuto,
+    );
+  }
 
   factory CameraSettingsValues.initialFromRanges(CameraRanges ranges) {
     final clampedFocusDiopters = min(0.1, ranges.minFocusDiopters);

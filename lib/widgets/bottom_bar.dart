@@ -6,6 +6,7 @@ import 'camera_settings_bar.dart';
 
 class BottomBar extends StatelessWidget {
   final bool isSettingsOpen;
+  final bool isSettingsEnabled;
   final CameraSettingType? activeSetting;
   final CameraSettingsValues values;
   final CameraCallbacks callbacks;
@@ -15,6 +16,7 @@ class BottomBar extends StatelessWidget {
   const BottomBar({
     super.key,
     required this.isSettingsOpen,
+    required this.isSettingsEnabled,
     required this.activeSetting,
     required this.values,
     required this.callbacks,
@@ -39,7 +41,10 @@ class BottomBar extends StatelessWidget {
                 heightFactor: 1.0 - value,
                 child: FractionalTranslation(
                   translation: Offset(0.0, value),
-                  child: _MainActionBar(onToggleSettings: onToggleSettings),
+                  child: _MainActionBar(
+                    isSettingsEnabled: isSettingsEnabled,
+                    onToggleSettings: onToggleSettings,
+                  ),
                 ),
               ),
             ),
@@ -70,9 +75,13 @@ class BottomBar extends StatelessWidget {
 
 // ── Main action bar with just the SETTINGS button
 class _MainActionBar extends StatelessWidget {
+  final bool isSettingsEnabled;
   final VoidCallback onToggleSettings;
 
-  const _MainActionBar({required this.onToggleSettings});
+  const _MainActionBar({
+    required this.isSettingsEnabled,
+    required this.onToggleSettings,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -91,6 +100,7 @@ class _MainActionBar extends StatelessWidget {
               BottomBarActionButton(
                 icon: Icons.tune,
                 label: 'SETTINGS',
+                isDisabled: !isSettingsEnabled,
                 onTap: onToggleSettings,
               ),
             ],

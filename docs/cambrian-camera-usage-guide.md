@@ -378,12 +378,49 @@ camera.errorStream.listen((error) {
 | `cameraDevice` | No | Hardware camera error (transient) |
 | `cameraService` | No | Android camera service error (transient) |
 | `cameraDisconnected` | No | Camera disconnected (USB, system reclaim) |
+| `cameraInUse` | No | Another app currently holds the camera |
+| `cameraAccessError` | No | Transient `CameraAccessException` from the OS |
 | `configurationFailed` | No | Session configuration failed |
 | `previewSurfaceLost` | No | Flutter surface recycled |
 | `pipelineError` | No | C++ processing error |
+| `settingsConflict` | No | Invalid settings combination — see note below |
 | `permissionDenied` | **Yes** | Camera permission revoked |
 | `cameraDisabled` | **Yes** | Camera disabled by system policy |
 | `maxCamerasInUse` | **Yes** | Too many cameras open in the system |
+| `maxRetriesExceeded` | **Yes** | Auto-recovery gave up after 5 retries |
+| `unknown` | No | Unclassified error (treat as transient) |
+
+> **`settingsConflict`:** Sent when a single-field manual ISO or exposure update is
+> rejected because the camera has not yet delivered a capture result (no AE seed
+> available). This can happen if `updateSettings()` is called with
+> `AutoValue.manual(...)` immediately after `open()`, before the first frame arrives.
+>
+> **Mitigation:** Wait for at least one non-null `iso` + `exposureTimeNs` pair from
+> `frameResultStream` before allowing manual AE control. On conflict, revert the UI
+> back to auto:
+>
+> ```dart
+> bool _aeSeeded = false;
+>
+> camera.frameResultStream.listen((result) {
+>   if (!_aeSeeded && result.iso != null && result.exposureTimeNs != null) {
+>     setState(() => _aeSeeded = true);
+>   }
+>   // ... update sliders ...
+> });
+>
+> camera.errorStream.listen((error) {
+>   if (error.code == CameraErrorCode.settingsConflict) {
+>     // Revert UI to auto — the camera rejected the manual update
+>     setState(() { isIsoAuto = true; isExposureAuto = true; });
+>   }
+> });
+>
+> void onIsoSliderChanged(int iso) {
+>   if (!_aeSeeded) return;  // guard: no AE seed yet
+>   camera.updateSettings(CameraSettings(iso: AutoValue.manual(iso)));
+> }
+> ```
 
 #### `camera.frameResultStream`
 

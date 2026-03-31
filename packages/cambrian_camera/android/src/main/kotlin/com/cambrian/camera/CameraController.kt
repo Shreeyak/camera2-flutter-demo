@@ -1295,8 +1295,8 @@ class CameraController(
                     val focusDist = result.get(CaptureResult.LENS_FOCUS_DISTANCE)
                     val wbGains = result.get(CaptureResult.COLOR_CORRECTION_GAINS)
                     val frameResult = CamFrameResult(
-                        iso = lastKnownIso?.toLong(),
-                        exposureTimeNs = lastKnownExposureTimeNs,
+                        iso = result.get(CaptureResult.SENSOR_SENSITIVITY)?.toLong(),
+                        exposureTimeNs = result.get(CaptureResult.SENSOR_EXPOSURE_TIME),
                         focusDistanceDiopters = focusDist?.toDouble(),
                         wbGainR = wbGains?.red?.toDouble(),
                         wbGainG = wbGains?.let { (it.greenEven.toDouble() + it.greenOdd.toDouble()) / 2.0 },
