@@ -71,6 +71,8 @@ class CamSettings {
   /// Camera2 EDGE_MODE_* constant. Null = don't change.
   int? edgeMode;
   /// Exposure compensation in AE steps. Null = don't change.
+  /// NOTE: has no effect when isoMode == "manual" or exposureMode == "manual"
+  /// because CONTROL_AE_MODE is set to OFF in that case.
   int? evCompensation;
 }
 
@@ -164,6 +166,7 @@ enum CamErrorCode {
   maxRetriesExceeded,  // auto-recovery gave up after max retries — fatal
   previewSurfaceLost,  // Flutter SurfaceProducer was invalidated
   pipelineError,       // C++ processing pipeline error
+  settingsConflict,    // invalid settings combination (e.g. mixed manual/auto ISO+exposure)
   unknown,             // catch-all; keep last
 }
 

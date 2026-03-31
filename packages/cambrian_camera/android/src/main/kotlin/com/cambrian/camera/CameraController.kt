@@ -32,6 +32,7 @@ import java.io.FileOutputStream
 import java.nio.ByteBuffer
 import java.util.concurrent.Semaphore
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Camera2 lifecycle manager for the cambrian_camera plugin.
@@ -126,6 +127,9 @@ class CameraController(
 
     @Volatile private var jpegImageReader: ImageReader? = null
 
+    /** True while a still-capture is in flight; prevents listener overwrites from concurrent calls. */
+    private val isCaptureInFlight = AtomicBoolean(false)
+
     /** Repeating request rebuilt whenever settings change. */
     @Volatile private var repeatingRequest: CaptureRequest? = null
 
@@ -159,6 +163,15 @@ class CameraController(
 
     /** Capture-result counter used for periodic diagnostics. */
     @Volatile private var captureResultCount: Long = 0L
+
+    /**
+     * Last sensor values reported by Camera2 capture results.
+     * Updated on every frame from the latest TotalCaptureResult.
+     * Used to seed manual mode when the user switches one field to manual —
+     * the partner is initialised to the last live AE value so exposure is continuous.
+     */
+    @Volatile private var lastKnownIso: Int? = null
+    @Volatile private var lastKnownExposureTimeNs: Long? = null
 
     // -------------------------------------------------------------------------
     // Auto-recovery
@@ -439,10 +452,80 @@ class CameraController(
      * If no session is active the merged settings are stored as [pendingSettings]
      * and applied when the next session starts.
      *
+     * ## ISO + Exposure coupling
+     *
+     * [CamSettings.isoMode] and [CamSettings.exposureMode] are tied to a single
+     * Camera2 flag (`CONTROL_AE_MODE`), so they must always end up in the same mode:
+     *
+     * - **Auto is contagious:** setting either field to `"auto"` automatically
+     *   propagates to the other field.  You may set only one to `"auto"` in a call —
+     *   the partner is pulled along silently.
+     * - **Auto wins over manual:** if one field is `"auto"` and the other is `"manual"`
+     *   after merging, both are pulled to `"auto"`.  This handles the common UI case
+     *   where an ISO slider emits `{iso=auto, exposure=manual(lastValue)}` — the intent
+     *   is to switch to auto mode, and the stale manual value on the other slider is
+     *   correctly discarded.
+     * - **Manual latches from last AE values:** when only one field is set to manual
+     *   (the other is null = "don't change"), the partner is automatically seeded from
+     *   the last sensor values reported by Camera2 capture results
+     *   (`lastKnownIso` / `lastKnownExposureTimeNs`), so brightness is continuous.
+     *   If no capture result has arrived yet, the call is rejected with
+     *   [CamErrorCode.SETTINGS_CONFLICT].
+     *
      * @param incoming The settings to merge and apply.
      */
     fun updateSettings(incoming: CamSettings) {
-        val merged = mergeSettings(appliedSettings, incoming)
+        // Phase 1 (merge) + auto-propagation.
+        // Camera2 ties ISO and exposure to a single CONTROL_AE_MODE flag (ON = both auto,
+        // OFF = both manual).  Auto is contagious: if either field is "auto" after merging,
+        // both are pulled to auto.  This means an incoming {iso=auto, exposure=manual} pair
+        // (e.g. from a UI where the ISO slider was moved to auto while exposure retained its
+        // value) resolves correctly — auto wins and both switch to auto mode.
+        var merged = mergeSettings(appliedSettings, incoming)
+        val mergedIsoAuto = merged.isoMode == "auto"
+        val mergedExpAuto = merged.exposureMode == "auto"
+        if (mergedIsoAuto && !mergedExpAuto) {
+            // iso switched to auto — pull exposure along with it
+            merged = merged.copy(exposureMode = "auto", exposureTimeNs = null)
+        } else if (mergedExpAuto && !mergedIsoAuto) {
+            // exposure switched to auto — pull iso along with it
+            merged = merged.copy(isoMode = "auto", iso = null)
+        }
+
+        // Phase 3: if one side is manual and the other is not (user only set one field),
+        // auto-fill the partner from the last known AE values.  This implements "latch on
+        // manual": the sensor transitions smoothly without a brightness jump because it
+        // starts from the value AE was already using.
+        val finalIsoManual = merged.isoMode == "manual"
+        val finalExpManual = merged.exposureMode == "manual"
+        if (finalIsoManual && !finalExpManual) {
+            val knownExp = lastKnownExposureTimeNs
+            if (knownExp == null) {
+                val msg = "Cannot switch to manual ISO: no prior AE exposure value available yet. " +
+                    "Provide exposureTimeNs explicitly or wait for the first capture result."
+                android.util.Log.e("CambrianCamera", msg)
+                mainHandler.post {
+                    flutterApi.onError(handle, CamError(CamErrorCode.SETTINGS_CONFLICT, msg, false)) {}
+                }
+                return
+            }
+            android.util.Log.d("CambrianCamera", "Auto-filled exposureTimeNs=$knownExp from last AE result")
+            merged = merged.copy(exposureMode = "manual", exposureTimeNs = knownExp)
+        } else if (finalExpManual && !finalIsoManual) {
+            val knownIso = lastKnownIso
+            if (knownIso == null) {
+                val msg = "Cannot switch to manual exposure: no prior AE ISO value available yet. " +
+                    "Provide iso explicitly or wait for the first capture result."
+                android.util.Log.e("CambrianCamera", msg)
+                mainHandler.post {
+                    flutterApi.onError(handle, CamError(CamErrorCode.SETTINGS_CONFLICT, msg, false)) {}
+                }
+                return
+            }
+            android.util.Log.d("CambrianCamera", "Auto-filled iso=$knownIso from last AE result")
+            merged = merged.copy(isoMode = "manual", iso = knownIso.toLong())
+        }
+
         appliedSettings = merged
         pendingSettings = merged
         val session = captureSession ?: return
@@ -545,6 +628,11 @@ class CameraController(
             return
         }
 
+        if (!isCaptureInFlight.compareAndSet(false, true)) {
+            callback(Result.failure(FlutterError("capture_in_progress", "A capture is already in progress", null)))
+            return
+        }
+
         try {
             // Register the listener BEFORE triggering capture so the image can never
             // arrive before the listener is installed (eliminating the race condition).
@@ -553,6 +641,7 @@ class CameraController(
                 reader.setOnImageAvailableListener(null, null)
                 val image: Image? = try { reader.acquireNextImage() } catch (_: Exception) { null }
                 if (image == null) {
+                    isCaptureInFlight.set(false)
                     mainHandler.post { callback(Result.failure(FlutterError("capture_failed", "Failed to acquire JPEG image", null))) }
                     return@setOnImageAvailableListener
                 }
@@ -568,6 +657,7 @@ class CameraController(
                     mainHandler.post { callback(Result.failure(FlutterError("capture_failed", e.message, null))) }
                 } finally {
                     image.close()
+                    isCaptureInFlight.set(false)
                 }
             }, backgroundHandler)
 
@@ -580,8 +670,14 @@ class CameraController(
 
             session.capture(jpegRequest, null, backgroundHandler)
         } catch (e: CameraAccessException) {
+            isCaptureInFlight.set(false)
             jpegReader.setOnImageAvailableListener(null, null) // clear listener on failure
             callback(Result.failure(FlutterError("camera_access_error", e.message, null)))
+        } catch (e: Exception) {
+            // Ensure we always clear the in-flight flag and listener on any other failure
+            isCaptureInFlight.set(false)
+            jpegReader.setOnImageAvailableListener(null, null)
+            callback(Result.failure(FlutterError("capture_failed", e.message, null)))
         }
     }
 
@@ -763,8 +859,10 @@ class CameraController(
      * (i.e. lack PRIVATE_REPROCESSING or YUV_REPROCESSING capabilities), where ZSL would
      * throw [IllegalArgumentException].
      *
-     * The returned builder already has [surface] added as a target and
-     * [CaptureRequest.CONTROL_MODE_AUTO] applied.
+     * The returned builder already has [surface] and the YUV [imageReader] surface added as
+     * targets (so the streaming ImageReader receives frames) and [CaptureRequest.CONTROL_MODE_AUTO]
+     * applied. The JPEG [jpegImageReader] is intentionally excluded — it is targeted only by the
+     * one-shot request in [takePicture].
      */
     private fun createRepeatingRequestBuilder(
         device: CameraDevice,
@@ -777,6 +875,10 @@ class CameraController(
             device.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW)
         }
         builder.addTarget(surface)
+        // Also target the YUV streaming ImageReader so it receives every frame.
+        // Camera2 only delivers frames to surfaces listed as targets in the request;
+        // including it in the session outputs alone is not sufficient.
+        imageReader?.surface?.let { builder.addTarget(it) }
         builder.set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
         return builder
     }
@@ -825,13 +927,15 @@ class CameraController(
                 // ISO: "auto" = AE controls, "manual" = fixed value.
                 when (settings.isoMode) {
                     "manual" -> settings.iso?.let { set(CaptureRequest.SENSOR_SENSITIVITY, it.toInt()) }
-                    // "auto" or null: don't set → template default (AE controls ISO)
+                    "auto", null -> { /* don't set → template default (AE controls ISO) */ }
+                    else -> android.util.Log.w("CambrianCamera", "Unknown isoMode: ${settings.isoMode}")
                 }
 
                 // Exposure time: "auto" = AE controls, "manual" = fixed value.
                 when (settings.exposureMode) {
                     "manual" -> settings.exposureTimeNs?.let { set(CaptureRequest.SENSOR_EXPOSURE_TIME, it) }
-                    // "auto" or null: don't set → template default (AE controls shutter)
+                    "auto", null -> { /* don't set → template default (AE controls shutter) */ }
+                    else -> android.util.Log.w("CambrianCamera", "Unknown exposureMode: ${settings.exposureMode}")
                 }
 
                 // Focus: "auto" = continuous AF, "manual" = fixed distance.
@@ -845,7 +949,8 @@ class CameraController(
                     "auto" -> {
                         set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
                     }
-                    // null: don't set → template default (continuous AF)
+                    null -> { /* don't set → template default (continuous AF) */ }
+                    else -> android.util.Log.w("CambrianCamera", "Unknown focusMode: ${settings.focusMode}")
                 }
 
                 // White balance: "auto" = AWB, "locked" = freeze, "manual" = user gains.
@@ -866,12 +971,17 @@ class CameraController(
                             CaptureRequest.COLOR_CORRECTION_MODE,
                             CaptureRequest.COLOR_CORRECTION_MODE_TRANSFORM_MATRIX,
                         )
+                        // RggbChannelVector takes four args: R, G_even, G_odd, B.
+                        // The RGGB Bayer pattern has two green photosites (one per row of
+                        // the 2×2 tile). Most sensors have symmetric green response so the
+                        // same gainG is used for both — this is correct, not a copy-paste error.
                         set(
                             CaptureRequest.COLOR_CORRECTION_GAINS,
                             android.hardware.camera2.params.RggbChannelVector(gainR, gainG, gainG, gainB),
                         )
                     }
-                    // null: don't set → template default (AWB auto)
+                    null -> { /* don't set → template default (AWB auto) */ }
+                    else -> android.util.Log.w("CambrianCamera", "Unknown wbMode: ${settings.wbMode}")
                 }
 
                 // Zoom — use CONTROL_ZOOM_RATIO on API 30+, fall back to SCALER_CROP_REGION.
@@ -891,7 +1001,8 @@ class CameraController(
                 // Edge enhancement mode
                 settings.edgeMode?.let { set(CaptureRequest.EDGE_MODE, it.toInt()) }
 
-                // EV compensation
+                // EV compensation — only applied by Camera2 when CONTROL_AE_MODE != OFF.
+                // Has no effect when isoMode or exposureMode is "manual" (AE is disabled).
                 settings.evCompensation?.let {
                     set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, it.toInt())
                 }
@@ -1032,6 +1143,8 @@ class CameraController(
         repeatingTargetSurface = null
         streamFrameCount = 0L
         captureResultCount = 0L
+        lastKnownIso = null
+        lastKnownExposureTimeNs = null
 
         // Release native pipeline.
         val ptr = nativePipelinePtr
@@ -1090,9 +1203,7 @@ class CameraController(
                             openLock.release()
                             cameraDevice = camera
                             retryCount = 0
-                            startCaptureSession { result ->
-                                result.onFailure { handleNonFatalError(CamErrorCode.CONFIGURATION_FAILED, it.message ?: "Session error") }
-                            }
+                            startCaptureSession {}
                         }
 
                         override fun onDisconnected(camera: CameraDevice) {
@@ -1172,17 +1283,20 @@ class CameraController(
                 request: CaptureRequest,
                 result: TotalCaptureResult,
             ) {
+                // Always track the latest sensor values so that switching to manual mode
+                // can seed the partner field with the last live AE value.
+                result.get(CaptureResult.SENSOR_SENSITIVITY)?.let { lastKnownIso = it }
+                result.get(CaptureResult.SENSOR_EXPOSURE_TIME)?.let { lastKnownExposureTimeNs = it }
+
                 if (!CambrianCameraConfig.verboseDiagnostics) return
                 captureResultCount++
                 if (captureResultCount != 1L && captureResultCount % 60L != 0L) return
                 val aeMode = result.get(CaptureResult.CONTROL_AE_MODE)
                 val aeState = result.get(CaptureResult.CONTROL_AE_STATE)
-                val iso = result.get(CaptureResult.SENSOR_SENSITIVITY)
-                val exposure = result.get(CaptureResult.SENSOR_EXPOSURE_TIME)
                 android.util.Log.d(
                     "CambrianCamera",
                     "capture result#$captureResultCount target=${describeTargetSurface(repeatingTargetSurface)} " +
-                        "aeMode=$aeMode aeState=$aeState iso=$iso exposureNs=$exposure",
+                        "aeMode=$aeMode aeState=$aeState iso=$lastKnownIso exposureNs=$lastKnownExposureTimeNs",
                 )
             }
         }

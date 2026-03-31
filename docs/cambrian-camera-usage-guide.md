@@ -53,7 +53,7 @@ await Permission.camera.request();
 final camera = await CambrianCamera.open();
 
 // 3. Show preview — use the returned Widget in your widget tree
-// child: camera.buildPreview(fit: BoxFit.cover),
+child: camera.buildPreview(fit: BoxFit.cover),
 
 // 4. Adjust settings
 camera.updateSettings(CameraSettings(
@@ -179,19 +179,54 @@ All fields are nullable. `null` means "don't change this setting."
 | `zoomRatio` | `double?` | Zoom level (1.0 = no zoom). Null = don't change. |
 | `noiseReductionMode` | `NoiseReductionMode?` | Camera2 noise reduction mode enum. Null = don't change. |
 | `edgeMode` | `EdgeMode?` | Camera2 edge enhancement mode enum. Null = don't change. |
-| `evCompensation` | `int?` | Exposure compensation in AE steps. Null = don't change. |
+| `evCompensation` | `int?` | Exposure compensation in AE steps. **No effect when ISO or exposure is manual** (AE is disabled). Null = don't change. |
+
+> **ISO + Exposure coupling:** `iso` and `exposureTimeNs` share a single Camera2 flag (`CONTROL_AE_MODE`: ON = both auto, OFF = both manual).
+>
+> - **Auto is contagious.** Setting either field to `AutoValue.auto()` propagates to the other automatically. You only need to set one:
+>   ```dart
+>   // Switches BOTH iso and exposureTimeNs to auto:
+>   camera.updateSettings(CameraSettings(iso: AutoValue.auto()));
+>   ```
+> - **Manual latches from last AE values.** You only need to set one field to manual — the partner is automatically seeded from the last sensor value that AE was using, keeping brightness continuous. This is useful for ISO/exposure sliders:
+>   ```dart
+>   // Drag an ISO slider — exposureTimeNs fills in from the last AE value:
+>   camera.updateSettings(CameraSettings(iso: AutoValue.manual(800)));
+>   ```
+>   You can still provide both explicitly for full control:
+>   ```dart
+>   camera.updateSettings(CameraSettings(
+>     iso: AutoValue.manual(800),
+>     exposureTimeNs: AutoValue.manual(16666666), // 1/60 s
+>   ));
+>   ```
+>   If the camera has not yet delivered a capture result (just opened), single-field manual is rejected with `CameraErrorCode.settingsConflict`.
+> - **Auto wins over manual in a mixed update.** If one field is `auto` and the other is `manual`, both switch to `auto`. This handles the UI slider case: moving the ISO slider to auto sends `{iso: auto, exposure: manual(lastValue)}` — the stale manual exposure value is correctly discarded.
+>
+> | Intent | Expression |
+> |---|---|
+> | Slide ISO to manual — exposure continuous | `CameraSettings(iso: AutoValue.manual(800))` |
+> | Set both to specific values | `CameraSettings(iso: AutoValue.manual(800), exposureTimeNs: AutoValue.manual(...))` |
+> | Switch back to auto | `CameraSettings(iso: AutoValue.auto())` — or either field; auto wins |
+> | Mixed (one auto, one manual) | Both go to auto — auto wins |
 
 #### Examples
 
 ```dart
-// Manual ISO, auto exposure, auto focus
+// Slide ISO slider — exposure auto-fills from last AE value, brightness is continuous
+camera.updateSettings(CameraSettings(iso: AutoValue.manual(800)));
+
+// Or provide both explicitly if you want a specific shutter speed too
 camera.updateSettings(CameraSettings(
-  iso: AutoValue.manual(400),
-  exposureTimeNs: AutoValue.auto(),
+  iso: AutoValue.manual(800),
+  exposureTimeNs: AutoValue.manual(16666666), // 1/60 s
   focus: AutoValue.auto(),
 ));
 
-// Switch to full auto
+// Switch iso back to auto — exposureTimeNs follows automatically
+camera.updateSettings(CameraSettings(iso: AutoValue.auto()));
+
+// Switch to full auto (explicit; equivalent to the line above for iso+exposure)
 camera.updateSettings(CameraSettings(
   iso: AutoValue.auto(),
   exposureTimeNs: AutoValue.auto(),
@@ -380,7 +415,6 @@ print('Resolutions: ${caps.supportedSizes}');
 | `zoomMin` / `zoomMax` | `double` | Zoom ratio range |
 | `evCompMin` / `evCompMax` | `int` | EV compensation range (in steps) |
 | `evCompensationStep` | `double` | Size of one EV step |
-| `supportsRgba8888` | `bool` | Whether device supports direct RGBA output |
 | `estimatedMemoryBytes` | `int` | Estimated native memory usage |
 
 ---

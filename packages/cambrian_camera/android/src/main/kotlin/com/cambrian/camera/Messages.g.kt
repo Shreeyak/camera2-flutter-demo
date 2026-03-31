@@ -69,7 +69,8 @@ enum class CamErrorCode(val raw: Int) {
   MAX_RETRIES_EXCEEDED(9),
   PREVIEW_SURFACE_LOST(10),
   PIPELINE_ERROR(11),
-  UNKNOWN(12);
+  SETTINGS_CONFLICT(12),
+  UNKNOWN(13);
 
   companion object {
     fun ofRaw(raw: Int): CamErrorCode? {
@@ -127,7 +128,11 @@ data class CamSettings (
   val noiseReductionMode: Long? = null,
   /** Camera2 EDGE_MODE_* constant. Null = don't change. */
   val edgeMode: Long? = null,
-  /** Exposure compensation in AE steps. Null = don't change. */
+  /**
+   * Exposure compensation in AE steps. Null = don't change.
+   * NOTE: has no effect when isoMode == "manual" or exposureMode == "manual"
+   * because CONTROL_AE_MODE is set to OFF in that case.
+   */
   val evCompensation: Long? = null
 )
  {

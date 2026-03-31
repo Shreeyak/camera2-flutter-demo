@@ -86,7 +86,8 @@ enum CamErrorCode: Int {
   case maxRetriesExceeded = 9
   case previewSurfaceLost = 10
   case pipelineError = 11
-  case unknown = 12
+  case settingsConflict = 12
+  case unknown = 13
 }
 
 /// Generated class from Pigeon that represents data sent in messages.
@@ -142,6 +143,8 @@ struct CamSettings {
   /// Camera2 EDGE_MODE_* constant. Null = don't change.
   var edgeMode: Int64? = nil
   /// Exposure compensation in AE steps. Null = don't change.
+  /// NOTE: has no effect when isoMode == "manual" or exposureMode == "manual"
+  /// because CONTROL_AE_MODE is set to OFF in that case.
   var evCompensation: Int64? = nil
 
 
@@ -620,7 +623,7 @@ class CameraFlutterApi: CameraFlutterApiProtocol {
       if listResponse.count > 1 {
         let code: String = listResponse[0] as! String
         let message: String? = nilOrValue(listResponse[1])
-        let details: String? = nilOrValue(listResponse[2])
+        let details: Any? = isNullish(listResponse[2]) ? nil : listResponse[2]
         completion(.failure(PigeonError(code: code, message: message, details: details)))
       } else {
         completion(.success(Void()))
@@ -638,7 +641,7 @@ class CameraFlutterApi: CameraFlutterApiProtocol {
       if listResponse.count > 1 {
         let code: String = listResponse[0] as! String
         let message: String? = nilOrValue(listResponse[1])
-        let details: String? = nilOrValue(listResponse[2])
+        let details: Any? = isNullish(listResponse[2]) ? nil : listResponse[2]
         completion(.failure(PigeonError(code: code, message: message, details: details)))
       } else {
         completion(.success(Void()))
