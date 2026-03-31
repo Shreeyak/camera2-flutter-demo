@@ -673,6 +673,11 @@ class CameraController(
             isCaptureInFlight.set(false)
             jpegReader.setOnImageAvailableListener(null, null) // clear listener on failure
             callback(Result.failure(FlutterError("camera_access_error", e.message, null)))
+        } catch (e: Exception) {
+            // Ensure we always clear the in-flight flag and listener on any other failure
+            isCaptureInFlight.set(false)
+            jpegReader.setOnImageAvailableListener(null, null)
+            callback(Result.failure(FlutterError("capture_failed", e.message, null)))
         }
     }
 
