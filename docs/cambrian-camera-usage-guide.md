@@ -415,7 +415,6 @@ print('Resolutions: ${caps.supportedSizes}');
 | `zoomMin` / `zoomMax` | `double` | Zoom ratio range |
 | `evCompMin` / `evCompMax` | `int` | EV compensation range (in steps) |
 | `evCompensationStep` | `double` | Size of one EV step |
-| `supportsRgba8888` | `bool` | Whether device supports direct RGBA output |
 | `estimatedMemoryBytes` | `int` | Estimated native memory usage |
 
 ---
