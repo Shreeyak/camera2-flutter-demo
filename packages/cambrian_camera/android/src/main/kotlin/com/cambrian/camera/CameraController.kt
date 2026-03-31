@@ -1292,7 +1292,14 @@ class CameraController(
 
                 // Send actual sensor values to Dart at ~3 Hz (every 10th result at 30 fps).
                 if (captureResultCount % 10L == 0L) {
-                    val focusDist = result.get(CaptureResult.LENS_FOCUS_DISTANCE)
+                    val afState = result.get(CaptureResult.CONTROL_AF_STATE)
+                    // Only report focus distance when AF has locked — during PASSIVE_SCAN the
+                    // HAL reports raw lens-sweep positions, not the subject distance, which
+                    // causes the focus dial to thrash. Emit null during scanning so the UI
+                    // stays at the last locked value.
+                    val afLocked = afState == CaptureResult.CONTROL_AF_STATE_PASSIVE_FOCUSED ||
+                        afState == CaptureResult.CONTROL_AF_STATE_FOCUSED_LOCKED
+                    val focusDist = if (afLocked) result.get(CaptureResult.LENS_FOCUS_DISTANCE) else null
                     val wbGains = result.get(CaptureResult.COLOR_CORRECTION_GAINS)
                     val frameResult = CamFrameResult(
                         iso = result.get(CaptureResult.SENSOR_SENSITIVITY)?.toLong(),
