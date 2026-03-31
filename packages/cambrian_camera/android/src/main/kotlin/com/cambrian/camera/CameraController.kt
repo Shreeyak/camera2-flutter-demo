@@ -5,7 +5,6 @@ import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
 import android.graphics.ImageFormat
-import android.graphics.PixelFormat
 import android.hardware.camera2.CameraAccessException
 import android.hardware.camera2.CameraCaptureSession
 import android.hardware.camera2.CameraCharacteristics
@@ -38,9 +37,9 @@ import java.util.concurrent.TimeUnit
  * Camera2 lifecycle manager for the cambrian_camera plugin.
  *
  * Responsibilities:
- * - Opens a Camera2 device and configures a [CaptureSession] with an RGBA_8888 [ImageReader]
+ * - Opens a Camera2 device and configures a [CaptureSession] with a YUV_420_888 [ImageReader]
  *   and a JPEG [ImageReader] for still capture.
- * - Delivers each frame's RGBA bytes to the C++ pipeline via JNI.
+ * - Streams YUV frames via the SurfaceProducer for display; JNI delivery to C++ is a future step.
  * - Implements an auto-recovery state machine with exponential backoff.
  * - Applies per-request ISP settings via [updateSettings].
  * - Provides [takePicture] to capture a single JPEG frame to the app's cache directory.
@@ -81,7 +80,7 @@ class CameraController(
          * Delivers one RGBA frame to the native pipeline.
          *
          * @param pipelinePtr Pointer returned by [nativeInit].
-         * @param data        Direct [ByteBuffer] containing RGBA_8888 pixels.
+         * @param data        Direct [ByteBuffer] containing pixel data.
          * @param width       Frame width in pixels.
          * @param height      Frame height in pixels.
          * @param stride      Row stride in bytes (may be > width * 4 due to padding).
@@ -153,9 +152,6 @@ class CameraController(
     /** Settings to apply at session start; updated by [updateSettings]. */
     @Volatile private var pendingSettings: CamSettings? = null
 
-    /** True when the active stream format is RGBA_8888, false for YUV fallback. */
-    @Volatile private var streamingUsesRgba: Boolean = false
-
     /** Frame counter used for periodic diagnostics. */
     @Volatile private var streamFrameCount: Long = 0L
 
@@ -201,8 +197,8 @@ class CameraController(
                     }
                     val surface = surfaceProducer.getSurface()
                     nativeSetPreviewWindow(ptr, surface)
-                    if (!streamingUsesRgba && state == State.STREAMING) {
-                        // In YUV fallback, Camera2 writes directly to SurfaceProducer.
+                    if (state == State.STREAMING) {
+                        // Camera2 writes directly to SurfaceProducer for YUV preview.
                         // If SurfaceProducer recreated the surface, recreate session targets.
                         backgroundHandler.post { rebindYuvPreviewSurface(surface) }
                     }
@@ -354,8 +350,8 @@ class CameraController(
      * Queries [CameraCharacteristics] and returns real hardware capabilities.
      *
      * Reports the three largest JPEG output sizes, sensor sensitivity and exposure ranges,
-     * focus distance range, zoom range, EV compensation range, RGBA_8888 support status,
-     * and an estimate of the memory used by the 4-slot ring buffer.
+     * focus distance range, zoom range, EV compensation range, and an estimate of the
+     * memory used by the 4-slot ring buffer.
      *
      * @param callback Invoked with the populated [CamCapabilities] or a [FlutterError].
      */
@@ -390,11 +386,7 @@ class CameraController(
             val evRange: Range<Int>? = chars.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_RANGE)
             val evStep: Rational? = chars.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_STEP)
 
-            // Check whether the hardware supports RGBA_8888 at the target resolution.
-            val rgbaSizes = configMap?.getOutputSizes(PixelFormat.RGBA_8888)
-            val supportsRgba = rgbaSizes != null && rgbaSizes.isNotEmpty()
-
-            // Estimate 4 ring-buffer slots of RGBA at the largest supported size.
+            // Estimate 4 ring-buffer slots of YUV at the largest supported size.
             val largestSize = jpegSizes.firstOrNull()
             val estimatedBytes: Long =
                 if (largestSize != null) {
@@ -417,7 +409,7 @@ class CameraController(
                     evCompMin = evRange?.lower?.toLong() ?: -6L,
                     evCompMax = evRange?.upper?.toLong() ?: 6L,
                     evCompensationStep = evStep?.toDouble() ?: 0.5,
-                    supportsRgba8888 = supportsRgba,
+                    supportsRgba8888 = false,
                     estimatedMemoryBytes = estimatedBytes,
                 )
             callback(Result.success(caps))
@@ -584,14 +576,10 @@ class CameraController(
     /**
      * Starts a Camera2 [CaptureSession] on the already-opened [cameraDevice].
      *
-     * Chooses an appropriate streaming format and resolution: RGBA_8888 is preferred
-     * (direct pass to C++ without conversion); YUV_420_888 is used as a fallback.
-     * A separate JPEG [ImageReader] is pre-allocated for still capture.
+     * Streams YUV_420_888 at 4160×3120. A separate JPEG [ImageReader] is pre-allocated for
+     * still capture. Preview is routed via [surfaceProducer] added directly to the session.
      *
-     * Frame path:
-     * - RGBA_8888: `ImageReader → nativeDeliverFrame → C++ pipeline → ANativeWindow`
-     * - YUV fallback: frames are drained without JNI delivery; preview is routed through
-     *   the [surfaceProducer] surface added directly to the Camera2 session.
+     * Frame path: Camera2 → SurfaceProducer (display) + ImageReader (drained, reserved for JNI)
      */
     private fun startCaptureSession(openCallback: (Result<Long>) -> Unit) {
         val device =
@@ -604,10 +592,7 @@ class CameraController(
                 return
             }
 
-        // Pick streaming format and resolution, preferring RGBA_8888.
         val (streamFormat, streamWidth, streamHeight) = resolveStreamFormat(device)
-        val supportsRgba = streamFormat == PixelFormat.RGBA_8888
-        streamingUsesRgba = supportsRgba
         streamFrameCount = 0L
         captureResultCount = 0L
 
@@ -617,11 +602,12 @@ class CameraController(
         if (VERBOSE_DIAGNOSTICS) {
             android.util.Log.d(
                 "CambrianCamera",
-                "startCaptureSession format=${if (supportsRgba) "RGBA_8888" else "YUV_420_888"} size=${streamWidth}x$streamHeight",
+                "startCaptureSession format=YUV_420_888 size=${streamWidth}x$streamHeight",
             )
         }
 
-        // Streaming ImageReader — RGBA_8888 for C++ delivery, or YUV as fallback.
+        // Streaming ImageReader — YUV_420_888 frames are drained to prevent overflow.
+        // Preview is served by Camera2 writing directly to the SurfaceProducer surface.
         val streamReader = ImageReader.newInstance(streamWidth, streamHeight, streamFormat, 2)
         imageReader = streamReader
 
@@ -633,64 +619,27 @@ class CameraController(
         val previewSurface = surfaceProducer.getSurface()
         nativePipelinePtr = nativeInit(previewSurface)
 
-        // Wire up the per-frame listener on the background thread.
-        if (supportsRgba) {
-            // RGBA_8888: single plane, buffer is a direct ByteBuffer — pass straight to C++.
-            streamReader.setOnImageAvailableListener({ reader ->
-                val image: Image = reader.acquireLatestImage() ?: return@setOnImageAvailableListener
-                try {
-                    val plane = image.planes[0]
-                    nativeDeliverFrame(
-                        nativePipelinePtr,
-                        plane.buffer,
-                        image.width,
-                        image.height,
-                        plane.rowStride,
+        // Drain YUV frames to prevent ImageReader overflow.
+        streamReader.setOnImageAvailableListener({ reader ->
+            val image = reader.acquireLatestImage() ?: return@setOnImageAvailableListener
+            try {
+                streamFrameCount++
+                if (VERBOSE_DIAGNOSTICS && (streamFrameCount == 1L || streamFrameCount % 60L == 0L)) {
+                    android.util.Log.d(
+                        "CambrianCamera",
+                        "stream frame#$streamFrameCount YUV ${image.width}x${image.height}",
                     )
-                    streamFrameCount++
-                    if (VERBOSE_DIAGNOSTICS && (streamFrameCount == 1L || streamFrameCount % 60L == 0L)) {
-                        android.util.Log.d(
-                            "CambrianCamera",
-                            "stream frame#$streamFrameCount RGBA ${image.width}x${image.height} stride=${plane.rowStride}",
-                        )
-                    }
-                } finally {
-                    image.close()
                 }
-            }, backgroundHandler)
-        } else {
-            // YUV fallback: drain frames to prevent ImageReader overflow.
-            // Preview is served directly by Camera2 writing to the SurfaceProducer surface.
-            // Phase 4 will add proper YUV→RGBA conversion for the C++ pipeline.
-            streamReader.setOnImageAvailableListener({ reader ->
-                val image = reader.acquireLatestImage() ?: return@setOnImageAvailableListener
-                try {
-                    streamFrameCount++
-                    if (VERBOSE_DIAGNOSTICS && (streamFrameCount == 1L || streamFrameCount % 60L == 0L)) {
-                        android.util.Log.d(
-                            "CambrianCamera",
-                            "stream frame#$streamFrameCount YUV ${image.width}x${image.height}",
-                        )
-                    }
-                } finally {
-                    image.close()
-                }
-            }, backgroundHandler)
-        }
-
-        // Session surfaces: always include the streaming reader and JPEG reader.
-        // If RGBA is not supported, also add the SurfaceProducer surface so Camera2 drives
-        // the preview directly without going through the C++ pipeline.
-        val surfaces =
-            buildList {
-                add(streamReader.surface)
-                add(jpegReader.surface)
-                if (!supportsRgba) add(previewSurface)
+            } finally {
+                image.close()
             }
+        }, backgroundHandler)
 
-        // The repeating request targets the streaming surface (not JPEG).
-        // For RGBA: stream → C++ → ANativeWindow. For YUV: stream drained, preview via surfaceProducer.
-        val previewTarget = if (supportsRgba) streamReader.surface else previewSurface
+        // Session surfaces: streaming reader + JPEG reader + SurfaceProducer for preview.
+        val surfaces = listOf(streamReader.surface, jpegReader.surface, previewSurface)
+
+        // The repeating request targets the SurfaceProducer; Camera2 writes preview frames directly.
+        val previewTarget = previewSurface
         repeatingTargetSurface = previewTarget
 
         val outputs = surfaces.map { OutputConfiguration(it) }
@@ -742,42 +691,16 @@ class CameraController(
     }
 
     /**
-     * Selects a streaming format and the largest supported resolution.
+     * Returns the fixed streaming format and resolution for this device.
      *
-     * Tries [PixelFormat.RGBA_8888] first (direct C++ delivery). If the device doesn't
-     * advertise any RGBA_8888 output sizes, falls back to [ImageFormat.YUV_420_888].
+     * The OPD2403 does not advertise [android.graphics.PixelFormat.RGBA_8888]; YUV_420_888
+     * is the CPU-readable format used by the C++ ISP pipeline. Resolution 4160×3120 is the
+     * largest YUV size the device supports at 30 fps (see docs/camera0-characteristics-OPD2403.txt).
      *
      * @return Triple of (format, width, height).
      */
-    private fun resolveStreamFormat(device: CameraDevice): Triple<Int, Int, Int> {
-        return try {
-            val chars = cameraManager.getCameraCharacteristics(device.id)
-            val configMap = chars.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
-
-            // Query RGBA_8888 supported sizes; prefer those within 1920×1080 to maximise
-            // compatibility across LIMITED and FULL hardware levels.
-            val rgbaSizes = configMap?.getOutputSizes(PixelFormat.RGBA_8888)
-            if (!rgbaSizes.isNullOrEmpty()) {
-                val chosen =
-                    rgbaSizes
-                        .filter { it.width <= 1920 && it.height <= 1080 }
-                        .sortedByDescending { it.width.toLong() * it.height }
-                        .firstOrNull() ?: rgbaSizes.sortedByDescending { it.width.toLong() * it.height }.first()
-                return Triple(PixelFormat.RGBA_8888, chosen.width, chosen.height)
-            }
-
-            // YUV_420_888 fallback — supported on all Camera2 devices.
-            val yuvSizes = configMap?.getOutputSizes(ImageFormat.YUV_420_888)
-            val chosen =
-                yuvSizes
-                    ?.filter { it.width <= 1920 && it.height <= 1080 }
-                    ?.sortedByDescending { it.width.toLong() * it.height }
-                    ?.firstOrNull() ?: android.util.Size(1280, 720)
-            Triple(ImageFormat.YUV_420_888, chosen.width, chosen.height)
-        } catch (e: CameraAccessException) {
-            Triple(ImageFormat.YUV_420_888, 1280, 720)
-        }
-    }
+    private fun resolveStreamFormat(device: CameraDevice): Triple<Int, Int, Int> =
+        Triple(ImageFormat.YUV_420_888, 4160, 3120)
 
     // -------------------------------------------------------------------------
     // Internal: CaptureRequest builders
@@ -899,7 +822,6 @@ class CameraController(
      * recreation requires capture-session target rebinding.
      */
     private fun rebindYuvPreviewSurface(previewSurface: Surface) {
-        if (streamingUsesRgba) return
         val device = cameraDevice ?: return
         val streamReader = imageReader ?: return
         val jpegReader = jpegImageReader ?: return
@@ -994,7 +916,6 @@ class CameraController(
         }
         jpegImageReader = null
         repeatingTargetSurface = null
-        streamingUsesRgba = false
         streamFrameCount = 0L
         captureResultCount = 0L
 
