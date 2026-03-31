@@ -1,9 +1,15 @@
 import 'package:flutter/material.dart';
 
-import '../camera/camera_settings_values.dart';
 import '../camera/camera_callbacks.dart';
+import '../camera/camera_settings_values.dart';
 import 'camera_ruler_dial/camera_dial_presets.dart';
 import 'camera_ruler_dial/camera_ruler_dial.dart';
+
+/// Maximum width of the [CameraRulerDial] in the overlay, in logical pixels.
+///
+/// Shared with [main.dart] so the auto-toggle button position and the dial
+/// constraint never drift out of sync.
+const kCameraDialMaxWidth = 400.0;
 
 /// Floating camera-control overlay shown above the bottom settings strip.
 ///
@@ -77,7 +83,7 @@ class CameraControlOverlay extends StatelessWidget {
     final config = model.config;
     return Center(
       child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 400),
+        constraints: const BoxConstraints(maxWidth: kCameraDialMaxWidth),
         child: CameraRulerDial(
           key: ValueKey(param),
           config: config,

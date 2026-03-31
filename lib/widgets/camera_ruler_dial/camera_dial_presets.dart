@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:material_symbols_icons/symbols.dart';
 
-import '../../camera/camera_format_utils.dart';
+import '../../camera/camera_format_utils.dart' show formatShutterNs;
 import 'camera_dial_config.dart';
 
 /// Bundles the slider config + initial value + callback for one camera param.
@@ -188,7 +188,7 @@ class FocusDialPreset {
   });
 
   CameraDialModel toModel() {
-    final double max = focusMaxDiopters > 0.05 ? focusMaxDiopters : 10.0;
+    final double max = focusMaxDiopters.clamp(0.0, double.infinity);
     const anchors = <double>[0.0, 0.25, 0.5, 1.0, 2.0, 3.0, 5.0, 7.0, 10.0];
     final valid = anchors.where((d) => d <= max + 0.05).toList();
     if ((valid.last - max).abs() > 0.05) valid.add(max);

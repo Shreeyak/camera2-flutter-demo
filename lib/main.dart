@@ -1,4 +1,5 @@
 import 'dart:async' show StreamSubscription;
+import 'dart:math' show max;
 
 import 'package:cambrian_camera/cambrian_camera.dart';
 import 'package:flutter/material.dart';
@@ -9,11 +10,9 @@ import 'camera/camera_settings_values.dart';
 import 'theme/material_theme.dart';
 import 'theme/theme_util.dart';
 import 'widgets/bottom_bar.dart';
-import 'widgets/camera_control_overlay.dart';
+import 'widgets/camera_control_overlay.dart'
+    show CameraControlOverlay, kCameraDialMaxWidth;
 import 'widgets/bottom_bar_buttons.dart';
-
-/// Max width of the [CameraRulerDial] in the control overlay.
-const _kDialMaxWidth = 400.0;
 
 /// Horizontal offset from the left edge of the dial to the auto-toggle button.
 const _kAutoToggleOffset = 60.0;
@@ -361,9 +360,12 @@ class _CameraScreenState extends State<CameraScreen> {
                           ),
                           if (_hasAutoMode(_activeSetting))
                             Positioned(
-                              left: (MediaQuery.of(context).size.width / 2) -
-                                  _kDialMaxWidth / 2 -
-                                  _kAutoToggleOffset,
+                              left: max(
+                                0.0,
+                                (MediaQuery.of(context).size.width / 2) -
+                                    kCameraDialMaxWidth / 2 -
+                                    _kAutoToggleOffset,
+                              ),
                               child: CameraAutoToggleButton(
                                 isAuto: _isAutoMode(_activeSetting),
                                 onTap: () => _onAutoToggleTap(_activeSetting),
