@@ -3,8 +3,9 @@
 ## What was built
 
 Real Camera2 lifecycle in Kotlin (`CameraController.kt`) plus a minimal C++ JNI bridge
-(`CameraBridge.cpp` / `ImagePipeline.cpp`) that receives RGBA frames and copies them to an
-`ANativeWindow` for Flutter preview display.
+(`CameraBridge.cpp` / `ImagePipeline.cpp`) that receives YUV_420_888 frames and passes them to an
+`ANativeWindow` for Flutter preview display. (The RGBA_8888 path was removed after device
+capability discovery showed limited support; Phase 4 will add YUV→RGBA conversion.)
 
 ## Files created / modified
 
