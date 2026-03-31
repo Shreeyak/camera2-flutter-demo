@@ -14,12 +14,12 @@ void main() {
         onSend: (s) async => sent.add(s),
       );
 
-      serializer.send(const CameraSettings(iso: 100));
+      serializer.send(const CameraSettings(iso: AutoValue.manual(100)));
       // Allow the async completion to propagate.
       await Future<void>.delayed(Duration.zero);
 
       expect(sent.length, 1);
-      expect(sent.first.iso, 100);
+      expect((sent.first.iso as Manual<int>).value, 100);
       serializer.dispose();
     });
 
@@ -36,12 +36,12 @@ void main() {
       );
 
       // First send kicks off a call.
-      serializer.send(const CameraSettings(iso: 100));
+      serializer.send(const CameraSettings(iso: AutoValue.manual(100)));
       expect(sent.length, 1); // dispatched immediately
 
       // Two more sends while in-flight — only the last should be pending.
-      serializer.send(const CameraSettings(iso: 200));
-      serializer.send(const CameraSettings(iso: 300));
+      serializer.send(const CameraSettings(iso: AutoValue.manual(200)));
+      serializer.send(const CameraSettings(iso: AutoValue.manual(300)));
 
       // Complete the first in-flight call.
       completer!.complete();
@@ -49,7 +49,7 @@ void main() {
 
       // The serializer should now have sent the last pending value (300).
       expect(sent.length, 2);
-      expect(sent[1].iso, 300); // 200 was discarded
+      expect((sent[1].iso as Manual<int>).value, 300); // 200 was discarded
       serializer.dispose();
     });
 
@@ -64,14 +64,14 @@ void main() {
         },
       );
 
-      serializer.send(const CameraSettings(iso: 100));
-      serializer.send(const CameraSettings(iso: 200)); // queued as pending
+      serializer.send(const CameraSettings(iso: AutoValue.manual(100)));
+      serializer.send(const CameraSettings(iso: AutoValue.manual(200))); // queued as pending
 
       completer!.complete(); // complete first in-flight
       await Future<void>.delayed(Duration.zero);
 
       expect(sent.length, 2);
-      expect(sent[1].iso, 200);
+      expect((sent[1].iso as Manual<int>).value, 200);
       serializer.dispose();
     });
 
@@ -82,7 +82,7 @@ void main() {
       );
 
       serializer.dispose();
-      serializer.send(const CameraSettings(iso: 100));
+      serializer.send(const CameraSettings(iso: AutoValue.manual(100)));
       await Future<void>.delayed(Duration.zero);
 
       expect(sent, isEmpty);
@@ -97,7 +97,7 @@ void main() {
         },
       );
 
-      serializer.send(const CameraSettings(iso: 100));
+      serializer.send(const CameraSettings(iso: AutoValue.manual(100)));
       // Should not throw.
       await Future<void>.delayed(Duration.zero);
       expect(callCount, 1);
@@ -106,28 +106,68 @@ void main() {
   });
 
   group('CameraSettings', () {
-    test('toCam preserves all fields', () {
+    test('toCam encodes manual values with mode strings', () {
       const settings = CameraSettings(
-        iso: 400,
-        exposureTimeNs: 10000000,
-        focusDistanceDiopters: 0.5,
+        iso: AutoValue.manual(400),
+        exposureTimeNs: AutoValue.manual(10000000),
+        focus: AutoValue.manual(0.5),
+        whiteBalance: WhiteBalance.locked(),
         zoomRatio: 2.0,
-        afEnabled: false,
-        awbLocked: true,
         noiseReductionMode: NoiseReductionMode.highQuality,
         edgeMode: EdgeMode.off,
         evCompensation: -2,
       );
       final cam = settings.toCam();
+      expect(cam.isoMode, 'manual');
       expect(cam.iso, 400);
+      expect(cam.exposureMode, 'manual');
       expect(cam.exposureTimeNs, 10000000);
+      expect(cam.focusMode, 'manual');
       expect(cam.focusDistanceDiopters, 0.5);
+      expect(cam.wbMode, 'locked');
       expect(cam.zoomRatio, 2.0);
-      expect(cam.afEnabled, false);
-      expect(cam.awbLocked, true);
       expect(cam.noiseReductionMode, 2); // NoiseReductionMode.highQuality.index
       expect(cam.edgeMode, 0);           // EdgeMode.off.index
       expect(cam.evCompensation, -2);
+    });
+
+    test('toCam encodes auto modes correctly', () {
+      const settings = CameraSettings(
+        iso: AutoValue.auto(),
+        exposureTimeNs: AutoValue.auto(),
+        focus: AutoValue.auto(),
+        whiteBalance: WhiteBalance.auto(),
+      );
+      final cam = settings.toCam();
+      expect(cam.isoMode, 'auto');
+      expect(cam.iso, isNull);
+      expect(cam.exposureMode, 'auto');
+      expect(cam.exposureTimeNs, isNull);
+      expect(cam.focusMode, 'auto');
+      expect(cam.focusDistanceDiopters, isNull);
+      expect(cam.wbMode, 'auto');
+    });
+
+    test('toCam encodes manual white balance gains', () {
+      const settings = CameraSettings(
+        whiteBalance: WhiteBalance.manual(gainR: 1.82, gainG: 1.0, gainB: 1.45),
+      );
+      final cam = settings.toCam();
+      expect(cam.wbMode, 'manual');
+      expect(cam.wbGainR, 1.82);
+      expect(cam.wbGainG, 1.0);
+      expect(cam.wbGainB, 1.45);
+    });
+
+    test('toCam leaves null fields as null (don\'t change)', () {
+      const settings = CameraSettings(zoomRatio: 3.0);
+      final cam = settings.toCam();
+      expect(cam.isoMode, isNull);
+      expect(cam.iso, isNull);
+      expect(cam.exposureMode, isNull);
+      expect(cam.focusMode, isNull);
+      expect(cam.wbMode, isNull);
+      expect(cam.zoomRatio, 3.0);
     });
   });
 

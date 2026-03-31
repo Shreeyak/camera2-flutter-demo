@@ -54,43 +54,77 @@ class CamSize {
 
 class CamSettings {
   CamSettings({
+    this.isoMode,
     this.iso,
+    this.exposureMode,
     this.exposureTimeNs,
+    this.focusMode,
     this.focusDistanceDiopters,
+    this.wbMode,
+    this.wbGainR,
+    this.wbGainG,
+    this.wbGainB,
     this.zoomRatio,
-    this.afEnabled,
-    this.awbLocked,
     this.noiseReductionMode,
     this.edgeMode,
     this.evCompensation,
   });
 
+  /// "auto" | "manual" | null (don't change).
+  String? isoMode;
+
+  /// Sensor sensitivity value when isoMode == "manual".
   int? iso;
 
+  /// "auto" | "manual" | null (don't change).
+  String? exposureMode;
+
+  /// Exposure duration in nanoseconds when exposureMode == "manual".
   int? exposureTimeNs;
 
+  /// "auto" | "manual" | null (don't change).
+  String? focusMode;
+
+  /// Focus distance in diopters when focusMode == "manual".
   double? focusDistanceDiopters;
 
+  /// "auto" | "locked" | "manual" | null (don't change).
+  String? wbMode;
+
+  /// Red gain multiplier when wbMode == "manual".
+  double? wbGainR;
+
+  /// Green gain multiplier when wbMode == "manual".
+  double? wbGainG;
+
+  /// Blue gain multiplier when wbMode == "manual".
+  double? wbGainB;
+
+  /// Zoom ratio (1.0 = no zoom). Null = don't change.
   double? zoomRatio;
 
-  bool? afEnabled;
-
-  bool? awbLocked;
-
+  /// Camera2 NOISE_REDUCTION_MODE_* constant. Null = don't change.
   int? noiseReductionMode;
 
+  /// Camera2 EDGE_MODE_* constant. Null = don't change.
   int? edgeMode;
 
+  /// Exposure compensation in AE steps. Null = don't change.
   int? evCompensation;
 
   Object encode() {
     return <Object?>[
+      isoMode,
       iso,
+      exposureMode,
       exposureTimeNs,
+      focusMode,
       focusDistanceDiopters,
+      wbMode,
+      wbGainR,
+      wbGainG,
+      wbGainB,
       zoomRatio,
-      afEnabled,
-      awbLocked,
       noiseReductionMode,
       edgeMode,
       evCompensation,
@@ -100,15 +134,20 @@ class CamSettings {
   static CamSettings decode(Object result) {
     result as List<Object?>;
     return CamSettings(
-      iso: result[0] as int?,
-      exposureTimeNs: result[1] as int?,
-      focusDistanceDiopters: result[2] as double?,
-      zoomRatio: result[3] as double?,
-      afEnabled: result[4] as bool?,
-      awbLocked: result[5] as bool?,
-      noiseReductionMode: result[6] as int?,
-      edgeMode: result[7] as int?,
-      evCompensation: result[8] as int?,
+      isoMode: result[0] as String?,
+      iso: result[1] as int?,
+      exposureMode: result[2] as String?,
+      exposureTimeNs: result[3] as int?,
+      focusMode: result[4] as String?,
+      focusDistanceDiopters: result[5] as double?,
+      wbMode: result[6] as String?,
+      wbGainR: result[7] as double?,
+      wbGainG: result[8] as double?,
+      wbGainB: result[9] as double?,
+      zoomRatio: result[10] as double?,
+      noiseReductionMode: result[11] as int?,
+      edgeMode: result[12] as int?,
+      evCompensation: result[13] as int?,
     );
   }
 }

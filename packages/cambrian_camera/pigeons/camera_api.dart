@@ -24,25 +24,53 @@ class CamSize {
 
 class CamSettings {
   CamSettings({
+    this.isoMode,
     this.iso,
+    this.exposureMode,
     this.exposureTimeNs,
+    this.focusMode,
     this.focusDistanceDiopters,
+    this.wbMode,
+    this.wbGainR,
+    this.wbGainG,
+    this.wbGainB,
     this.zoomRatio,
-    this.afEnabled,
-    this.awbLocked,
     this.noiseReductionMode,
     this.edgeMode,
     this.evCompensation,
   });
 
+  /// "auto" | "manual" | null (don't change).
+  String? isoMode;
+  /// Sensor sensitivity value when isoMode == "manual".
   int? iso;
+
+  /// "auto" | "manual" | null (don't change).
+  String? exposureMode;
+  /// Exposure duration in nanoseconds when exposureMode == "manual".
   int? exposureTimeNs;
+
+  /// "auto" | "manual" | null (don't change).
+  String? focusMode;
+  /// Focus distance in diopters when focusMode == "manual".
   double? focusDistanceDiopters;
+
+  /// "auto" | "locked" | "manual" | null (don't change).
+  String? wbMode;
+  /// Red gain multiplier when wbMode == "manual".
+  double? wbGainR;
+  /// Green gain multiplier when wbMode == "manual".
+  double? wbGainG;
+  /// Blue gain multiplier when wbMode == "manual".
+  double? wbGainB;
+
+  /// Zoom ratio (1.0 = no zoom). Null = don't change.
   double? zoomRatio;
-  bool? afEnabled;
-  bool? awbLocked;
+  /// Camera2 NOISE_REDUCTION_MODE_* constant. Null = don't change.
   int? noiseReductionMode;
+  /// Camera2 EDGE_MODE_* constant. Null = don't change.
   int? edgeMode;
+  /// Exposure compensation in AE steps. Null = don't change.
   int? evCompensation;
 }
 

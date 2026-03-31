@@ -146,6 +146,14 @@ class CameraController(
     /** Settings to apply at session start; updated by [updateSettings]. */
     @Volatile private var pendingSettings: CamSettings? = null
 
+    /**
+     * Accumulated settings state. Each [updateSettings] call merges non-null
+     * incoming fields into this object so that omitted fields retain their
+     * previous values across calls (instead of reverting to Camera2 template
+     * defaults).
+     */
+    @Volatile private var appliedSettings: CamSettings = CamSettings()
+
     /** Frame counter used for periodic diagnostics. */
     @Volatile private var streamFrameCount: Long = 0L
 
@@ -425,30 +433,37 @@ class CameraController(
     /**
      * Updates per-frame ISP settings by rebuilding the repeating [CaptureRequest].
      *
-     * If no session is active the settings are stored as [pendingSettings] and applied
-     * when the next session starts.
+     * Non-null fields in [incoming] are merged into [appliedSettings]; null fields
+     * are left unchanged. This means callers only need to send the fields they
+     * want to change — omitted fields retain their previous values.
      *
-     * @param settings The new capture settings to apply immediately.
+     * If no session is active the merged settings are stored as [pendingSettings]
+     * and applied when the next session starts.
+     *
+     * @param incoming The settings to merge and apply.
      */
-    fun updateSettings(settings: CamSettings) {
-        pendingSettings = settings
+    fun updateSettings(incoming: CamSettings) {
+        val merged = mergeSettings(appliedSettings, incoming)
+        appliedSettings = merged
+        pendingSettings = merged
         val session = captureSession ?: return
         val device = cameraDevice ?: return
         val targetSurface = repeatingTargetSurface ?: imageReader?.surface ?: return
 
         try {
-            val request = buildCaptureRequest(device, targetSurface, settings)
+            val request = buildCaptureRequest(device, targetSurface, merged)
             repeatingRequest = request
             if (CambrianCameraConfig.verboseDiagnostics) {
                 android.util.Log.d(
                     "CambrianCamera",
                     "updateSettings request target=${describeTargetSurface(targetSurface)} " +
-                        "iso=${settings.iso ?: "auto"} exposureNs=${settings.exposureTimeNs ?: "auto"}",
+                        "iso=${merged.isoMode ?: "unchanged"}(${merged.iso ?: "-"}) " +
+                        "exposure=${merged.exposureMode ?: "unchanged"}(${merged.exposureTimeNs ?: "-"})",
                 )
             }
             session.setRepeatingRequest(request, repeatingCaptureCallback, backgroundHandler)
             if (CambrianCameraConfig.verboseSettings) {
-                android.util.Log.d("CambrianCamera", buildSettingsLog(settings))
+                android.util.Log.d("CambrianCamera", buildSettingsLog(merged))
             }
         } catch (e: CameraAccessException) {
             // Non-fatal; the session may be closing. Log and ignore.
@@ -458,15 +473,46 @@ class CameraController(
         }
     }
 
-    /** Formats [settings] fields into a single log line, omitting null fields. */
+    /**
+     * Merges [incoming] settings into [base], returning a new [CamSettings] where
+     * non-null fields from [incoming] overwrite those in [base].
+     */
+    private fun mergeSettings(base: CamSettings, incoming: CamSettings): CamSettings = CamSettings(
+        isoMode = incoming.isoMode ?: base.isoMode,
+        iso = if (incoming.isoMode != null) incoming.iso else base.iso,
+        exposureMode = incoming.exposureMode ?: base.exposureMode,
+        exposureTimeNs = if (incoming.exposureMode != null) incoming.exposureTimeNs else base.exposureTimeNs,
+        focusMode = incoming.focusMode ?: base.focusMode,
+        focusDistanceDiopters = if (incoming.focusMode != null) incoming.focusDistanceDiopters else base.focusDistanceDiopters,
+        wbMode = incoming.wbMode ?: base.wbMode,
+        wbGainR = if (incoming.wbMode != null) incoming.wbGainR else base.wbGainR,
+        wbGainG = if (incoming.wbMode != null) incoming.wbGainG else base.wbGainG,
+        wbGainB = if (incoming.wbMode != null) incoming.wbGainB else base.wbGainB,
+        zoomRatio = incoming.zoomRatio ?: base.zoomRatio,
+        noiseReductionMode = incoming.noiseReductionMode ?: base.noiseReductionMode,
+        edgeMode = incoming.edgeMode ?: base.edgeMode,
+        evCompensation = incoming.evCompensation ?: base.evCompensation,
+    )
+
+    /** Formats [settings] fields into a single log line, omitting unchanged fields. */
     private fun buildSettingsLog(settings: CamSettings): String {
         val parts = mutableListOf<String>()
-        settings.iso?.let { parts += "iso=$it" }
-        settings.exposureTimeNs?.let { parts += "exposureNs=$it" }
-        settings.focusDistanceDiopters?.let { parts += "focus=${String.format("%.3f", it)}dpt" }
+        settings.isoMode?.let { mode ->
+            parts += if (mode == "manual") "iso=${settings.iso}" else "iso=$mode"
+        }
+        settings.exposureMode?.let { mode ->
+            parts += if (mode == "manual") "exposureNs=${settings.exposureTimeNs}" else "exposure=$mode"
+        }
+        settings.focusMode?.let { mode ->
+            parts += if (mode == "manual") "focus=${String.format("%.3f", settings.focusDistanceDiopters ?: 0.0)}dpt" else "focus=$mode"
+        }
+        settings.wbMode?.let { mode ->
+            parts += when (mode) {
+                "manual" -> "wb=manual(R=${settings.wbGainR} G=${settings.wbGainG} B=${settings.wbGainB})"
+                else -> "wb=$mode"
+            }
+        }
         settings.zoomRatio?.let { parts += "zoom=${String.format("%.2f", it)}x" }
-        settings.afEnabled?.let { parts += "af=$it" }
-        settings.awbLocked?.let { parts += "awbLocked=$it" }
         settings.evCompensation?.let { parts += "ev=$it" }
         return "updateSettings: ${parts.joinToString(" ")}"
     }
@@ -656,7 +702,8 @@ class CameraController(
                                 android.util.Log.d(
                                     "CambrianCamera",
                                     "setRepeatingRequest target=${describeTargetSurface(previewTarget)} " +
-                                        "initialIso=${settings?.iso ?: "auto"} initialExposureNs=${settings?.exposureTimeNs ?: "auto"}",
+                                        "initialIso=${settings?.isoMode ?: "default"}(${settings?.iso ?: "-"}) " +
+                                        "initialExposure=${settings?.exposureMode ?: "default"}(${settings?.exposureTimeNs ?: "-"})",
                                 )
                             }
                             session.setRepeatingRequest(request, repeatingCaptureCallback, backgroundHandler)
@@ -750,7 +797,13 @@ class CameraController(
     /**
      * Builds a repeating [CaptureRequest] populated from [settings], targeting [surface].
      *
-     * Fields left null in [settings] default to auto/continuous control.
+     * Auto-capable settings use mode strings:
+     * - `"auto"` — let Camera2 control the parameter (template default).
+     * - `"manual"` — apply the companion value field.
+     * - `null` — field was not included; since [settings] is already merged via
+     *   [mergeSettings], null here means the setting was never set at all.
+     *
+     * Non-auto settings apply their value directly when non-null.
      */
     private fun buildCaptureRequest(
         device: CameraDevice,
@@ -760,24 +813,56 @@ class CameraController(
         createRepeatingRequestBuilder(device, surface)
             .apply {
 
-                // ISO
-                settings.iso?.let { set(CaptureRequest.SENSOR_SENSITIVITY, it.toInt()) }
+                // ISO: "auto" = AE controls, "manual" = fixed value.
+                when (settings.isoMode) {
+                    "manual" -> settings.iso?.let { set(CaptureRequest.SENSOR_SENSITIVITY, it.toInt()) }
+                    // "auto" or null: don't set → template default (AE controls ISO)
+                }
 
-                // Exposure time
-                settings.exposureTimeNs?.let { set(CaptureRequest.SENSOR_EXPOSURE_TIME, it) }
+                // Exposure time: "auto" = AE controls, "manual" = fixed value.
+                when (settings.exposureMode) {
+                    "manual" -> settings.exposureTimeNs?.let { set(CaptureRequest.SENSOR_EXPOSURE_TIME, it) }
+                    // "auto" or null: don't set → template default (AE controls shutter)
+                }
 
-                // Focus: explicit distance disables AF; otherwise respect afEnabled flag.
-                if (settings.focusDistanceDiopters != null) {
-                    set(CaptureRequest.LENS_FOCUS_DISTANCE, settings.focusDistanceDiopters.toFloat())
-                    set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_OFF)
-                } else {
-                    val afMode =
-                        if (settings.afEnabled == false) {
-                            CaptureRequest.CONTROL_AF_MODE_AUTO
-                        } else {
-                            CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE
+                // Focus: "auto" = continuous AF, "manual" = fixed distance.
+                when (settings.focusMode) {
+                    "manual" -> {
+                        settings.focusDistanceDiopters?.let {
+                            set(CaptureRequest.LENS_FOCUS_DISTANCE, it.toFloat())
                         }
-                    set(CaptureRequest.CONTROL_AF_MODE, afMode)
+                        set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_OFF)
+                    }
+                    "auto" -> {
+                        set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
+                    }
+                    // null: don't set → template default (continuous AF)
+                }
+
+                // White balance: "auto" = AWB, "locked" = freeze, "manual" = user gains.
+                when (settings.wbMode) {
+                    "auto" -> {
+                        set(CaptureRequest.CONTROL_AWB_MODE, CaptureRequest.CONTROL_AWB_MODE_AUTO)
+                        set(CaptureRequest.CONTROL_AWB_LOCK, false)
+                    }
+                    "locked" -> {
+                        set(CaptureRequest.CONTROL_AWB_LOCK, true)
+                    }
+                    "manual" -> {
+                        set(CaptureRequest.CONTROL_AWB_MODE, CaptureRequest.CONTROL_AWB_MODE_OFF)
+                        val gainR = (settings.wbGainR ?: 1.0).toFloat()
+                        val gainG = (settings.wbGainG ?: 1.0).toFloat()
+                        val gainB = (settings.wbGainB ?: 1.0).toFloat()
+                        set(
+                            CaptureRequest.COLOR_CORRECTION_MODE,
+                            CaptureRequest.COLOR_CORRECTION_MODE_TRANSFORM_MATRIX,
+                        )
+                        set(
+                            CaptureRequest.COLOR_CORRECTION_GAINS,
+                            android.hardware.camera2.params.RggbChannelVector(gainR, gainG, gainG, gainB),
+                        )
+                    }
+                    // null: don't set → template default (AWB auto)
                 }
 
                 // Zoom — use CONTROL_ZOOM_RATIO on API 30+, fall back to SCALER_CROP_REGION.
@@ -788,9 +873,6 @@ class CameraController(
                         applyZoomViaCropRegion(this, zoom)
                     }
                 }
-
-                // AWB lock
-                settings.awbLocked?.let { set(CaptureRequest.CONTROL_AWB_LOCK, it) }
 
                 // Noise reduction mode
                 settings.noiseReductionMode?.let {

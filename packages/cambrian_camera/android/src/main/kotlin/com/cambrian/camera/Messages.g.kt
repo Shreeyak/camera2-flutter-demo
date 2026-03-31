@@ -73,39 +73,68 @@ data class CamSize (
 
 /** Generated class from Pigeon that represents data sent in messages. */
 data class CamSettings (
+  /** "auto" | "manual" | null (don't change). */
+  val isoMode: String? = null,
+  /** Sensor sensitivity value when isoMode == "manual". */
   val iso: Long? = null,
+  /** "auto" | "manual" | null (don't change). */
+  val exposureMode: String? = null,
+  /** Exposure duration in nanoseconds when exposureMode == "manual". */
   val exposureTimeNs: Long? = null,
+  /** "auto" | "manual" | null (don't change). */
+  val focusMode: String? = null,
+  /** Focus distance in diopters when focusMode == "manual". */
   val focusDistanceDiopters: Double? = null,
+  /** "auto" | "locked" | "manual" | null (don't change). */
+  val wbMode: String? = null,
+  /** Red gain multiplier when wbMode == "manual". */
+  val wbGainR: Double? = null,
+  /** Green gain multiplier when wbMode == "manual". */
+  val wbGainG: Double? = null,
+  /** Blue gain multiplier when wbMode == "manual". */
+  val wbGainB: Double? = null,
+  /** Zoom ratio (1.0 = no zoom). Null = don't change. */
   val zoomRatio: Double? = null,
-  val afEnabled: Boolean? = null,
-  val awbLocked: Boolean? = null,
+  /** Camera2 NOISE_REDUCTION_MODE_* constant. Null = don't change. */
   val noiseReductionMode: Long? = null,
+  /** Camera2 EDGE_MODE_* constant. Null = don't change. */
   val edgeMode: Long? = null,
+  /** Exposure compensation in AE steps. Null = don't change. */
   val evCompensation: Long? = null
 )
  {
   companion object {
     fun fromList(pigeonVar_list: List<Any?>): CamSettings {
-      val iso = pigeonVar_list[0] as Long?
-      val exposureTimeNs = pigeonVar_list[1] as Long?
-      val focusDistanceDiopters = pigeonVar_list[2] as Double?
-      val zoomRatio = pigeonVar_list[3] as Double?
-      val afEnabled = pigeonVar_list[4] as Boolean?
-      val awbLocked = pigeonVar_list[5] as Boolean?
-      val noiseReductionMode = pigeonVar_list[6] as Long?
-      val edgeMode = pigeonVar_list[7] as Long?
-      val evCompensation = pigeonVar_list[8] as Long?
-      return CamSettings(iso, exposureTimeNs, focusDistanceDiopters, zoomRatio, afEnabled, awbLocked, noiseReductionMode, edgeMode, evCompensation)
+      val isoMode = pigeonVar_list[0] as String?
+      val iso = pigeonVar_list[1] as Long?
+      val exposureMode = pigeonVar_list[2] as String?
+      val exposureTimeNs = pigeonVar_list[3] as Long?
+      val focusMode = pigeonVar_list[4] as String?
+      val focusDistanceDiopters = pigeonVar_list[5] as Double?
+      val wbMode = pigeonVar_list[6] as String?
+      val wbGainR = pigeonVar_list[7] as Double?
+      val wbGainG = pigeonVar_list[8] as Double?
+      val wbGainB = pigeonVar_list[9] as Double?
+      val zoomRatio = pigeonVar_list[10] as Double?
+      val noiseReductionMode = pigeonVar_list[11] as Long?
+      val edgeMode = pigeonVar_list[12] as Long?
+      val evCompensation = pigeonVar_list[13] as Long?
+      return CamSettings(isoMode, iso, exposureMode, exposureTimeNs, focusMode, focusDistanceDiopters, wbMode, wbGainR, wbGainG, wbGainB, zoomRatio, noiseReductionMode, edgeMode, evCompensation)
     }
   }
   fun toList(): List<Any?> {
     return listOf(
+      isoMode,
       iso,
+      exposureMode,
       exposureTimeNs,
+      focusMode,
       focusDistanceDiopters,
+      wbMode,
+      wbGainR,
+      wbGainG,
+      wbGainB,
       zoomRatio,
-      afEnabled,
-      awbLocked,
       noiseReductionMode,
       edgeMode,
       evCompensation,

@@ -95,36 +95,65 @@ struct CamSize {
 
 /// Generated class from Pigeon that represents data sent in messages.
 struct CamSettings {
+  /// "auto" | "manual" | null (don't change).
+  var isoMode: String? = nil
+  /// Sensor sensitivity value when isoMode == "manual".
   var iso: Int64? = nil
+  /// "auto" | "manual" | null (don't change).
+  var exposureMode: String? = nil
+  /// Exposure duration in nanoseconds when exposureMode == "manual".
   var exposureTimeNs: Int64? = nil
+  /// "auto" | "manual" | null (don't change).
+  var focusMode: String? = nil
+  /// Focus distance in diopters when focusMode == "manual".
   var focusDistanceDiopters: Double? = nil
+  /// "auto" | "locked" | "manual" | null (don't change).
+  var wbMode: String? = nil
+  /// Red gain multiplier when wbMode == "manual".
+  var wbGainR: Double? = nil
+  /// Green gain multiplier when wbMode == "manual".
+  var wbGainG: Double? = nil
+  /// Blue gain multiplier when wbMode == "manual".
+  var wbGainB: Double? = nil
+  /// Zoom ratio (1.0 = no zoom). Null = don't change.
   var zoomRatio: Double? = nil
-  var afEnabled: Bool? = nil
-  var awbLocked: Bool? = nil
+  /// Camera2 NOISE_REDUCTION_MODE_* constant. Null = don't change.
   var noiseReductionMode: Int64? = nil
+  /// Camera2 EDGE_MODE_* constant. Null = don't change.
   var edgeMode: Int64? = nil
+  /// Exposure compensation in AE steps. Null = don't change.
   var evCompensation: Int64? = nil
 
 
   // swift-format-ignore: AlwaysUseLowerCamelCase
   static func fromList(_ pigeonVar_list: [Any?]) -> CamSettings? {
-    let iso: Int64? = nilOrValue(pigeonVar_list[0])
-    let exposureTimeNs: Int64? = nilOrValue(pigeonVar_list[1])
-    let focusDistanceDiopters: Double? = nilOrValue(pigeonVar_list[2])
-    let zoomRatio: Double? = nilOrValue(pigeonVar_list[3])
-    let afEnabled: Bool? = nilOrValue(pigeonVar_list[4])
-    let awbLocked: Bool? = nilOrValue(pigeonVar_list[5])
-    let noiseReductionMode: Int64? = nilOrValue(pigeonVar_list[6])
-    let edgeMode: Int64? = nilOrValue(pigeonVar_list[7])
-    let evCompensation: Int64? = nilOrValue(pigeonVar_list[8])
+    let isoMode: String? = nilOrValue(pigeonVar_list[0])
+    let iso: Int64? = nilOrValue(pigeonVar_list[1])
+    let exposureMode: String? = nilOrValue(pigeonVar_list[2])
+    let exposureTimeNs: Int64? = nilOrValue(pigeonVar_list[3])
+    let focusMode: String? = nilOrValue(pigeonVar_list[4])
+    let focusDistanceDiopters: Double? = nilOrValue(pigeonVar_list[5])
+    let wbMode: String? = nilOrValue(pigeonVar_list[6])
+    let wbGainR: Double? = nilOrValue(pigeonVar_list[7])
+    let wbGainG: Double? = nilOrValue(pigeonVar_list[8])
+    let wbGainB: Double? = nilOrValue(pigeonVar_list[9])
+    let zoomRatio: Double? = nilOrValue(pigeonVar_list[10])
+    let noiseReductionMode: Int64? = nilOrValue(pigeonVar_list[11])
+    let edgeMode: Int64? = nilOrValue(pigeonVar_list[12])
+    let evCompensation: Int64? = nilOrValue(pigeonVar_list[13])
 
     return CamSettings(
+      isoMode: isoMode,
       iso: iso,
+      exposureMode: exposureMode,
       exposureTimeNs: exposureTimeNs,
+      focusMode: focusMode,
       focusDistanceDiopters: focusDistanceDiopters,
+      wbMode: wbMode,
+      wbGainR: wbGainR,
+      wbGainG: wbGainG,
+      wbGainB: wbGainB,
       zoomRatio: zoomRatio,
-      afEnabled: afEnabled,
-      awbLocked: awbLocked,
       noiseReductionMode: noiseReductionMode,
       edgeMode: edgeMode,
       evCompensation: evCompensation
@@ -132,12 +161,17 @@ struct CamSettings {
   }
   func toList() -> [Any?] {
     return [
+      isoMode,
       iso,
+      exposureMode,
       exposureTimeNs,
+      focusMode,
       focusDistanceDiopters,
+      wbMode,
+      wbGainR,
+      wbGainG,
+      wbGainB,
       zoomRatio,
-      afEnabled,
-      awbLocked,
       noiseReductionMode,
       edgeMode,
       evCompensation,

@@ -56,7 +56,10 @@ final camera = await CambrianCamera.open();
 camera.buildPreview(fit: BoxFit.cover);
 
 // 4. Adjust settings
-camera.updateSettings(CameraSettings(iso: 400, zoomRatio: 2.0));
+camera.updateSettings(CameraSettings(
+  iso: AutoValue.manual(400),
+  zoomRatio: 2.0,
+));
 
 // 5. Capture a still image
 final path = await camera.takePicture();
@@ -146,38 +149,68 @@ Future<void> updateSettings(CameraSettings settings)
 
 Updates per-frame Camera2 capture request parameters. Uses a **latest-value-wins** strategy: rapid calls (e.g., from slider scrubbing) don't queue up stale requests. Each call replaces any pending value.
 
+**Only send the fields you want to change.** Null fields are ignored and their previous values are preserved on the native side. Settings accumulate across calls.
+
 ```dart
 camera.updateSettings(CameraSettings(
-  iso: 800,
-  exposureTimeNs: 16666666,  // ~1/60s
+  iso: AutoValue.manual(800),
+  exposureTimeNs: AutoValue.manual(16666666),  // ~1/60s
   zoomRatio: 2.0,
 ));
 ```
 
 #### `CameraSettings`
 
-All fields are nullable. `null` means "do not change / use auto".
+All fields are nullable. `null` means "don't change this setting."
+
+**Auto-capable settings** use sealed types that make the three states explicit:
+
+| Field | Type | States |
+|-------|------|--------|
+| `iso` | `AutoValue<int>?` | `null` = don't change, `AutoValue.auto()` = AE controls ISO, `AutoValue.manual(400)` = fixed value |
+| `exposureTimeNs` | `AutoValue<int>?` | `null` = don't change, `AutoValue.auto()` = AE controls shutter, `AutoValue.manual(ns)` = fixed value |
+| `focus` | `AutoValue<double>?` | `null` = don't change, `AutoValue.auto()` = continuous autofocus, `AutoValue.manual(diopters)` = fixed distance (0 = infinity) |
+| `whiteBalance` | `WhiteBalance?` | `null` = don't change, `WhiteBalance.auto()` = AWB runs, `WhiteBalance.locked()` = freeze current, `WhiteBalance.manual(gainR, gainG, gainB)` = user gains |
+
+**Non-auto settings** use plain nullable types:
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `iso` | `int?` | Sensor sensitivity (e.g., 100-6400) |
-| `exposureTimeNs` | `int?` | Exposure duration in nanoseconds |
-| `focusDistanceDiopters` | `double?` | Focus distance (0 = infinity). Setting this disables autofocus. |
-| `zoomRatio` | `double?` | Zoom level (1.0 = no zoom) |
-| `afEnabled` | `bool?` | `true` = continuous autofocus, `false` = hold current focus |
-| `awbLocked` | `bool?` | `true` = lock white balance at current value |
-| `noiseReductionMode` | `int?` | Camera2 `NOISE_REDUCTION_MODE_*` constant |
-| `edgeMode` | `int?` | Camera2 `EDGE_MODE_*` constant |
-| `evCompensation` | `int?` | Exposure compensation in AE steps |
+| `zoomRatio` | `double?` | Zoom level (1.0 = no zoom). Null = don't change. |
+| `noiseReductionMode` | `NoiseReductionMode?` | Camera2 noise reduction mode enum. Null = don't change. |
+| `edgeMode` | `EdgeMode?` | Camera2 edge enhancement mode enum. Null = don't change. |
+| `evCompensation` | `int?` | Exposure compensation in AE steps. Null = don't change. |
 
-**Auto-exposure tip:** To let Camera2 control ISO and shutter speed automatically, pass `null` for both `iso` and `exposureTimeNs`:
+#### Examples
 
 ```dart
-// Manual: fixed ISO and shutter
-camera.updateSettings(CameraSettings(iso: 400, exposureTimeNs: 8333333));
+// Manual ISO, auto exposure, auto focus
+camera.updateSettings(CameraSettings(
+  iso: AutoValue.manual(400),
+  exposureTimeNs: AutoValue.auto(),
+  focus: AutoValue.auto(),
+));
 
-// Auto: let Camera2 AE decide
-camera.updateSettings(CameraSettings(iso: null, exposureTimeNs: null));
+// Switch to full auto
+camera.updateSettings(CameraSettings(
+  iso: AutoValue.auto(),
+  exposureTimeNs: AutoValue.auto(),
+  focus: AutoValue.auto(),
+  whiteBalance: WhiteBalance.auto(),
+));
+
+// Lock white balance, change nothing else
+camera.updateSettings(CameraSettings(
+  whiteBalance: WhiteBalance.locked(),
+));
+
+// Manual white balance from a calibration patch
+camera.updateSettings(CameraSettings(
+  whiteBalance: WhiteBalance.manual(gainR: 1.82, gainG: 1.0, gainB: 1.45),
+));
+
+// Just change zoom — all other settings are preserved
+camera.updateSettings(CameraSettings(zoomRatio: 3.0));
 ```
 
 ---
@@ -615,7 +648,13 @@ class _MyCameraScreenState extends State<MyCameraScreen> {
           children: [
             ElevatedButton(
               onPressed: () => camera.updateSettings(
-                CameraSettings(iso: 200, zoomRatio: 1.0),
+                CameraSettings(
+                  iso: AutoValue.auto(),
+                  exposureTimeNs: AutoValue.auto(),
+                  focus: AutoValue.auto(),
+                  whiteBalance: WhiteBalance.auto(),
+                  zoomRatio: 1.0,
+                ),
               ),
               child: const Text('Reset'),
             ),
@@ -677,8 +716,8 @@ Your app does not need to implement retry logic. Just listen to `stateStream` an
 
 The plugin uses two different strategies depending on the parameter type:
 
-**CameraSettings (ISP)** — Latest-value-wins serializer. Each update requires a Dart-to-Kotlin-to-Camera2 round trip. If a new value arrives while the previous is in-flight, the old pending value is replaced. No artificial debounce.
+**CameraSettings (ISP)** — Latest-value-wins serializer with server-side accumulation. Each update requires a Dart-to-Kotlin-to-Camera2 round trip. If a new value arrives while the previous is in-flight, the old pending value is replaced (not queued). On the Kotlin side, incoming non-null fields are merged into the accumulated settings state — omitted (null) fields retain their previous values. This means you only need to send the fields you want to change.
 
 **ProcessingParams (C++ pipeline)** — Fire-and-forget. A direct pass-through to native code. The next frame picks up the new values atomically. No queuing.
 
-This means you can safely call `updateSettings()` on every slider tick without worrying about request accumulation.
+You can safely call `updateSettings()` on every slider tick without worrying about request accumulation or losing other settings.

@@ -103,53 +103,54 @@ class _CameraScreenState extends State<CameraScreen> {
 
   // ── Camera setting callbacks
 
-  /// Sends the current [_values] to the native camera as a settings update.
-  /// ISO and exposure are omitted when in auto mode so Camera2 AE runs freely.
-  void _applySettings() {
-    _camera?.updateSettings(
-      CameraSettings(
-        iso: _values.isoAuto ? null : _values.isoValue,
-        exposureTimeNs: _values.exposureAuto ? null : _values.exposureTimeNs,
-        focusDistanceDiopters: _values.focusDiopters,
-        zoomRatio: _values.zoomRatio,
-        afEnabled: _values.afEnabled,
-        awbLocked: _values.wbLocked,
-      ),
-    );
+  /// Sends only the changed setting to the camera.
+  ///
+  /// The plugin accumulates settings on the Kotlin side, so we only need to
+  /// send the fields that actually changed — omitted fields (null) keep their
+  /// previous values.
+  void _applySettings(CameraSettings settings) {
+    _camera?.updateSettings(settings);
   }
 
   void _setWbLocked(bool locked) {
     setState(() => _values = _values.copyWith(wbLocked: locked));
-    _applySettings();
+    _applySettings(CameraSettings(
+      whiteBalance: locked ? const WhiteBalance.locked() : const WhiteBalance.auto(),
+    ));
   }
 
   void _toggleAf() {
-    setState(() => _values = _values.copyWith(afEnabled: !_values.afEnabled));
-    _applySettings();
+    final nowAf = !_values.afEnabled;
+    setState(() => _values = _values.copyWith(afEnabled: nowAf));
+    _applySettings(CameraSettings(
+      focus: nowAf
+          ? const AutoValue.auto()
+          : AutoValue.manual(_values.focusDiopters),
+    ));
   }
 
   void _onIsoChanged(int iso) {
     setState(() => _values = _values.copyWith(isoValue: iso, isoAuto: false));
-    _applySettings();
+    _applySettings(CameraSettings(iso: AutoValue.manual(iso)));
   }
 
   void _onExposureTimeNsChanged(int ns) {
     setState(
       () => _values = _values.copyWith(exposureTimeNs: ns, exposureAuto: false),
     );
-    _applySettings();
+    _applySettings(CameraSettings(exposureTimeNs: AutoValue.manual(ns)));
   }
 
   void _onFocusChanged(double dist) {
     setState(
       () => _values = _values.copyWith(focusDiopters: dist, afEnabled: false),
     );
-    _applySettings();
+    _applySettings(CameraSettings(focus: AutoValue.manual(dist)));
   }
 
   void _onZoomChanged(double ratio) {
     setState(() => _values = _values.copyWith(zoomRatio: ratio));
-    _applySettings();
+    _applySettings(CameraSettings(zoomRatio: ratio));
   }
 
   // ── UI actions

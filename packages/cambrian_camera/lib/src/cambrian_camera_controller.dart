@@ -17,8 +17,12 @@ import 'messages.g.dart';
 /// camera.buildPreview()
 /// // Listen for state changes
 /// camera.stateStream.listen((state) { ... });
-/// // Adjust settings
-/// camera.updateSettings(CameraSettings(iso: 400));
+/// // Adjust settings — only send what changed, omitted fields are preserved
+/// camera.updateSettings(CameraSettings(iso: AutoValue.manual(400)));
+/// camera.updateSettings(CameraSettings(focus: AutoValue.auto()));
+/// camera.updateSettings(CameraSettings(
+///   whiteBalance: WhiteBalance.manual(gainR: 1.82, gainG: 1.0, gainB: 1.45),
+/// ));
 /// camera.setProcessingParams(ProcessingParams(brightness: 0.2));
 /// // Capture a still image
 /// final path = await camera.takePicture();
@@ -150,6 +154,12 @@ class CambrianCamera {
   Stream<CameraError> get errorStream => _errorController.stream;
 
   /// Schedules an ISP-level settings update.
+  ///
+  /// Only include the fields you want to change — `null` fields are ignored
+  /// and their previous values are preserved on the Kotlin side. Auto-capable
+  /// settings use sealed types: [AutoValue.auto] / [AutoValue.manual] for
+  /// ISO, exposure, and focus; [WhiteBalance.auto] / [WhiteBalance.locked] /
+  /// [WhiteBalance.manual] for white balance.
   ///
   /// Uses latest-value-wins: rapid calls do not pile up stale requests.
   /// The change takes effect on the next Camera2 capture request.
