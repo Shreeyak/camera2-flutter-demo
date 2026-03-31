@@ -260,7 +260,7 @@ void setProcessingParams(ProcessingParams params)
 
 Updates the C++ post-processing pipeline. **Fire-and-forget** — the next frame picks up the new values. No queuing or serialization is applied.
 
-> Note: Phase 3 is an identity pipeline (no processing). These parameters will take effect when Phase 4 (C++ post-processing) is implemented.
+Currently **saturation** is the only parameter applied per-frame. The remaining fields (black balance, gamma, histogram stretch, brightness) are stored and will be wired incrementally.
 
 #### `ProcessingParams`
 
@@ -510,13 +510,14 @@ print('Resolutions: ${caps.supportedSizes}');
 | `zoomMin` / `zoomMax` | `double` | Zoom ratio range |
 | `evCompMin` / `evCompMax` | `int` | EV compensation range (in steps) |
 | `evCompensationStep` | `double` | Size of one EV step |
+| `streamWidth` / `streamHeight` | `int` | YUV stream dimensions delivered to the C++ pipeline (pixels). Used by the preview widget for correct aspect ratio. |
 | `estimatedMemoryBytes` | `int` | Estimated native memory usage |
 
 ---
 
 ### Native Consumer API (C++)
 
-For apps that need direct access to processed frames in C++ (e.g., real-time computer vision, image stitching), the plugin provides a generic consumer sink model. Your app registers C++ callbacks that receive post-processed frames — the same pixels shown in the preview. The plugin knows nothing about your app's use case; it just delivers frames at the resolution and channel configuration you request.
+For apps that need direct access to processed frames in C++ (e.g., real-time computer vision, image stitching), the plugin provides a generic consumer sink model. Your app registers C++ callbacks that receive post-processed RGBA frames — the same pixels shown in the preview. Each sink has its own ring buffer and dispatch thread, so slow consumers don't stall the preview.
 
 #### Step 1: Get the pipeline handle from Dart
 
@@ -603,25 +604,21 @@ extern "C" void registerConsumers(int64_t pipelinePtr) {
         // frame.meta   → sensor metadata (timestamp, ISO, exposure, etc.)
 
         processForStitching(frame.data, frame.width, frame.height, frame.stride);
-
-        frame.release();  // MUST call — returns the ring buffer slot
+        // No need to call frame.release() — the dispatch thread manages the ring
+        // buffer slot automatically. Copy the data if you need it past the callback.
     });
 
-    // ── Consumer 2: Low-res single-channel for tracking ─────────────
+    // ── Consumer 2: Second full-res RGBA sink for tracking ─────────
     cam::SinkConfig trackCfg;
-    trackCfg.name         = "tracker";
-    trackCfg.width        = 960;    // downscale to 960x540
-    trackCfg.height       = 540;
-    trackCfg.channels     = 1;      // single channel
-    trackCfg.channelIndex = 1;      // extract green (0=R, 1=G, 2=B, 3=A)
-    trackCfg.ringSize     = 8;      // deeper ring — tracker may lag
-    trackCfg.dropOnFull   = true;   // drop stale frames silently
+    trackCfg.name       = "tracker";
+    trackCfg.width      = 0;       // 0 = match source (full resolution)
+    trackCfg.height     = 0;       // 0 = match source
+    trackCfg.channels   = 4;       // RGBA
+    trackCfg.ringSize   = 8;       // deeper ring — tracker may lag
+    trackCfg.dropOnFull = true;    // drop stale frames silently
 
     g_trackSinkId = pipeline->addSink(trackCfg, [](cam::SinkFrame& frame) {
-        // frame.data is now 960x540, 1 byte per pixel (green channel only)
         runTrackingAlgorithm(frame.data, frame.width, frame.height);
-
-        frame.release();  // MUST call
     });
 }
 
@@ -645,10 +642,12 @@ extern "C" void unregisterConsumers(int64_t pipelinePtr) {
 | `name` | `string` | — | Human-readable label (used in log messages) |
 | `width` | `int` | 0 | Output width. 0 = match source (full resolution). |
 | `height` | `int` | 0 | Output height. 0 = match source. |
-| `channels` | `int` | 4 | Bytes per pixel. 4 = RGBA, 1 = single channel. |
-| `channelIndex` | `int` | -1 | Which channel to extract when `channels=1`. -1 = all (requires channels=4). 0=R, 1=G, 2=B, 3=A. |
+| `channels` | `int` | 4 | Bytes per pixel. 4 = RGBA. |
+| `channelIndex` | `int` | -1 | Reserved for future single-channel extraction. Currently ignored. |
 | `ringSize` | `int` | 4 | Number of pre-allocated ring buffer slots. |
-| `dropOnFull` | `bool` | true | `true`: silently drop newest frame when ring is full. `false`: log a warning (backpressure signal to your app). |
+| `dropOnFull` | `bool` | true | `true`: silently drop newest frame when ring is full. `false`: currently also drops (blocking not yet implemented). |
+
+> **Not yet implemented:** Downscaling (width/height smaller than source crops rather than scales), single-channel extraction (`channelIndex`), and blocking on full ring (`dropOnFull=false`). These are defined in the API for forward compatibility.
 
 #### `SinkFrame` reference
 
@@ -660,7 +659,7 @@ extern "C" void unregisterConsumers(int64_t pipelinePtr) {
 | `stride` | `int` | Row stride in bytes (may be > width * channels due to alignment) |
 | `channels` | `int` | Bytes per pixel (4 = RGBA, 1 = single channel) |
 | `meta` | `FrameMetadata` | Sensor metadata for this frame |
-| `release` | `function<void()>` | **Must be called** when done with the frame data. Returns the ring buffer slot. |
+| `release` | `function<void()>` | Reserved for future use. Currently a no-op — ring buffer slots are managed automatically by the dispatch thread. |
 
 #### `FrameMetadata` reference
 
@@ -671,13 +670,14 @@ extern "C" void unregisterConsumers(int64_t pipelinePtr) {
 | `exposureTimeNs` | `int64_t` | Actual exposure duration in nanoseconds |
 | `iso` | `int32_t` | Sensor sensitivity (ISO equivalent) |
 
+> **Note:** Metadata plumbing from Camera2 capture results to `SinkFrame.meta` is not yet wired. The fields will be zero until this is implemented.
+
 #### Lifetime and threading rules
 
-- **`frame.release()` is mandatory.** Failing to call it leaks ring buffer slots until the ring is full and all frames are dropped.
-- **`frame.data` is only valid until `release()` is called.** Copy the data if you need it longer.
-- **Callbacks are invoked on the pipeline's processing thread.** Keep callbacks fast. For heavy work, copy the frame into your own queue and process on a separate thread.
+- **`frame.data` is valid only for the duration of the callback.** The ring buffer slot is recycled when the callback returns. Copy the data if you need it longer.
+- **Each sink has a dedicated dispatch thread.** Callbacks run on per-sink threads, not the pipeline's frame-processing thread, so a slow callback does not stall the preview or other sinks.
 - **`addSink()` / `removeSink()` are thread-safe.** You can register or remove sinks at any time, even while streaming.
-- **`removeSink()` blocks** until any in-flight callback for that sink completes, so it is safe to free resources immediately after it returns.
+- **`removeSink()` blocks** until the sink's dispatch thread exits (including any in-flight callback and queued frames), so it is safe to free resources immediately after it returns.
 
 #### Memory budget
 
@@ -692,8 +692,10 @@ Example for a whole-slide imaging app at 4K (3840x2160):
 | Sink | Resolution | Channels | Ring | Memory |
 |------|-----------|----------|------|--------|
 | "stitcher" | 3840x2160 | 4 (RGBA) | 4 | 133 MB |
-| "tracker" | 960x540 | 1 (green) | 8 | 4 MB |
-| **Total consumer memory** | | | | **~137 MB** |
+| "tracker" | 3840x2160 | 4 (RGBA) | 8 | 265 MB |
+| **Total consumer memory** | | | | **~398 MB** |
+
+> **Tip:** Keep ring sizes small and callbacks fast to minimize memory usage. For heavy processing, copy the frame data in the callback and process on your own thread.
 
 Use `camera.capabilities.estimatedMemoryBytes` to check the plugin's own memory usage (input ring + preview). Plan your sink budgets accordingly.
 
@@ -817,12 +819,21 @@ Kotlin: CambrianCameraPlugin
   |  (delegates to)
 Kotlin: CameraController
   |  (Camera2 lifecycle, ISP settings, auto-recovery)
-  |  (JNI)
+  |
+  |  Camera2 capture request targets only the YUV ImageReader.
+  |  The SurfaceProducer is NOT a Camera2 session output — the
+  |  C++ pipeline is the sole producer for the Flutter Texture.
+  |
+  |  (JNI: nativeDeliverYuv)
 C++: ImagePipeline
-  |  (post-processing, preview output, consumer fan-out)
-  +-> ANativeWindow (Flutter preview)
-  +-> Registered sinks (your app's C++ consumers)
+  |  (YUV→RGBA conversion, per-frame processing, consumer dispatch)
+  +-> ANativeWindow (Flutter preview — written via ANativeWindow_lock)
+  +-> Registered sinks (per-sink ring buffer + dispatch thread)
 ```
+
+**Frame path:** Camera2 → YUV ImageReader → `nativeDeliverYuv` (JNI) → `processFrameYuv` (C++) → ANativeWindow + sinks
+
+**Surface ownership invariant:** A BufferQueue surface can only have one producer. Camera2 session outputs claim surfaces via `connect(NATIVE_WINDOW_API_CAMERA)`. `ANativeWindow_lock` claims via `connect(NATIVE_WINDOW_API_CPU)`. The preview surface must be in one or the other — never both. In the current architecture, the C++ pipeline owns it.
 
 The plugin manages everything below the Dart API line. Your app interacts only with `CambrianCamera` and optionally registers C++ consumers via the native pipeline handle.
 
