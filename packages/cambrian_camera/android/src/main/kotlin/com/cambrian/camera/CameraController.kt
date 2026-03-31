@@ -68,23 +68,6 @@ class CameraController(
         /** Initialises the native pipeline. Returns an opaque pointer used in subsequent calls. */
         @JvmStatic external fun nativeInit(previewSurface: Surface): Long
 
-        /**
-         * Delivers one RGBA frame to the native pipeline.
-         *
-         * @param pipelinePtr Pointer returned by [nativeInit].
-         * @param data        Direct [ByteBuffer] containing pixel data.
-         * @param width       Frame width in pixels.
-         * @param height      Frame height in pixels.
-         * @param stride      Row stride in bytes (may be > width * 4 due to padding).
-         */
-        @JvmStatic external fun nativeDeliverFrame(
-            pipelinePtr: Long,
-            data: ByteBuffer,
-            width: Int,
-            height: Int,
-            stride: Int,
-        )
-
         /** Releases all resources held by the native pipeline. */
         @JvmStatic external fun nativeRelease(pipelinePtr: Long)
 
@@ -250,11 +233,8 @@ class CameraController(
                     }
                     val surface = surfaceProducer.getSurface()
                     nativeSetPreviewWindow(ptr, surface)
-                    if (state == State.STREAMING) {
-                        // The C++ pipeline writes processed frames to the ANativeWindow backed by
-                        // this surface. Rebind so it targets the new surface after recreation.
-                        backgroundHandler.post { rebindYuvPreviewSurface(surface) }
-                    }
+                    // No Camera2 session rebind needed: previewSurface is not a session output,
+                    // so only the C++ pipeline reference needs updating (done above).
                 }
 
                 override fun onSurfaceCleanup() {
@@ -530,7 +510,7 @@ class CameraController(
             merged = merged.copy(isoMode = "auto", iso = null)
         }
 
-        // Phase 3: if one side is manual and the other is not (user only set one field),
+        // If one side is manual and the other is not (user only set one field),
         // auto-fill the partner from the last known AE values.  This implements "latch on
         // manual": the sensor transitions smoothly without a brightness jump because it
         // starts from the value AE was already using.
@@ -760,7 +740,7 @@ class CameraController(
      * Streams YUV_420_888 at the device's largest supported resolution. A separate JPEG [ImageReader] is pre-allocated for
      * still capture. Preview is routed via [surfaceProducer] added directly to the session.
      *
-     * Frame path: Camera2 → SurfaceProducer (display) + ImageReader (drained, reserved for JNI)
+     * Frame path: Camera2 → YUV ImageReader → C++ pipeline (nativeDeliverYuv) → ANativeWindow (Flutter Texture)
      */
     private fun startCaptureSession(openCallback: (Result<Long>) -> Unit) {
         val device =
@@ -831,13 +811,12 @@ class CameraController(
             }
         }, backgroundHandler)
 
-        // Session surfaces: streaming reader + JPEG reader + SurfaceProducer for preview.
-        val surfaces = listOf(streamReader.surface, jpegReader.surface, previewSurface)
+        // Session surfaces: streaming reader + JPEG reader only.
+        // The SurfaceProducer surface is intentionally excluded: Camera2 would call
+        // connect(NATIVE_WINDOW_API_CAMERA) on it, preventing the C++ pipeline from
+        // also writing to it via ANativeWindow_lock (only one producer allowed per queue).
+        val surfaces = listOf(streamReader.surface, jpegReader.surface)
 
-        // previewTarget is kept as a session output so the SurfaceProducer stays valid;
-        // it is NOT a repeating request target — the C++ pipeline writes to it directly.
-        // repeatingTargetSurface tracks the actual Camera2 capture target (the YUV ImageReader).
-        val previewTarget = previewSurface
         repeatingTargetSurface = streamReader.surface
 
         val outputs = surfaces.map { OutputConfiguration(it) }
@@ -853,15 +832,15 @@ class CameraController(
                             val settings = pendingSettings
                             val request =
                                 if (settings != null) {
-                                    buildCaptureRequest(device, previewTarget, settings)
+                                    buildCaptureRequest(device, previewSurface, settings)
                                 } else {
-                                    buildDefaultCaptureRequest(device, previewTarget)
+                                    buildDefaultCaptureRequest(device, previewSurface)
                                 }
                             repeatingRequest = request
                             if (CambrianCameraConfig.verboseDiagnostics) {
                                 android.util.Log.d(
                                     "CambrianCamera",
-                                    "setRepeatingRequest target=${describeTargetSurface(previewTarget)} " +
+                                    "setRepeatingRequest target=${describeTargetSurface(repeatingTargetSurface)} " +
                                         "initialIso=${settings?.isoMode ?: "default"}(${settings?.iso ?: "-"}) " +
                                         "initialExposure=${settings?.exposureMode ?: "default"}(${settings?.exposureTimeNs ?: "-"})",
                                 )
@@ -929,10 +908,9 @@ class CameraController(
      * applied. The JPEG [jpegImageReader] is intentionally excluded — it is targeted only by the
      * one-shot request in [takePicture].
      */
-    @Suppress("UNUSED_PARAMETER") // surface is a session output only; C++ writes to it via ANativeWindow
     private fun createRepeatingRequestBuilder(
         device: CameraDevice,
-        surface: Surface,
+        @Suppress("UNUSED_PARAMETER") surface: Surface,
     ): CaptureRequest.Builder {
         val builder = try {
             device.createCaptureRequest(CameraDevice.TEMPLATE_ZERO_SHUTTER_LAG)
@@ -940,16 +918,16 @@ class CameraController(
             android.util.Log.w("CambrianCamera", "TEMPLATE_ZERO_SHUTTER_LAG not supported, falling back to TEMPLATE_PREVIEW")
             device.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW)
         }
-        // Camera2 targets only the YUV ImageReader. The SurfaceProducer (surface) is kept
-        // in the session outputs but is NOT a capture request target — the C++ pipeline
-        // writes processed frames directly to the ANativeWindow backed by that surface.
+        // Camera2 targets only the YUV ImageReader; the C++ pipeline writes processed
+        // frames to the SurfaceProducer via ANativeWindow.  A direct-to-preview mode
+        // would add `surface` as a target here instead.
         imageReader?.surface?.let { builder.addTarget(it) }
         builder.set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
         return builder
     }
 
     /**
-     * Builds a default repeating [CaptureRequest] (auto-everything) targeting [surface].
+     * Builds a default repeating [CaptureRequest] (auto-everything).
      */
     private fun buildDefaultCaptureRequest(
         device: CameraDevice,
@@ -1102,72 +1080,6 @@ class CameraController(
         builder.set(
             CaptureRequest.SCALER_CROP_REGION,
             android.graphics.Rect(offsetX, offsetY, offsetX + cropW, offsetY + cropH),
-        )
-    }
-
-    /**
-     * Recreates the capture session when in YUV fallback and SurfaceProducer provides a new surface.
-     *
-     * In this mode Camera2 writes preview frames directly into SurfaceProducer's surface, so surface
-     * recreation requires capture-session target rebinding.
-     */
-    private fun rebindYuvPreviewSurface(previewSurface: Surface) {
-        val device = cameraDevice ?: return
-        val streamReader = imageReader ?: return
-        val jpegReader = jpegImageReader ?: return
-        val previousSession = captureSession
-
-        try {
-            previousSession?.stopRepeating()
-            previousSession?.abortCaptures()
-        } catch (_: Exception) {
-        }
-        try {
-            previousSession?.close()
-        } catch (_: Exception) {
-        }
-        captureSession = null
-
-        val surfaces = listOf(streamReader.surface, jpegReader.surface, previewSurface)
-        if (CambrianCameraConfig.verboseDiagnostics) {
-            android.util.Log.d("CambrianCamera", "Rebinding YUV preview surface via createCaptureSession")
-        }
-        val outputs = surfaces.map { OutputConfiguration(it) }
-        device.createCaptureSession(
-            SessionConfiguration(
-                SessionConfiguration.SESSION_REGULAR,
-                outputs,
-                { command -> backgroundHandler.post(command) },
-                object : CameraCaptureSession.StateCallback() {
-                    override fun onConfigured(session: CameraCaptureSession) {
-                        captureSession = session
-                        try {
-                            val settings = pendingSettings
-                            val request =
-                                if (settings != null) {
-                                    buildCaptureRequest(device, previewSurface, settings)
-                                } else {
-                                    buildDefaultCaptureRequest(device, previewSurface)
-                                }
-                            repeatingTargetSurface = imageReader?.surface
-                            repeatingRequest = request
-                            session.setRepeatingRequest(request, repeatingCaptureCallback, backgroundHandler)
-                            if (CambrianCameraConfig.verboseDiagnostics) {
-                                android.util.Log.d(
-                                    "CambrianCamera",
-                                    "YUV preview rebind complete target=${describeTargetSurface(previewSurface)}",
-                                )
-                            }
-                        } catch (e: CameraAccessException) {
-                            handleNonFatalError(CamErrorCode.CAMERA_ACCESS_ERROR, e.message ?: "CameraAccessException")
-                        }
-                    }
-
-                    override fun onConfigureFailed(session: CameraCaptureSession) {
-                        handleNonFatalError(CamErrorCode.CONFIGURATION_FAILED, "CaptureSession rebind failed")
-                    }
-                },
-            ),
         )
     }
 

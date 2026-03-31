@@ -1,8 +1,7 @@
 #pragma once
 // Public consumer API for the Cambrian Camera native library.
-// Phase 3: defines data types only.
-// Phase 4 will add IImagePipeline::addSink() / removeSink() and a full sink
-// dispatch loop (black balance → WB → LUT → saturation).
+// Defines data types for frame metadata, sink configuration, and the
+// IImagePipeline interface for registering consumer sinks.
 
 #include <cstdint>
 #include <functional>
@@ -18,7 +17,7 @@ struct FrameMetadata {
     int64_t sensorTimestampNs; ///< Sensor capture start time, nanoseconds
     int64_t exposureTimeNs;    ///< Actual exposure duration, nanoseconds
     int32_t iso;               ///< Sensor sensitivity (ISO equivalent)
-    // Phase 4 will add: focus distance, WB gains, lens intrinsics, etc.
+    // Future: focus distance, WB gains, lens intrinsics, etc.
 };
 
 /// A single frame delivered to a registered sink.
@@ -32,11 +31,11 @@ struct SinkFrame {
     int channels;        ///< Bytes per pixel (4 = RGBA)
     FrameMetadata meta;
     /// Call this to extend the lifetime of `data` past the callback return.
-    /// No-op in Phase 3 (buffer is owned by the JNI direct ByteBuffer).
+    /// Allows the sink to retain the buffer beyond the callback scope.
     std::function<void()> release = [](){};
 };
 
-/// Configuration passed when registering a new processing sink (Phase 4).
+/// Configuration for registering a consumer sink on the pipeline.
 struct SinkConfig {
     std::string name;          ///< Unique human-readable identifier
     int width  = 0;            ///< Desired output width; 0 = passthrough
@@ -50,13 +49,21 @@ struct SinkConfig {
 /// Callback type invoked for each frame delivered to a sink.
 using SinkCallback = std::function<void(SinkFrame&)>;
 
-/// Abstract pipeline interface.  Phase 3: stub only.
-/// Phase 4 will make this the central dispatch hub for all processing sinks.
+/// Abstract pipeline interface for consumer sink registration.
+///
+/// Obtain a pointer via CambrianCamera.getNativePipelineHandle() (Dart) or
+/// CameraController.getNativePipelineHandle() (Kotlin), then cast to
+/// IImagePipeline* to register sinks.
 class IImagePipeline {
 public:
     virtual ~IImagePipeline() = default;
-    // Phase 4: virtual int  addSink(const SinkConfig&, SinkCallback) = 0;
-    // Phase 4: virtual void removeSink(int sinkId) = 0;
+
+    /// Register a consumer sink that receives processed RGBA frames.
+    /// Returns a unique sink ID for later removal via [removeSink].
+    virtual int  addSink(const SinkConfig& config, SinkCallback callback) = 0;
+
+    /// Remove a previously registered sink. Blocks until its dispatch thread exits.
+    virtual void removeSink(int sinkId) = 0;
 };
 
 } // namespace cam

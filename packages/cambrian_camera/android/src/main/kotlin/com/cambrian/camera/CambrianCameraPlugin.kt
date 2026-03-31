@@ -34,7 +34,7 @@ data class CameraSession(
  * - [onAttachedToActivity] / [onDetachedFromActivity] — keeps an [Activity] reference for
  *   camera permission checks and context.
  *
- * Phase 3: delegates all [CameraHostApi] calls to [CameraController], which implements the
+ * Delegates all [CameraHostApi] calls to [CameraController], which implements the
  * real Camera2 lifecycle and JNI bridge.
  */
 class CambrianCameraPlugin : FlutterPlugin, ActivityAware, CameraHostApi {
@@ -191,8 +191,7 @@ class CambrianCameraPlugin : FlutterPlugin, ActivityAware, CameraHostApi {
     /**
      * Updates C++ pipeline processing parameters.
      *
-     * Phase 3 stub — no-op in [CameraController.setProcessingParams].
-     * Phase 4 will forward these to the C++ image pipeline via JNI.
+     * Forwards parameters to the C++ image pipeline via JNI.
      *
      * @param handle The camera handle.
      * @param params The processing parameters to apply.

@@ -7,7 +7,7 @@ android {
     namespace = "com.cambrian.camera"
     // API 35 for latest Camera2 features; minSdk 33 targets Android 13+.
     compileSdk = 35
-    // NDK version matching the OpenCV prebuilt used in Phase 4.
+    // NDK version matching the OpenCV prebuilt used by the C++ pipeline.
     ndkVersion = "25.1.8937393"
 
     compileOptions {
@@ -24,7 +24,7 @@ android {
         minSdk = 33
     }
 
-    // C++ JNI bridge and image pipeline (Phase 3+).
+    // C++ JNI bridge and image pipeline.
     externalNativeBuild {
         cmake {
             path = file("src/main/cpp/CMakeLists.txt")

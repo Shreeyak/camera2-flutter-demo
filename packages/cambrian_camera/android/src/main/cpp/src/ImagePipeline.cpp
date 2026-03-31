@@ -1,12 +1,12 @@
-// Phase 3 identity image pipeline implementation.
-// Receives RGBA frames via processFrame() and blits them row-by-row into an
-// ANativeWindow (the Flutter preview Surface).  No image processing is applied.
+// Image pipeline: converts YUV_420_888 frames to RGBA with post-processing
+// (saturation, and in future: black balance, gamma, histogram stretch) and
+// writes the result to an ANativeWindow (Flutter SurfaceProducer).
 
 #include "ImagePipeline.h"
 
 #include <android/log.h>
 #include <android/native_window.h>
-#include <algorithm> // std::min
+#include <algorithm> // std::min, std::max
 #include <cstring>   // memcpy
 
 #define TAG  "CambrianCamera"
@@ -25,6 +25,8 @@ ImagePipeline::ImagePipeline(ANativeWindow* window) : previewWindow_(window) {
 }
 
 ImagePipeline::~ImagePipeline() {
+    shutdownSinks();
+
     std::lock_guard<std::mutex> lock(mutex_);
     if (previewWindow_) {
         ANativeWindow_release(previewWindow_);
@@ -52,65 +54,6 @@ void ImagePipeline::setPreviewWindow(ANativeWindow* window) {
     } else {
         LOGD("ImagePipeline preview window cleared (nullptr)");
     }
-}
-
-void ImagePipeline::processFrame(const uint8_t* data,
-                                  int width,
-                                  int height,
-                                  int stride) {
-    std::lock_guard<std::mutex> lock(mutex_);
-
-    // Nothing to render into.
-    if (!previewWindow_) {
-        return;
-    }
-
-    // Configure the surface buffer geometry only when dimensions change.
-    // ANativeWindow_setBuffersGeometry is not cheap — skip it on the hot path.
-    if (width != lastWidth_ || height != lastHeight_) {
-        // WINDOW_FORMAT_RGBA_8888 = 4 bytes per pixel.
-        int32_t result = ANativeWindow_setBuffersGeometry(
-                previewWindow_, width, height, WINDOW_FORMAT_RGBA_8888);
-        if (result != 0) {
-            LOGE("ANativeWindow_setBuffersGeometry failed: %d", result);
-            return;
-        }
-        lastWidth_  = width;
-        lastHeight_ = height;
-    }
-
-    // Lock the surface to obtain a writable pixel buffer.
-    ANativeWindow_Buffer buffer;
-    int32_t result = ANativeWindow_lock(previewWindow_, &buffer, /*inOutDirtyBounds=*/nullptr);
-    if (result != 0) {
-        LOGE("ANativeWindow_lock failed: %d", result);
-        return;
-    }
-
-    // buffer.stride is in pixels; multiply by 4 (bytes per RGBA pixel) to get
-    // the destination row stride in bytes.
-    const int dstStride = buffer.stride * 4;
-
-    // Source row stride is already in bytes (as passed from Kotlin/ImageReader).
-    const int srcStride = stride;
-
-    // Clamp to the locked buffer's actual dimensions — ANativeWindow_lock may
-    // return a buffer smaller than requested (e.g. during surface resize).
-    const int safeHeight = std::min(height, static_cast<int>(buffer.height));
-    const int safeWidth  = std::min(width,  static_cast<int>(buffer.width));
-    const int copyWidth  = safeWidth * 4;
-
-    auto* dst = reinterpret_cast<uint8_t*>(buffer.bits);
-    const uint8_t* src = data;
-
-    for (int row = 0; row < safeHeight; ++row) {
-        memcpy(dst, src, copyWidth);
-        dst += dstStride;
-        src += srcStride;
-    }
-
-    // Unlock and submit the buffer to the display compositor.
-    ANativeWindow_unlockAndPost(previewWindow_);
 }
 
 void ImagePipeline::setParams(const ProcessingParams& p) {
@@ -197,7 +140,152 @@ void ImagePipeline::processFrameYuv(
         }
     }
 
+    // Dispatch processed RGBA to registered sinks before releasing the buffer.
+    dispatchToSinks(reinterpret_cast<const uint8_t*>(buf.bits), safeW, safeH, dstStride);
+
     ANativeWindow_unlockAndPost(previewWindow_);
+}
+
+// -----------------------------------------------------------------------------
+// Consumer sink management
+// -----------------------------------------------------------------------------
+
+int ImagePipeline::addSink(const SinkConfig& config, SinkCallback callback) {
+    auto slot = std::make_unique<SinkSlot>();
+    slot->config   = config;
+    slot->callback = std::move(callback);
+
+    // Use pipeline's last known dimensions if config requests passthrough (0).
+    // Reading lastWidth_/lastHeight_ without mutex_ is an intentional benign race:
+    // worst case is a slightly stale dimension for the initial ring allocation,
+    // which only affects pre-allocated buffer sizes, not correctness.
+    const int w  = (config.width  > 0) ? config.width  : lastWidth_;
+    const int h  = (config.height > 0) ? config.height : lastHeight_;
+    const int ch = config.channels;
+    slot->frameWidth  = w;
+    slot->frameHeight = h;
+    slot->frameStride = w * ch;
+
+    // Pre-allocate ring buffer slots.
+    const int ringSize = std::max(1, config.ringSize);
+    slot->ring.resize(ringSize);
+    const size_t slotBytes = static_cast<size_t>(w) * h * ch;
+    for (auto& buf : slot->ring) {
+        buf.resize(slotBytes);
+    }
+
+    int sinkId;
+    SinkSlot* raw;  // non-owning pointer for the dispatch thread lambda
+    {
+        std::lock_guard<std::mutex> lock(sinksMu_);
+        sinkId   = nextSinkId_++;
+        slot->id = sinkId;
+        raw      = slot.get();
+        sinks_.push_back(std::move(slot));
+    }
+
+    // Start a dedicated dispatch thread for this sink.
+    raw->dispatchThread = std::thread([raw]() {
+        while (true) {
+            std::unique_lock<std::mutex> lk(raw->mu);
+            raw->cv.wait(lk, [raw]() {
+                return raw->count > 0 || !raw->running.load();
+            });
+            if (!raw->running.load() && raw->count == 0) break;
+
+            // Dequeue the oldest frame.
+            auto& frameBuf = raw->ring[raw->readIdx];
+            SinkFrame frame;
+            frame.data     = frameBuf.data();
+            frame.width    = raw->frameWidth;
+            frame.height   = raw->frameHeight;
+            frame.stride   = raw->frameStride;
+            frame.channels = raw->config.channels;
+            frame.meta     = {};  // metadata plumbing is a future step
+
+            lk.unlock();          // don't hold the lock during the callback
+            raw->callback(frame);
+            lk.lock();
+
+            raw->readIdx = (raw->readIdx + 1) % static_cast<int>(raw->ring.size());
+            raw->count--;
+        }
+    });
+
+    LOGD("addSink: id=%d name=%s ring=%d dims=%dx%dx%d",
+         sinkId, config.name.c_str(), ringSize, w, h, ch);
+    return sinkId;
+}
+
+void ImagePipeline::removeSink(int sinkId) {
+    std::unique_lock<std::mutex> lock(sinksMu_);
+    auto it = std::find_if(sinks_.begin(), sinks_.end(),
+                           [sinkId](const std::unique_ptr<SinkSlot>& s) {
+                               return s->id == sinkId;
+                           });
+    if (it == sinks_.end()) {
+        LOGE("removeSink: unknown sink id %d", sinkId);
+        return;
+    }
+
+    // Take ownership so we can release the lock before joining the thread.
+    auto slot = std::move(*it);
+    sinks_.erase(it);
+    lock.unlock();
+
+    slot->running = false;
+    slot->cv.notify_all();
+    if (slot->dispatchThread.joinable()) {
+        slot->dispatchThread.join();
+    }
+    LOGD("removeSink: id=%d name=%s removed", sinkId, slot->config.name.c_str());
+}
+
+void ImagePipeline::dispatchToSinks(const uint8_t* rgbaData,
+                                     int width, int height, int stride) {
+    std::lock_guard<std::mutex> lock(sinksMu_);
+    if (sinks_.empty()) return;
+
+    for (auto& slot : sinks_) {
+        std::lock_guard<std::mutex> slotLock(slot->mu);
+
+        // Ring full — drop or skip depending on config.
+        if (slot->count >= static_cast<int>(slot->ring.size())) {
+            if (slot->config.dropOnFull) continue;
+            // Block policy: also skip for now (blocking would stall the preview).
+            continue;
+        }
+
+        auto& dst = slot->ring[slot->writeIdx];
+        const int copyW = std::min(width,  slot->frameWidth);
+        const int copyH = std::min(height, slot->frameHeight);
+        const int rowBytes = copyW * slot->config.channels;
+
+        for (int row = 0; row < copyH; ++row) {
+            memcpy(dst.data() + row * slot->frameStride,
+                   rgbaData  + row * stride,
+                   rowBytes);
+        }
+
+        slot->writeIdx = (slot->writeIdx + 1) % static_cast<int>(slot->ring.size());
+        slot->count++;
+        slot->cv.notify_one();
+    }
+}
+
+void ImagePipeline::shutdownSinks() {
+    std::lock_guard<std::mutex> lock(sinksMu_);
+    for (auto& slot : sinks_) {
+        slot->running = false;
+        slot->cv.notify_all();
+    }
+    for (auto& slot : sinks_) {
+        if (slot->dispatchThread.joinable()) {
+            slot->dispatchThread.join();
+        }
+    }
+    sinks_.clear();
+    LOGD("shutdownSinks: all sinks removed");
 }
 
 } // namespace cam

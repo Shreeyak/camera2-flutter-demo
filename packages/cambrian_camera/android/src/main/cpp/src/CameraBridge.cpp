@@ -1,7 +1,9 @@
 // JNI glue between Kotlin (CameraController) and the native ImagePipeline.
 //
-// All four methods are thin wrappers: they validate inputs, convert JNI types
-// to C++ types, and delegate to ImagePipeline.  No image logic lives here.
+// Five entry points: nativeInit, nativeRelease, nativeSetPreviewWindow,
+// nativeDeliverYuv, and nativeSetProcessingParams.  Each is a thin wrapper
+// that validates inputs, converts JNI types to C++, and delegates to
+// ImagePipeline.  No image logic lives here.
 //
 // JNI naming convention: each function name encodes the fully-qualified Kotlin
 // class path: Java_<package_underscored>_<ClassName>_<methodName>.
@@ -61,47 +63,6 @@ Java_com_cambrian_camera_CameraController_nativeInit(
 
     LOGD("nativeInit: pipeline created at %p", pipeline);
     return static_cast<jlong>(reinterpret_cast<uintptr_t>(pipeline));
-}
-
-// ---------------------------------------------------------------------------
-// nativeDeliverFrame
-//
-// Called by the Kotlin ImageReader.OnImageAvailableListener for every captured
-// frame.  pixelBuffer is a direct ByteBuffer wrapping the ImageReader plane
-// data; GetDirectBufferAddress gives us a zero-copy pointer into it.
-//
-// @param pipelinePtr  Handle returned by nativeInit.
-// @param pixelBuffer  Direct ByteBuffer containing RGBA pixel data.
-// @param width        Frame width in pixels.
-// @param height       Frame height in pixels.
-// @param stride       Source row stride in bytes (from ImageReader plane).
-// ---------------------------------------------------------------------------
-JNIEXPORT void JNICALL
-Java_com_cambrian_camera_CameraController_nativeDeliverFrame(
-        JNIEnv* env, jclass /*clazz*/,
-        jlong pipelinePtr, jobject pixelBuffer,
-        jint width, jint height, jint stride) {
-    if (!pipelinePtr) {
-        LOGE("nativeDeliverFrame: null pipeline handle");
-        return;
-    }
-    if (!pixelBuffer) {
-        LOGE("nativeDeliverFrame: null pixelBuffer");
-        return;
-    }
-
-    // GetDirectBufferAddress returns a raw pointer into the direct buffer's
-    // backing memory.  This is safe as long as we don't hold it past the JNI
-    // call (ImageReader plane data is valid until Image.close()).
-    const auto* data = reinterpret_cast<const uint8_t*>(
-            env->GetDirectBufferAddress(pixelBuffer));
-    if (!data) {
-        LOGE("nativeDeliverFrame: GetDirectBufferAddress returned null — "
-             "ensure pixelBuffer is a direct ByteBuffer");
-        return;
-    }
-
-    pipelineFromHandle(pipelinePtr)->processFrame(data, width, height, stride);
 }
 
 // ---------------------------------------------------------------------------
@@ -221,8 +182,8 @@ Java_com_cambrian_camera_CameraController_nativeDeliverYuv(
 // Updates the C++ pipeline's processing parameters fire-and-forget.  Called
 // from Kotlin whenever the Dart layer calls setProcessingParams().
 //
-// Phase 4 applies only saturation; remaining fields are stored in the struct
-// and will be applied by subsequent phases.
+// Currently only saturation is applied; remaining fields are stored and will
+// be wired incrementally.
 // ---------------------------------------------------------------------------
 JNIEXPORT void JNICALL
 Java_com_cambrian_camera_CameraController_nativeSetProcessingParams(
