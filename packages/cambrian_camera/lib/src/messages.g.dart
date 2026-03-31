@@ -200,6 +200,8 @@ class CamCapabilities {
     required this.evCompensationStep,
     required this.supportsRgba8888,
     required this.estimatedMemoryBytes,
+    required this.streamWidth,
+    required this.streamHeight,
   });
 
   List<CamSize?> supportedSizes;
@@ -230,6 +232,12 @@ class CamCapabilities {
 
   int estimatedMemoryBytes;
 
+  /// Width of the YUV stream used by the C++ pipeline (pixels).
+  int streamWidth;
+
+  /// Height of the YUV stream used by the C++ pipeline (pixels).
+  int streamHeight;
+
   Object encode() {
     return <Object?>[
       supportedSizes,
@@ -246,6 +254,8 @@ class CamCapabilities {
       evCompensationStep,
       supportsRgba8888,
       estimatedMemoryBytes,
+      streamWidth,
+      streamHeight,
     ];
   }
 
@@ -266,6 +276,8 @@ class CamCapabilities {
       evCompensationStep: result[11]! as double,
       supportsRgba8888: result[12]! as bool,
       estimatedMemoryBytes: result[13]! as int,
+      streamWidth: result[14]! as int,
+      streamHeight: result[15]! as int,
     );
   }
 }

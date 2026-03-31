@@ -221,6 +221,10 @@ struct CamCapabilities {
   var evCompensationStep: Double
   var supportsRgba8888: Bool
   var estimatedMemoryBytes: Int64
+  /// Width of the YUV stream used by the C++ pipeline (pixels).
+  var streamWidth: Int64
+  /// Height of the YUV stream used by the C++ pipeline (pixels).
+  var streamHeight: Int64
 
 
   // swift-format-ignore: AlwaysUseLowerCamelCase
@@ -239,6 +243,8 @@ struct CamCapabilities {
     let evCompensationStep = pigeonVar_list[11] as! Double
     let supportsRgba8888 = pigeonVar_list[12] as! Bool
     let estimatedMemoryBytes = pigeonVar_list[13] as! Int64
+    let streamWidth = pigeonVar_list[14] as! Int64
+    let streamHeight = pigeonVar_list[15] as! Int64
 
     return CamCapabilities(
       supportedSizes: supportedSizes,
@@ -254,7 +260,9 @@ struct CamCapabilities {
       evCompMax: evCompMax,
       evCompensationStep: evCompensationStep,
       supportsRgba8888: supportsRgba8888,
-      estimatedMemoryBytes: estimatedMemoryBytes
+      estimatedMemoryBytes: estimatedMemoryBytes,
+      streamWidth: streamWidth,
+      streamHeight: streamHeight
     )
   }
   func toList() -> [Any?] {
@@ -273,6 +281,8 @@ struct CamCapabilities {
       evCompensationStep,
       supportsRgba8888,
       estimatedMemoryBytes,
+      streamWidth,
+      streamHeight,
     ]
   }
 }

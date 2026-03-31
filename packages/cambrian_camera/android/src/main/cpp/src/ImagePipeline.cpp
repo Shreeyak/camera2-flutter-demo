@@ -6,7 +6,8 @@
 
 #include <android/log.h>
 #include <android/native_window.h>
-#include <cstring> // memcpy
+#include <algorithm> // std::min
+#include <cstring>   // memcpy
 
 #define TAG  "CambrianCamera"
 #define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, TAG, __VA_ARGS__)
@@ -24,6 +25,7 @@ ImagePipeline::ImagePipeline(ANativeWindow* window) : previewWindow_(window) {
 }
 
 ImagePipeline::~ImagePipeline() {
+    std::lock_guard<std::mutex> lock(mutex_);
     if (previewWindow_) {
         ANativeWindow_release(previewWindow_);
         previewWindow_ = nullptr;
@@ -32,6 +34,7 @@ ImagePipeline::~ImagePipeline() {
 }
 
 void ImagePipeline::setPreviewWindow(ANativeWindow* window) {
+    std::lock_guard<std::mutex> lock(mutex_);
     // Release the old surface before storing the new one.
     if (previewWindow_) {
         ANativeWindow_release(previewWindow_);
@@ -39,6 +42,10 @@ void ImagePipeline::setPreviewWindow(ANativeWindow* window) {
     }
 
     previewWindow_ = window;
+    // Reset cached dimensions so setBuffersGeometry runs on the next frame.
+    lastWidth_  = 0;
+    lastHeight_ = 0;
+
     if (previewWindow_) {
         ANativeWindow_acquire(previewWindow_);
         LOGD("ImagePipeline preview window updated, window=%p", previewWindow_);
@@ -51,23 +58,30 @@ void ImagePipeline::processFrame(const uint8_t* data,
                                   int width,
                                   int height,
                                   int stride) {
+    std::lock_guard<std::mutex> lock(mutex_);
+
     // Nothing to render into.
     if (!previewWindow_) {
         return;
     }
 
-    // Configure the surface buffer to match the incoming frame geometry.
-    // WINDOW_FORMAT_RGBA_8888 = 4 bytes per pixel.
-    int32_t result = ANativeWindow_setBuffersGeometry(
-            previewWindow_, width, height, WINDOW_FORMAT_RGBA_8888);
-    if (result != 0) {
-        LOGE("ANativeWindow_setBuffersGeometry failed: %d", result);
-        return;
+    // Configure the surface buffer geometry only when dimensions change.
+    // ANativeWindow_setBuffersGeometry is not cheap — skip it on the hot path.
+    if (width != lastWidth_ || height != lastHeight_) {
+        // WINDOW_FORMAT_RGBA_8888 = 4 bytes per pixel.
+        int32_t result = ANativeWindow_setBuffersGeometry(
+                previewWindow_, width, height, WINDOW_FORMAT_RGBA_8888);
+        if (result != 0) {
+            LOGE("ANativeWindow_setBuffersGeometry failed: %d", result);
+            return;
+        }
+        lastWidth_  = width;
+        lastHeight_ = height;
     }
 
     // Lock the surface to obtain a writable pixel buffer.
     ANativeWindow_Buffer buffer;
-    result = ANativeWindow_lock(previewWindow_, &buffer, /*inOutDirtyBounds=*/nullptr);
+    int32_t result = ANativeWindow_lock(previewWindow_, &buffer, /*inOutDirtyBounds=*/nullptr);
     if (result != 0) {
         LOGE("ANativeWindow_lock failed: %d", result);
         return;
@@ -80,14 +94,16 @@ void ImagePipeline::processFrame(const uint8_t* data,
     // Source row stride is already in bytes (as passed from Kotlin/ImageReader).
     const int srcStride = stride;
 
-    // Number of bytes we actually want to copy per row (the active image width,
-    // not any padding beyond it).
-    const int copyWidth = width * 4;
+    // Clamp to the locked buffer's actual dimensions — ANativeWindow_lock may
+    // return a buffer smaller than requested (e.g. during surface resize).
+    const int safeHeight = std::min(height, static_cast<int>(buffer.height));
+    const int safeWidth  = std::min(width,  static_cast<int>(buffer.width));
+    const int copyWidth  = safeWidth * 4;
 
     auto* dst = reinterpret_cast<uint8_t*>(buffer.bits);
     const uint8_t* src = data;
 
-    for (int row = 0; row < height; ++row) {
+    for (int row = 0; row < safeHeight; ++row) {
         memcpy(dst, src, copyWidth);
         dst += dstStride;
         src += srcStride;

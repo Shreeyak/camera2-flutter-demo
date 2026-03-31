@@ -53,14 +53,10 @@ class CambrianCameraPreview extends StatelessWidget {
     return FittedBox(
       fit: fit,
       child: SizedBox(
-        // Use camera resolution for correct aspect ratio.
-        // Falls back to 1×1 if capabilities have no supported sizes.
-        width: camera.capabilities.supportedSizes.isNotEmpty
-            ? camera.capabilities.supportedSizes.first.width.toDouble()
-            : 1,
-        height: camera.capabilities.supportedSizes.isNotEmpty
-            ? camera.capabilities.supportedSizes.first.height.toDouble()
-            : 1,
+        // Use the actual YUV stream dimensions for correct aspect ratio.
+        // These match exactly what the C++ pipeline receives and renders.
+        width: camera.capabilities.streamWidth.toDouble(),
+        height: camera.capabilities.streamHeight.toDouble(),
         child: Texture(textureId: camera.textureId),
       ),
     );

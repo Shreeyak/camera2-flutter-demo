@@ -87,8 +87,8 @@ class CambrianCameraPlugin : FlutterPlugin, ActivityAware, CameraHostApi {
     override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         CameraHostApi.setUp(binding.binaryMessenger, null)
         sessions.values.forEach { session ->
-            session.controller.release()
-            session.producer.release()
+            try { session.controller.release() } catch (_: Exception) {}
+            try { session.producer.release() } catch (_: Exception) {}
         }
         sessions.clear()
         flutterApi = null
@@ -149,9 +149,18 @@ class CambrianCameraPlugin : FlutterPlugin, ActivityAware, CameraHostApi {
         val producer = registry.createSurfaceProducer()
         val handle = producer.id()
         val controller = CameraController(ctx, producer, api, handle)
-        sessions[handle] = CameraSession(producer, controller)
 
-        controller.open(cameraId, settings, callback)
+        // Register the session immediately so that close() can tear it down even if open()
+        // hasn't returned yet.  On failure, remove the session and release resources.
+        sessions[handle] = CameraSession(producer, controller)
+        controller.open(cameraId, settings) { result ->
+            if (result.isFailure) {
+                sessions.remove(handle)
+                try { controller.release() } catch (_: Exception) {}
+                try { producer.release() } catch (_: Exception) {}
+            }
+            callback(result)
+        }
     }
 
     /**

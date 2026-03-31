@@ -23,7 +23,7 @@ object MetadataLayout {
     /** Total number of entries in the longs transfer array. */
     const val LONG_COUNT: Int = 5
 
-    /** Index: [android.hardware.camera2.CaptureResult.CONTROL_AF_STATE] frame counter. */
+    /** Index: frame counter from [android.hardware.camera2.CaptureResult.getFrameNumber]. */
     const val LONG_FRAME_NUMBER: Int = 0
 
     /** Index: sensor start timestamp in nanoseconds. */

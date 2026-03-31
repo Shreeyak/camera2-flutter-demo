@@ -130,6 +130,8 @@ class CameraCapabilities {
     required this.evCompensationStep,
     required this.supportsRgba8888,
     required this.estimatedMemoryBytes,
+    required this.streamWidth,
+    required this.streamHeight,
   });
 
   factory CameraCapabilities.fromPigeon(CamCapabilities c) =>
@@ -151,6 +153,8 @@ class CameraCapabilities {
         evCompensationStep: c.evCompensationStep,
         supportsRgba8888: c.supportsRgba8888,
         estimatedMemoryBytes: c.estimatedMemoryBytes,
+        streamWidth: c.streamWidth,
+        streamHeight: c.streamHeight,
       );
 
   final List<CameraSize> supportedSizes;
@@ -172,4 +176,10 @@ class CameraCapabilities {
   /// Estimated native memory usage in bytes (input ring + preview buffer).
   /// Increases as consumers are registered via the C++ API.
   final int estimatedMemoryBytes;
+
+  /// Width of the YUV stream delivered to the C++ pipeline (pixels).
+  final int streamWidth;
+
+  /// Height of the YUV stream delivered to the C++ pipeline (pixels).
+  final int streamHeight;
 }

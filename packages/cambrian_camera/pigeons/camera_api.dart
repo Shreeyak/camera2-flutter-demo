@@ -90,6 +90,8 @@ class CamCapabilities {
     required this.evCompensationStep,
     required this.supportsRgba8888,
     required this.estimatedMemoryBytes,
+    required this.streamWidth,
+    required this.streamHeight,
   });
 
   List<CamSize?> supportedSizes;
@@ -106,6 +108,10 @@ class CamCapabilities {
   double evCompensationStep;
   bool supportsRgba8888;
   int estimatedMemoryBytes;
+  /// Width of the YUV stream used by the C++ pipeline (pixels).
+  int streamWidth;
+  /// Height of the YUV stream used by the C++ pipeline (pixels).
+  int streamHeight;
 }
 
 class CamStateUpdate {

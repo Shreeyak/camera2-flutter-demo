@@ -1,5 +1,13 @@
 import 'messages.g.dart';
 
+// Private sentinel used by [CameraSettings.copyWith] to distinguish
+// "caller did not pass this argument" from "caller explicitly passed null".
+class _Unset {
+  const _Unset();
+}
+
+const _unset = _Unset();
+
 /// ISP-level camera settings mapped to per-request Camera2 CaptureRequest keys.
 /// All fields are nullable; null means "do not change / use current value."
 class CameraSettings {
@@ -54,28 +62,48 @@ class CameraSettings {
         evCompensation: evCompensation,
       );
 
+  /// Returns a copy with the given fields replaced.
+  ///
+  /// Pass `null` explicitly to reset a field to "auto" (unset).
+  /// Omitting a parameter preserves the current value.
+  ///
+  /// Example — reset ISO to auto while keeping other settings:
+  /// ```dart
+  /// settings.copyWith(iso: null)
+  /// ```
   CameraSettings copyWith({
-    int? iso,
-    int? exposureTimeNs,
-    double? focusDistanceDiopters,
-    double? zoomRatio,
-    bool? afEnabled,
-    bool? awbLocked,
-    int? noiseReductionMode,
-    int? edgeMode,
-    int? evCompensation,
+    Object? iso = _unset,
+    Object? exposureTimeNs = _unset,
+    Object? focusDistanceDiopters = _unset,
+    Object? zoomRatio = _unset,
+    Object? afEnabled = _unset,
+    Object? awbLocked = _unset,
+    Object? noiseReductionMode = _unset,
+    Object? edgeMode = _unset,
+    Object? evCompensation = _unset,
   }) =>
       CameraSettings(
-        iso: iso ?? this.iso,
-        exposureTimeNs: exposureTimeNs ?? this.exposureTimeNs,
-        focusDistanceDiopters:
-            focusDistanceDiopters ?? this.focusDistanceDiopters,
-        zoomRatio: zoomRatio ?? this.zoomRatio,
-        afEnabled: afEnabled ?? this.afEnabled,
-        awbLocked: awbLocked ?? this.awbLocked,
-        noiseReductionMode: noiseReductionMode ?? this.noiseReductionMode,
-        edgeMode: edgeMode ?? this.edgeMode,
-        evCompensation: evCompensation ?? this.evCompensation,
+        iso: identical(iso, _unset) ? this.iso : iso as int?,
+        exposureTimeNs: identical(exposureTimeNs, _unset)
+            ? this.exposureTimeNs
+            : exposureTimeNs as int?,
+        focusDistanceDiopters: identical(focusDistanceDiopters, _unset)
+            ? this.focusDistanceDiopters
+            : focusDistanceDiopters as double?,
+        zoomRatio:
+            identical(zoomRatio, _unset) ? this.zoomRatio : zoomRatio as double?,
+        afEnabled:
+            identical(afEnabled, _unset) ? this.afEnabled : afEnabled as bool?,
+        awbLocked:
+            identical(awbLocked, _unset) ? this.awbLocked : awbLocked as bool?,
+        noiseReductionMode: identical(noiseReductionMode, _unset)
+            ? this.noiseReductionMode
+            : noiseReductionMode as int?,
+        edgeMode:
+            identical(edgeMode, _unset) ? this.edgeMode : edgeMode as int?,
+        evCompensation: identical(evCompensation, _unset)
+            ? this.evCompensation
+            : evCompensation as int?,
       );
 }
 

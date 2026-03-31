@@ -176,7 +176,11 @@ data class CamCapabilities (
   val evCompMax: Long,
   val evCompensationStep: Double,
   val supportsRgba8888: Boolean,
-  val estimatedMemoryBytes: Long
+  val estimatedMemoryBytes: Long,
+  /** Width of the YUV stream used by the C++ pipeline (pixels). */
+  val streamWidth: Long,
+  /** Height of the YUV stream used by the C++ pipeline (pixels). */
+  val streamHeight: Long
 )
  {
   companion object {
@@ -195,7 +199,9 @@ data class CamCapabilities (
       val evCompensationStep = pigeonVar_list[11] as Double
       val supportsRgba8888 = pigeonVar_list[12] as Boolean
       val estimatedMemoryBytes = pigeonVar_list[13] as Long
-      return CamCapabilities(supportedSizes, isoMin, isoMax, exposureTimeMinNs, exposureTimeMaxNs, focusMin, focusMax, zoomMin, zoomMax, evCompMin, evCompMax, evCompensationStep, supportsRgba8888, estimatedMemoryBytes)
+      val streamWidth = pigeonVar_list[14] as Long
+      val streamHeight = pigeonVar_list[15] as Long
+      return CamCapabilities(supportedSizes, isoMin, isoMax, exposureTimeMinNs, exposureTimeMaxNs, focusMin, focusMax, zoomMin, zoomMax, evCompMin, evCompMax, evCompensationStep, supportsRgba8888, estimatedMemoryBytes, streamWidth, streamHeight)
     }
   }
   fun toList(): List<Any?> {
@@ -214,6 +220,8 @@ data class CamCapabilities (
       evCompensationStep,
       supportsRgba8888,
       estimatedMemoryBytes,
+      streamWidth,
+      streamHeight,
     )
   }
 }

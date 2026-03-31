@@ -4,12 +4,17 @@
 
 #include <android/native_window.h>
 #include <cstdint>
+#include <mutex>
 
 namespace cam {
 
 /// Phase 3 identity pipeline: receives raw RGBA frames from Kotlin (via a
 /// direct ByteBuffer backed by ImageReader) and copies them pixel-row by
 /// pixel-row into an ANativeWindow for display.
+///
+/// Thread safety: setPreviewWindow() may be called from the UI thread while
+/// processFrame() runs on the camera background thread. Both methods hold
+/// mutex_ for the duration of their access to previewWindow_.
 ///
 /// Phase 4 will extend this class to:
 ///   - Apply black balance, white balance, LUT, and saturation corrections
@@ -49,7 +54,12 @@ public:
     void processFrame(const uint8_t* data, int width, int height, int stride);
 
 private:
+    std::mutex mutex_;
     ANativeWindow* previewWindow_ = nullptr;
+    /// Cached frame dimensions — ANativeWindow_setBuffersGeometry is only
+    /// called when these change, keeping it out of the per-frame hot path.
+    int lastWidth_  = 0;
+    int lastHeight_ = 0;
 };
 
 } // namespace cam
