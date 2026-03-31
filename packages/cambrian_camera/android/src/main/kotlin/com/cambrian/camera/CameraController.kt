@@ -96,6 +96,44 @@ class CameraController(
             pipelinePtr: Long,
             previewSurface: Surface?,
         )
+
+        /**
+         * Delivers one YUV_420_888 frame to the native pipeline for post-processing.
+         * The three ByteBuffers are the direct buffers from [android.media.Image.Plane].
+         * All plane buffers are valid until [android.media.Image.close] is called.
+         *
+         * @param pipelinePtr    Pointer returned by [nativeInit].
+         * @param yBuffer        Direct ByteBuffer for the Y plane.
+         * @param yRowStride     Row stride of the Y plane in bytes.
+         * @param uBuffer        Direct ByteBuffer for the U (Cb) plane.
+         * @param uvRowStride    Row stride of U/V planes in bytes.
+         * @param uvPixelStride  Pixel stride of U/V planes (1=I420, 2=NV12/NV21).
+         * @param vBuffer        Direct ByteBuffer for the V (Cr) plane.
+         * @param width          Frame width in pixels.
+         * @param height         Frame height in pixels.
+         */
+        @JvmStatic external fun nativeDeliverYuv(
+            pipelinePtr: Long,
+            yBuffer: ByteBuffer, yRowStride: Int,
+            uBuffer: ByteBuffer, uvRowStride: Int, uvPixelStride: Int,
+            vBuffer: ByteBuffer,
+            width: Int, height: Int,
+        )
+
+        /**
+         * Updates the C++ pipeline's processing parameters (fire-and-forget).
+         * The next frame will pick up the new values.
+         */
+        @JvmStatic external fun nativeSetProcessingParams(
+            pipelinePtr: Long,
+            blackR: Double, blackG: Double, blackB: Double,
+            gamma: Double,
+            histBlackPoint: Double, histWhitePoint: Double,
+            autoStretch: Boolean,
+            autoStretchLow: Double, autoStretchHigh: Double,
+            brightness: Double,
+            saturation: Double,
+        )
     }
 
     // -------------------------------------------------------------------------
@@ -607,7 +645,18 @@ class CameraController(
      * @param params Image processing parameters (tone-mapping, auto-stretch, etc.).
      */
     fun setProcessingParams(params: CamProcessingParams) {
-        // Phase 4: forward params to nativeSetProcessingParams(nativePipelinePtr, params)
+        val ptr = nativePipelinePtr
+        if (ptr == 0L) return
+        nativeSetProcessingParams(
+            ptr,
+            params.blackR, params.blackG, params.blackB,
+            params.gamma,
+            params.histBlackPoint, params.histWhitePoint,
+            params.autoStretch,
+            params.autoStretchLow, params.autoStretchHigh,
+            params.brightness,
+            params.saturation,
+        )
     }
 
     /**
@@ -763,6 +812,21 @@ class CameraController(
                         "stream frame#$streamFrameCount YUV ${image.width}x${image.height}",
                     )
                 }
+                // Deliver raw YUV planes to C++ for post-processing and preview output.
+                // image.planes[*].buffer pointers are valid until image.close() below.
+                val ptr = nativePipelinePtr
+                if (ptr != 0L) {
+                    val yPlane = image.planes[0]
+                    val uPlane = image.planes[1]
+                    val vPlane = image.planes[2]
+                    nativeDeliverYuv(
+                        ptr,
+                        yPlane.buffer, yPlane.rowStride,
+                        uPlane.buffer, uPlane.rowStride, uPlane.pixelStride,
+                        vPlane.buffer,
+                        image.width, image.height,
+                    )
+                }
             } finally {
                 image.close()
             }
@@ -859,8 +923,8 @@ class CameraController(
      * (i.e. lack PRIVATE_REPROCESSING or YUV_REPROCESSING capabilities), where ZSL would
      * throw [IllegalArgumentException].
      *
-     * The returned builder already has [surface] and the YUV [imageReader] surface added as
-     * targets (so the streaming ImageReader receives frames) and [CaptureRequest.CONTROL_MODE_AUTO]
+     * The returned builder already has the YUV [imageReader] surface added as target
+     * (so the streaming ImageReader receives frames) and [CaptureRequest.CONTROL_MODE_AUTO]
      * applied. The JPEG [jpegImageReader] is intentionally excluded — it is targeted only by the
      * one-shot request in [takePicture].
      */
@@ -874,10 +938,9 @@ class CameraController(
             android.util.Log.w("CambrianCamera", "TEMPLATE_ZERO_SHUTTER_LAG not supported, falling back to TEMPLATE_PREVIEW")
             device.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW)
         }
-        builder.addTarget(surface)
-        // Also target the YUV streaming ImageReader so it receives every frame.
-        // Camera2 only delivers frames to surfaces listed as targets in the request;
-        // including it in the session outputs alone is not sufficient.
+        // Camera2 targets only the YUV ImageReader. The SurfaceProducer (surface) is kept
+        // in the session outputs but is NOT a capture request target — the C++ pipeline
+        // writes processed frames directly to the ANativeWindow backed by that surface.
         imageReader?.surface?.let { builder.addTarget(it) }
         builder.set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
         return builder
