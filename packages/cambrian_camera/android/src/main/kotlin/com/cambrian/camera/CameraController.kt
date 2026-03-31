@@ -638,11 +638,10 @@ class CameraController(
     }
 
     /**
-     * No-op in Phase 3.
+     * Forwards processing parameters to the C++ pipeline via JNI (fire-and-forget).
+     * The next frame processed by [nativeDeliverYuv] will pick up the new values.
      *
-     * Phase 4 will forward these parameters to the C++ image pipeline via JNI.
-     *
-     * @param params Image processing parameters (tone-mapping, auto-stretch, etc.).
+     * @param params Image processing parameters (black balance, gamma, saturation, etc.).
      */
     fun setProcessingParams(params: CamProcessingParams) {
         val ptr = nativePipelinePtr
@@ -837,8 +836,9 @@ class CameraController(
 
         // previewTarget is kept as a session output so the SurfaceProducer stays valid;
         // it is NOT a repeating request target — the C++ pipeline writes to it directly.
+        // repeatingTargetSurface tracks the actual Camera2 capture target (the YUV ImageReader).
         val previewTarget = previewSurface
-        repeatingTargetSurface = previewTarget
+        repeatingTargetSurface = streamReader.surface
 
         val outputs = surfaces.map { OutputConfiguration(it) }
         device.createCaptureSession(
@@ -1149,7 +1149,7 @@ class CameraController(
                                 } else {
                                     buildDefaultCaptureRequest(device, previewSurface)
                                 }
-                            repeatingTargetSurface = previewSurface
+                            repeatingTargetSurface = imageReader?.surface
                             repeatingRequest = request
                             session.setRepeatingRequest(request, repeatingCaptureCallback, backgroundHandler)
                             if (CambrianCameraConfig.verboseDiagnostics) {
