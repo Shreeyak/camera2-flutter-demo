@@ -53,7 +53,7 @@ await Permission.camera.request();
 final camera = await CambrianCamera.open();
 
 // 3. Show preview — use the returned Widget in your widget tree
-// child: camera.buildPreview(fit: BoxFit.cover),
+child: camera.buildPreview(fit: BoxFit.cover),
 
 // 4. Adjust settings
 camera.updateSettings(CameraSettings(

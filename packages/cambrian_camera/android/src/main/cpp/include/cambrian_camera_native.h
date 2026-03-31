@@ -33,7 +33,7 @@ struct SinkFrame {
     FrameMetadata meta;
     /// Call this to extend the lifetime of `data` past the callback return.
     /// No-op in Phase 3 (buffer is owned by the JNI direct ByteBuffer).
-    std::function<void()> release;
+    std::function<void()> release = [](){};
 };
 
 /// Configuration passed when registering a new processing sink (Phase 4).

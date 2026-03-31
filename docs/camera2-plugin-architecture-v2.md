@@ -59,11 +59,9 @@ Raw MethodChannel with string-based method names and `Map<String, dynamic>` payl
 
 `@FlutterApi` replaces EventChannel for state/error callbacks.
 
-### RGBA_8888 from ImageReader (API 29+)
+### YUV_420_888 for streaming
 
-On devices that support it, `PixelFormat.RGBA_8888` from ImageReader lets the ISP handle YUV→RGB conversion at no extra CPU cost, eliminating the most expensive pipeline stage. YUV_420_888 is kept as a fallback. The chosen format is reported in `CameraCapabilities`.
-
-Query `StreamConfigurationMap.getOutputSizes(PixelFormat.RGBA_8888)` at init. If 4K is available in RGBA, use it. Otherwise fall back to YUV.
+`YUV_420_888` is the streaming format. At session setup `resolveStreamFormat()` queries `StreamConfigurationMap.getOutputSizes(YUV_420_888)`, selects the largest 4:3 size (matching the sensor's native aspect ratio for highest quality), and falls back to 1280×960 if no 4:3 size is advertised. The chosen resolution is reported in `CameraCapabilities.streamWidth` / `streamHeight`.
 
 ### Per-request ISP settings
 
@@ -71,23 +69,21 @@ All CameraSettings (ISO, exposure, focus, WB, zoom, NR, edge mode) map to per-re
 
 Session-level changes (stream format/size/buffer count) trigger a full stop/start cycle, but these are rare (only at initialization or explicit resolution change).
 
-### ANativeWindow for preview
+### SurfaceProducer for preview
 
-The preview Surface comes from Flutter's TextureRegistry:
+The preview Surface comes from Flutter's `TextureRegistry.SurfaceProducer`:
 
 ```
 Flutter Texture widget
-    ↓ (textureId)
-TextureRegistry.SurfaceTextureEntry
-    ↓ (SurfaceTexture → Surface)
-ANativeWindow_fromSurface(env, surface)
-    ↓
-C++ ANativeWindow_lock → memcpy RGBA → unlockAndPost
-    ↓ (automatic)
-SurfaceTexture updates → Flutter compositor re-renders
+    ↓ (textureId = SurfaceProducer.id, stable across surface recreations)
+TextureRegistry.SurfaceProducer
+    ↓ getSurface()
+Camera2 repeating CaptureRequest target
+    ↓ (Camera2 writes YUV frames directly into the Surface)
+SurfaceProducer → Flutter compositor re-renders
 ```
 
-Zero per-frame JNI after initial setup. Direct memory copy to display buffer.
+Camera2 writes directly into the `SurfaceProducer` surface as a `CaptureRequest` target — no C++ memcpy on the preview path. JNI is used only for frame delivery to the C++ pipeline (Phase 4+).
 
 ### Generic consumer model (no use-case knowledge)
 
@@ -130,36 +126,44 @@ class CambrianCamera {
   /// Uses latest-value-wins serialization — no artificial latency.
   Future<void> updateSettings(CameraSettings settings);
 
+  /// Unique identifier for this camera instance (also the Flutter texture ID).
+  int get id;
+
   /// Update C++ pipeline processing parameters (brightness, gamma, saturation, etc.).
-  /// Fire-and-forget. Applied to the next frame with no queuing.
-  void setProcessingParams(ProcessingParams params);
+  /// Returns a Future that completes when the channel round-trip finishes.
+  /// Callers may await to observe errors or ignore for fire-and-forget semantics.
+  Future<void> setProcessingParams(ProcessingParams params);
 
   /// Capture a high-quality still image. Returns the file path.
   Future<String> takePicture();
 
-  /// Returns the native pipeline pointer for C++ consumer registration.
-  /// Application native code uses this to call addSink() directly.
-  Future<int> getNativePipelineHandle();
+  /// Returns the native pipeline pointer for C++ consumer registration, or null
+  /// if the pipeline is not yet initialized.
+  Future<int?> getNativePipelineHandle();
 }
 ```
 
 ### CameraSettings
 
-Maps to per-request CaptureRequest keys:
+Maps to per-request CaptureRequest keys. Auto-capable settings use sealed types so the three
+states (don't change / auto / manual) are explicit at compile time:
 
 ```dart
 class CameraSettings {
-  final int? iso;                    // sensor sensitivity
-  final int? exposureTimeNs;         // nanoseconds
-  final double? focusDistanceDiopters;
+  final AutoValue<int>? iso;          // AutoValue.auto() | AutoValue.manual(800)
+  final AutoValue<int>? exposureTimeNs; // nanoseconds; auto is contagious with iso
+  final AutoValue<double>? focus;     // diopters; AutoValue.auto() = continuous AF
+  final WhiteBalance? whiteBalance;   // WhiteBalance.auto() | .locked() | .manual(gainR,gainG,gainB)
   final double? zoomRatio;
-  final bool? afEnabled;             // auto-focus on/off
-  final bool? awbLocked;             // lock auto white balance
-  final int? noiseReductionMode;     // OFF, FAST, HIGH_QUALITY
-  final int? edgeMode;               // OFF, FAST, HIGH_QUALITY
-  final int? evCompensation;         // exposure compensation steps
+  final NoiseReductionMode? noiseReductionMode; // off / fast / highQuality / minimal / zeroShutterLag
+  final EdgeMode? edgeMode;           // off / fast / highQuality / zeroShutterLag
+  final int? evCompensation;          // steps; no effect when AE is disabled
 }
 ```
+
+`null` means "don't change" — the Kotlin side accumulates settings so omitted fields
+retain their previous values. ISO and exposure share a single Camera2 AE flag: setting
+either to `auto` propagates to the other automatically.
 
 ### ProcessingParams
 
@@ -197,15 +201,15 @@ enum CameraState {
 
 ```dart
 class CameraCapabilities {
-  final List<Size> supportedSizes;
-  final Range<int> isoRange;
-  final Range<int> exposureTimeRange;
-  final Range<double> focusRange;
-  final Range<double> zoomRange;
-  final Range<int> evCompensationRange;
+  final List<CameraSize> supportedSizes;
+  final int isoMin, isoMax;
+  final int exposureTimeMinNs, exposureTimeMaxNs;
+  final double focusMin, focusMax;
+  final double zoomMin, zoomMax;
+  final int evCompMin, evCompMax;
   final double evCompensationStep;
-  final bool supportsRgba8888;       // reports chosen format path
-  final int estimatedMemoryBytes;    // current memory usage
+  final int streamWidth, streamHeight;  // resolution chosen by resolveStreamFormat()
+  final int estimatedMemoryBytes;       // current native memory usage
 }
 ```
 
@@ -408,15 +412,19 @@ import 'package:pigeon/pigeon.dart';
 
 // ---- Data classes ----
 
-class PigeonCameraSettings {
-  int? iso;
-  int? exposureTimeNs;
-  double? focusDistanceDiopters;
+class CamSettings {
+  // Mode strings: "auto" | "manual" | null (null = don't change)
+  String? isoMode;
+  int? iso;                      // value when isoMode == "manual"
+  String? exposureMode;
+  int? exposureTimeNs;           // nanoseconds when exposureMode == "manual"
+  String? focusMode;
+  double? focusDistanceDiopters; // when focusMode == "manual"
+  String? wbMode;                // "auto" | "locked" | "manual" | null
+  double? wbGainR, wbGainG, wbGainB; // when wbMode == "manual"
   double? zoomRatio;
-  bool? afEnabled;
-  bool? awbLocked;
-  int? noiseReductionMode;
-  int? edgeMode;
+  String? noiseReductionMode;
+  String? edgeMode;
   int? evCompensation;
 }
 
@@ -527,7 +535,7 @@ error detected → state = RECOVERING (emitted to Dart stateStream)
 - `CameraDevice.StateCallback.onError(ERROR_CAMERA_DEVICE | ERROR_CAMERA_SERVICE)`
 - `CameraDevice.StateCallback.onDisconnected()` — USB cameras, system reclaim
 - `CameraCaptureSession.StateCallback.onConfigureFailed()`
-- ANativeWindow invalidated — Flutter surface recycled (re-register SurfaceTextureEntry, pass new ANativeWindow to C++)
+- `SurfaceProducer.Callback.onSurfaceAvailable()` — Flutter surface recycled (rebind capture session to new Surface)
 
 ### Do NOT auto-recover from (emit as fatal):
 - `ERROR_CAMERA_DISABLED` — system policy
@@ -536,11 +544,11 @@ error detected → state = RECOVERING (emitted to Dart stateStream)
 
 ### Preview rebinding
 
-When the Flutter TextureRegistry entry is invalidated (hot restart, activity recreation):
-1. Re-register a new `SurfaceTextureEntry` with TextureRegistry
-2. Create new Surface → ANativeWindow
-3. Pass new ANativeWindow to C++ pipeline via `setPreviewWindow()`
-4. Update `textureId` — emit state change so Dart rebuilds the Texture widget
+When the `SurfaceProducer` surface is invalidated (hot restart, activity recreation):
+1. Flutter calls `SurfaceProducer.Callback.onSurfaceAvailable()` with the new Surface
+2. `CameraController` calls `rebindYuvPreviewSurface(newSurface)`
+3. Previous capture session is closed; a new session is created with `newSurface` as the repeating request target
+4. `SurfaceProducer.id` (= texture ID) is stable — Dart does not need to rebuild the `Texture` widget
 
 ---
 
@@ -833,7 +841,7 @@ Key structural changes from v1:
 
 ### Phase 3 — CameraController + minimal C++ passthrough
 
-- CameraController.kt: Camera2 lifecycle, ImageReader with RGBA_8888 (YUV fallback)
+- CameraController.kt: Camera2 lifecycle, YUV_420_888 ImageReader (largest 4:3 size)
 - Auto-recovery state machine (retry with exponential backoff)
 - Per-request ISP settings via `setRepeatingRequest`
 - Pre-allocate JPEG ImageReader at session config time, thread-safe takePic()

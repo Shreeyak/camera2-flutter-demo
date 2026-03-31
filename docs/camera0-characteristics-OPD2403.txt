@@ -1,4 +1,3 @@
---------- beginning of main
 === Camera 0 Static Characteristics ===
 hardwareLevel=LEVEL_3
 facing=BACK

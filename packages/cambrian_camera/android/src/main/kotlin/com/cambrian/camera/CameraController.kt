@@ -854,8 +854,10 @@ class CameraController(
      * (i.e. lack PRIVATE_REPROCESSING or YUV_REPROCESSING capabilities), where ZSL would
      * throw [IllegalArgumentException].
      *
-     * The returned builder already has [surface] added as a target and
-     * [CaptureRequest.CONTROL_MODE_AUTO] applied.
+     * The returned builder already has [surface] and the YUV [imageReader] surface added as
+     * targets (so the streaming ImageReader receives frames) and [CaptureRequest.CONTROL_MODE_AUTO]
+     * applied. The JPEG [jpegImageReader] is intentionally excluded — it is targeted only by the
+     * one-shot request in [takePicture].
      */
     private fun createRepeatingRequestBuilder(
         device: CameraDevice,
@@ -868,6 +870,10 @@ class CameraController(
             device.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW)
         }
         builder.addTarget(surface)
+        // Also target the YUV streaming ImageReader so it receives every frame.
+        // Camera2 only delivers frames to surfaces listed as targets in the request;
+        // including it in the session outputs alone is not sufficient.
+        imageReader?.surface?.let { builder.addTarget(it) }
         builder.set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
         return builder
     }
