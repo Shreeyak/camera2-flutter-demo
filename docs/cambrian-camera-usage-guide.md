@@ -179,15 +179,17 @@ All fields are nullable. `null` means "don't change this setting."
 | `zoomRatio` | `double?` | Zoom level (1.0 = no zoom). Null = don't change. |
 | `noiseReductionMode` | `NoiseReductionMode?` | Camera2 noise reduction mode enum. Null = don't change. |
 | `edgeMode` | `EdgeMode?` | Camera2 edge enhancement mode enum. Null = don't change. |
-| `evCompensation` | `int?` | Exposure compensation in AE steps. Null = don't change. |
+| `evCompensation` | `int?` | Exposure compensation in AE steps. **No effect when ISO or exposure is manual** (AE is disabled). Null = don't change. |
+
+> **ISO + Exposure coupling:** `iso` and `exposureTimeNs` must always be set to the **same mode** in the same call. Camera2 uses a single `CONTROL_AE_MODE` flag for both: `AE_MODE_ON` (both auto) or `AE_MODE_OFF` (both manual). A mixed update — one manual, one auto — leaves the "auto" partner with no explicit sensor value, producing undefined exposure. The plugin rejects mixed updates with a `CameraErrorCode.settingsConflict` error.
 
 #### Examples
 
 ```dart
-// Manual ISO, auto exposure, auto focus
+// Manual ISO + manual exposure (must be set together)
 camera.updateSettings(CameraSettings(
-  iso: AutoValue.manual(400),
-  exposureTimeNs: AutoValue.auto(),
+  iso: AutoValue.manual(800),
+  exposureTimeNs: AutoValue.manual(16666666), // 1/60 s
   focus: AutoValue.auto(),
 ));
 

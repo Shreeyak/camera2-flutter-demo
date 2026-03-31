@@ -443,6 +443,24 @@ class CameraController(
      */
     fun updateSettings(incoming: CamSettings) {
         val merged = mergeSettings(appliedSettings, incoming)
+
+        // Camera2 requires CONTROL_AE_MODE = OFF for manual SENSOR_SENSITIVITY /
+        // SENSOR_EXPOSURE_TIME to take effect.  When AE is off the driver needs
+        // explicit values for BOTH keys — it does not interpolate the "auto" partner.
+        // A mixed state (one manual, one auto) therefore produces undefined behaviour.
+        val isoManual = merged.isoMode == "manual"
+        val expManual = merged.exposureMode == "manual"
+        if (isoManual != expManual) {
+            val msg = "Settings conflict: isoMode=${merged.isoMode}, exposureMode=${merged.exposureMode}. " +
+                "Camera2 requires both to be manual (or both auto) — set iso and exposureTimeNs " +
+                "to the same mode in the same updateSettings call."
+            android.util.Log.e("CambrianCamera", msg)
+            mainHandler.post {
+                flutterApi.onError(handle, CamError(CamErrorCode.SETTINGS_CONFLICT, msg, false)) {}
+            }
+            return
+        }
+
         appliedSettings = merged
         pendingSettings = merged
         val session = captureSession ?: return
@@ -825,13 +843,15 @@ class CameraController(
                 // ISO: "auto" = AE controls, "manual" = fixed value.
                 when (settings.isoMode) {
                     "manual" -> settings.iso?.let { set(CaptureRequest.SENSOR_SENSITIVITY, it.toInt()) }
-                    // "auto" or null: don't set → template default (AE controls ISO)
+                    "auto", null -> { /* don't set → template default (AE controls ISO) */ }
+                    else -> android.util.Log.w("CambrianCamera", "Unknown isoMode: ${settings.isoMode}")
                 }
 
                 // Exposure time: "auto" = AE controls, "manual" = fixed value.
                 when (settings.exposureMode) {
                     "manual" -> settings.exposureTimeNs?.let { set(CaptureRequest.SENSOR_EXPOSURE_TIME, it) }
-                    // "auto" or null: don't set → template default (AE controls shutter)
+                    "auto", null -> { /* don't set → template default (AE controls shutter) */ }
+                    else -> android.util.Log.w("CambrianCamera", "Unknown exposureMode: ${settings.exposureMode}")
                 }
 
                 // Focus: "auto" = continuous AF, "manual" = fixed distance.
@@ -845,7 +865,8 @@ class CameraController(
                     "auto" -> {
                         set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
                     }
-                    // null: don't set → template default (continuous AF)
+                    null -> { /* don't set → template default (continuous AF) */ }
+                    else -> android.util.Log.w("CambrianCamera", "Unknown focusMode: ${settings.focusMode}")
                 }
 
                 // White balance: "auto" = AWB, "locked" = freeze, "manual" = user gains.
@@ -866,12 +887,17 @@ class CameraController(
                             CaptureRequest.COLOR_CORRECTION_MODE,
                             CaptureRequest.COLOR_CORRECTION_MODE_TRANSFORM_MATRIX,
                         )
+                        // RggbChannelVector takes four args: R, G_even, G_odd, B.
+                        // The RGGB Bayer pattern has two green photosites (one per row of
+                        // the 2×2 tile). Most sensors have symmetric green response so the
+                        // same gainG is used for both — this is correct, not a copy-paste error.
                         set(
                             CaptureRequest.COLOR_CORRECTION_GAINS,
                             android.hardware.camera2.params.RggbChannelVector(gainR, gainG, gainG, gainB),
                         )
                     }
-                    // null: don't set → template default (AWB auto)
+                    null -> { /* don't set → template default (AWB auto) */ }
+                    else -> android.util.Log.w("CambrianCamera", "Unknown wbMode: ${settings.wbMode}")
                 }
 
                 // Zoom — use CONTROL_ZOOM_RATIO on API 30+, fall back to SCALER_CROP_REGION.
@@ -891,7 +917,8 @@ class CameraController(
                 // Edge enhancement mode
                 settings.edgeMode?.let { set(CaptureRequest.EDGE_MODE, it.toInt()) }
 
-                // EV compensation
+                // EV compensation — only applied by Camera2 when CONTROL_AE_MODE != OFF.
+                // Has no effect when isoMode or exposureMode is "manual" (AE is disabled).
                 settings.evCompensation?.let {
                     set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, it.toInt())
                 }

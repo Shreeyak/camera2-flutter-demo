@@ -121,6 +121,29 @@ enum EdgeMode {
 /// - manual variant = use a specific value
 ///
 /// Non-auto settings use plain nullable types where `null` = don't change.
+///
+/// ## ISO + Exposure coupling
+///
+/// [iso] and [exposureTimeNs] **must always be set to the same mode together**.
+/// Camera2 maps them to a single hardware knob (`CONTROL_AE_MODE`):
+/// - Both `Auto` (or both `null`) → `AE_MODE_ON`: the AE algorithm controls both.
+/// - Both `Manual` → `AE_MODE_OFF`: your values take effect.
+/// - Mixed (one manual, one auto) → `AE_MODE_OFF` is set but the "auto" partner
+///   has no explicit value — the driver falls back to an undefined default.
+///
+/// The plugin rejects mixed-mode updates with a [CameraErrorCode.settingsConflict]
+/// error. Always set both in the same [updateSettings] call:
+/// ```dart
+/// camera.updateSettings(CameraSettings(
+///   iso: AutoValue.manual(800),
+///   exposureTimeNs: AutoValue.manual(20000000), // 20 ms
+/// ));
+/// ```
+///
+/// ## EV compensation
+///
+/// [evCompensation] is applied by the AE algorithm and has **no effect** when
+/// either [iso] or [exposureTimeNs] is manual (AE is disabled in that mode).
 class CameraSettings {
   const CameraSettings({
     this.iso,
@@ -133,12 +156,20 @@ class CameraSettings {
     this.evCompensation,
   });
 
-  /// Sensor sensitivity (e.g. 100-3200).
+  /// Sensor sensitivity (e.g. 100–3200).
+  ///
   /// [Auto] = Camera2 AE controls ISO. [Manual] = fixed value.
+  ///
+  /// Must be set to the same mode as [exposureTimeNs]. Setting one to manual
+  /// without the other causes a [CameraErrorCode.settingsConflict] error.
   final AutoValue<int>? iso;
 
   /// Exposure duration in nanoseconds.
+  ///
   /// [Auto] = Camera2 AE controls shutter speed. [Manual] = fixed value.
+  ///
+  /// Must be set to the same mode as [iso]. Setting one to manual without the
+  /// other causes a [CameraErrorCode.settingsConflict] error.
   final AutoValue<int>? exposureTimeNs;
 
   /// Focus distance in diopters (0 = infinity).
@@ -159,6 +190,9 @@ class CameraSettings {
   final EdgeMode? edgeMode;
 
   /// Exposure compensation in AE steps. Null = don't change.
+  ///
+  /// Applied by the AE algorithm — **has no effect** when [iso] or
+  /// [exposureTimeNs] is manual (AE is disabled in that mode).
   final int? evCompensation;
 
   /// Serializes to the Pigeon transport type.

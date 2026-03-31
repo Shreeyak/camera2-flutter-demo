@@ -43,6 +43,7 @@ enum CamErrorCode {
   maxRetriesExceeded,
   previewSurfaceLost,
   pipelineError,
+  settingsConflict,
   unknown,
 }
 
@@ -130,6 +131,8 @@ class CamSettings {
   int? edgeMode;
 
   /// Exposure compensation in AE steps. Null = don't change.
+  /// NOTE: has no effect when isoMode == "manual" or exposureMode == "manual"
+  /// because CONTROL_AE_MODE is set to OFF in that case.
   int? evCompensation;
 
   Object encode() {
