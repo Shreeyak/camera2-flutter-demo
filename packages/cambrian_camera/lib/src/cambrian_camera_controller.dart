@@ -6,7 +6,7 @@ import 'camera_settings.dart';
 import 'camera_settings_serializer.dart';
 import 'camera_state.dart';
 import 'cambrian_camera_preview.dart';
-import 'frame_result.dart';
+import 'frame_result.dart' show FrameResult;
 import 'messages.g.dart';
 
 /// The main entry point for the Cambrian camera library.
@@ -63,11 +63,20 @@ class CambrianCamera {
   // Static state
   // ---------------------------------------------------------------------------
 
-  /// All live camera instances, keyed by handle.
-  /// Used by [_FlutterApiDispatcher] to route callbacks.
+  /// All live [CambrianCamera] instances, keyed by handle.
+  ///
+  /// Entries are added in [CambrianCamera._] (constructor) and removed in
+  /// [close]. [_FlutterApiDispatcher] uses this map to route every Kotlin→Dart
+  /// callback to the correct instance by handle. The map must be empty when all
+  /// cameras are closed; leaks here prevent stream controllers from being GC'd.
   static final Map<int, CambrianCamera> _instances = {};
 
-  /// Ensures the FlutterApi dispatcher is registered exactly once.
+  /// Ensures [_FlutterApiDispatcher] is registered exactly once per isolate.
+  ///
+  /// Pigeon's [CameraFlutterApi.setUp] binds a single handler on the binary
+  /// messenger. A new Flutter isolate gets its own messenger, so this flag is
+  /// isolate-local — each isolate that creates a camera registers its own
+  /// dispatcher automatically on the first [open] or constructor call.
   static bool _flutterApiSetup = false;
   static void _ensureFlutterApiSetup() {
     if (_flutterApiSetup) return;
@@ -259,11 +268,13 @@ class CambrianCamera {
   }
 }
 
-/// Routes Kotlin→Dart callbacks to the correct [CambrianCamera] instance
-/// using the handle as a key.
+/// Routes Kotlin→Dart callbacks to the correct [CambrianCamera] instance.
 ///
-/// There is one global dispatcher (registered once) that dispatches to
-/// whatever cameras are currently open.
+/// A single [_FlutterApiDispatcher] is registered per isolate (via
+/// [CambrianCamera._ensureFlutterApiSetup]). It looks up the target instance
+/// in [CambrianCamera._instances] by handle and forwards the event. Callbacks
+/// that arrive after [close] (handle already removed) are silently dropped —
+/// this can happen if the platform fires a trailing event during teardown.
 class _FlutterApiDispatcher extends CameraFlutterApi {
   @override
   void onStateChanged(int handle, CamStateUpdate state) {

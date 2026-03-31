@@ -3,22 +3,26 @@ import 'dart:math' show max, min;
 import 'package:cambrian_camera/cambrian_camera.dart'
     show CameraSettings, Manual;
 
-enum CameraSettingType { af, iso, shutter, focus, wb, zoom }
+enum CameraSettingType { iso, shutter, focus, wb, zoom }
 
 class CameraRanges {
-  final List<int> isoRange;
-  final List<int> exposureTimeRangeNs;
+  final int isoMin;
+  final int isoMax;
+  final int exposureTimeMinNs;
+  final int exposureTimeMaxNs;
 
   /// Maximum diopter value from Camera2 LENS_INFO_MINIMUM_FOCUS_DISTANCE.
-  /// Valid focus range is [0.0, minFocusDiopters]; higher diopters = closer.
-  final double minFocusDiopters;
+  /// Valid focus range is [0.0, focusMaxDiopters]; higher diopters = closer focus.
+  final double focusMaxDiopters;
   final double minZoomRatio;
   final double maxZoomRatio;
 
   const CameraRanges({
-    this.isoRange = const [100, 8200],
-    this.exposureTimeRangeNs = const [100000, 1000000000],
-    this.minFocusDiopters = 10.0,
+    this.isoMin = 100,
+    this.isoMax = 8200,
+    this.exposureTimeMinNs = 100000,
+    this.exposureTimeMaxNs = 1000000000,
+    this.focusMaxDiopters = 10.0,
     this.minZoomRatio = 1.0,
     this.maxZoomRatio = 20.0,
   });
@@ -64,20 +68,17 @@ class CameraSettingsValues {
     final isoAuto = settings.iso is! Manual<int>;
     final isoValue = settings.iso is Manual<int>
         ? (settings.iso as Manual<int>).value
-        : max(ranges.isoRange[0], min(200, ranges.isoRange[1]));
+        : max(ranges.isoMin, min(200, ranges.isoMax));
 
     final exposureAuto = settings.exposureTimeNs is! Manual<int>;
     final exposureTimeNs = settings.exposureTimeNs is Manual<int>
         ? (settings.exposureTimeNs as Manual<int>).value
-        : max(
-            ranges.exposureTimeRangeNs[0],
-            min(250000, ranges.exposureTimeRangeNs[1]),
-          );
+        : max(ranges.exposureTimeMinNs, min(250000, ranges.exposureTimeMaxNs));
 
     final afEnabled = settings.focus is! Manual<double>;
     final focusDiopters = settings.focus is Manual<double>
         ? (settings.focus as Manual<double>).value
-        : min(0.1, ranges.minFocusDiopters);
+        : min(0.1, ranges.focusMaxDiopters);
 
     return CameraSettingsValues(
       isoValue: isoValue,
@@ -92,13 +93,10 @@ class CameraSettingsValues {
   }
 
   factory CameraSettingsValues.initialFromRanges(CameraRanges ranges) {
-    final clampedFocusDiopters = min(0.1, ranges.minFocusDiopters);
+    final clampedFocusDiopters = min(0.1, ranges.focusMaxDiopters);
     return CameraSettingsValues(
-      isoValue: max(ranges.isoRange[0], min(200, ranges.isoRange[1])),
-      exposureTimeNs: max(
-        ranges.exposureTimeRangeNs[0],
-        min(250000, ranges.exposureTimeRangeNs[1]),
-      ),
+      isoValue: max(ranges.isoMin, min(200, ranges.isoMax)),
+      exposureTimeNs: max(ranges.exposureTimeMinNs, min(250000, ranges.exposureTimeMaxNs)),
       focusDiopters: clampedFocusDiopters,
       zoomRatio: ranges.minZoomRatio,
       afEnabled: true,

@@ -1,4 +1,5 @@
 import 'dart:async' show StreamSubscription;
+import 'dart:math' show max;
 
 import 'package:cambrian_camera/cambrian_camera.dart';
 import 'package:flutter/material.dart';
@@ -9,8 +10,12 @@ import 'camera/camera_settings_values.dart';
 import 'theme/material_theme.dart';
 import 'theme/theme_util.dart';
 import 'widgets/bottom_bar.dart';
-import 'widgets/camera_control_overlay.dart';
+import 'widgets/camera_control_overlay.dart'
+    show CameraControlOverlay, kCameraDialMaxWidth;
 import 'widgets/bottom_bar_buttons.dart';
+
+/// Horizontal offset from the left edge of the dial to the auto-toggle button.
+const _kAutoToggleOffset = 60.0;
 
 /// Initial camera settings used for both [CambrianCamera.open] and the UI's
 /// initial [CameraSettingsValues]. Keeping them in one place ensures the two
@@ -92,21 +97,27 @@ class _CameraScreenState extends State<CameraScreen> {
       final camera = await CambrianCamera.open(settings: _kInitialSettings);
       final caps = camera.capabilities;
       final ranges = CameraRanges(
-        isoRange: [caps.isoMin, caps.isoMax],
-        exposureTimeRangeNs: [caps.exposureTimeMinNs, caps.exposureTimeMaxNs],
-        minFocusDiopters: caps.focusMax,
+        isoMin: caps.isoMin,
+        isoMax: caps.isoMax,
+        exposureTimeMinNs: caps.exposureTimeMinNs,
+        exposureTimeMaxNs: caps.exposureTimeMaxNs,
+        focusMaxDiopters: caps.focusMax,
         minZoomRatio: caps.zoomMin,
         maxZoomRatio: caps.zoomMax,
       );
-      if (mounted) {
-        setState(() {
-          _camera = camera;
-          _ranges = ranges;
-          _values = CameraSettingsValues.fromSettings(_kInitialSettings, ranges);
-        });
-        _frameResultSub = camera.frameResultStream.listen(_onFrameResult);
-        _errorSub = camera.errorStream.listen(_onCameraError);
+      if (!mounted) {
+        // Widget was disposed while open() was in flight — close the native
+        // session immediately so it isn't leaked.
+        await camera.close();
+        return;
       }
+      setState(() {
+        _camera = camera;
+        _ranges = ranges;
+        _values = CameraSettingsValues.fromSettings(_kInitialSettings, ranges);
+      });
+      _frameResultSub = camera.frameResultStream.listen(_onFrameResult);
+      _errorSub = camera.errorStream.listen(_onCameraError);
     } catch (e) {
       // Camera may not be available in all environments (e.g. emulators).
       // The UI degrades gracefully to a black placeholder.
@@ -204,7 +215,7 @@ class _CameraScreenState extends State<CameraScreen> {
     if (_values.isoAuto) {
       final iso = result.iso;
       if (iso != null) {
-        final clamped = iso.clamp(_ranges.isoRange[0], _ranges.isoRange[1]).toInt();
+        final clamped = iso.clamp(_ranges.isoMin, _ranges.isoMax).toInt();
         if (clamped != _values.isoValue) {
           next = next.copyWith(isoValue: clamped);
         }
@@ -214,7 +225,7 @@ class _CameraScreenState extends State<CameraScreen> {
       final ns = result.exposureTimeNs;
       if (ns != null) {
         final clamped = ns
-            .clamp(_ranges.exposureTimeRangeNs[0], _ranges.exposureTimeRangeNs[1])
+            .clamp(_ranges.exposureTimeMinNs, _ranges.exposureTimeMaxNs)
             .toInt();
         if (clamped != _values.exposureTimeNs) {
           next = next.copyWith(exposureTimeNs: clamped);
@@ -224,7 +235,7 @@ class _CameraScreenState extends State<CameraScreen> {
     if (_values.afEnabled) {
       final focus = result.focusDistanceDiopters;
       if (focus != null) {
-        final clamped = focus.clamp(0.0, _ranges.minFocusDiopters).toDouble();
+        final clamped = focus.clamp(0.0, _ranges.focusMaxDiopters).toDouble();
         if (clamped != _values.focusDiopters) {
           next = next.copyWith(focusDiopters: clamped);
         }
@@ -254,31 +265,24 @@ class _CameraScreenState extends State<CameraScreen> {
 
   bool _hasAutoMode(CameraSettingType? param) {
     if (param == null) return false;
-    switch (param) {
-      case CameraSettingType.iso:
-      case CameraSettingType.shutter:
-      case CameraSettingType.focus:
-      case CameraSettingType.wb:
-        return true;
-      default:
-        return false;
-    }
+    return switch (param) {
+      CameraSettingType.iso ||
+      CameraSettingType.shutter ||
+      CameraSettingType.focus ||
+      CameraSettingType.wb => true,
+      CameraSettingType.zoom => false,
+    };
   }
 
   bool _isAutoMode(CameraSettingType? param) {
     if (param == null) return false;
-    switch (param) {
-      case CameraSettingType.iso:
-        return _values.isoAuto;
-      case CameraSettingType.shutter:
-        return _values.exposureAuto;
-      case CameraSettingType.focus:
-        return _values.afEnabled;
-      case CameraSettingType.wb:
-        return !_values.wbLocked;
-      default:
-        return false;
-    }
+    return switch (param) {
+      CameraSettingType.iso => _values.isoAuto,
+      CameraSettingType.shutter => _values.exposureAuto,
+      CameraSettingType.focus => _values.afEnabled,
+      CameraSettingType.wb => !_values.wbLocked,
+      CameraSettingType.zoom => false,
+    };
   }
 
   void _onAutoToggleTap(CameraSettingType? param) {
@@ -291,7 +295,6 @@ class _CameraScreenState extends State<CameraScreen> {
         _applySettings(CameraSettings(
           iso: nowAuto ? const AutoValue.auto() : AutoValue.manual(_values.isoValue),
         ));
-        break;
       case CameraSettingType.shutter:
         final nowAuto = !_values.exposureAuto;
         // Auto is contagious: toggling exposure auto also toggles ISO auto.
@@ -301,15 +304,11 @@ class _CameraScreenState extends State<CameraScreen> {
               ? const AutoValue.auto()
               : AutoValue.manual(_values.exposureTimeNs),
         ));
-        break;
       case CameraSettingType.focus:
         _toggleAf();
-        break;
       case CameraSettingType.wb:
         _setWbLocked(!_values.wbLocked);
-        break;
-      case CameraSettingType.af:
-      default:
+      case CameraSettingType.zoom:
         break;
     }
   }
@@ -330,7 +329,9 @@ class _CameraScreenState extends State<CameraScreen> {
           bottom: false,
           child: Column(
             children: [
-              // Two preview panes side by side — fill remaining space
+              // Two side-by-side previews demonstrate the future dual-consumer
+              // architecture: full-res stream on the left, low-res stream on
+              // the right. Both share the same camera session for now.
               Expanded(
                 child: Row(
                   children: [
@@ -359,10 +360,12 @@ class _CameraScreenState extends State<CameraScreen> {
                           ),
                           if (_hasAutoMode(_activeSetting))
                             Positioned(
-                              left:
-                                  (MediaQuery.of(context).size.width / 2) -
-                                  400 / 2 -
-                                  60,
+                              left: max(
+                                0.0,
+                                (MediaQuery.of(context).size.width / 2) -
+                                    kCameraDialMaxWidth / 2 -
+                                    _kAutoToggleOffset,
+                              ),
                               child: CameraAutoToggleButton(
                                 isAuto: _isAutoMode(_activeSetting),
                                 onTap: () => _onAutoToggleTap(_activeSetting),
