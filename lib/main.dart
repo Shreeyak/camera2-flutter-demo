@@ -97,7 +97,12 @@ class _CameraScreenState extends State<CameraScreen> {
 
   @override
   void dispose() {
-    _camera?.close();
+    final camera = _camera;
+    if (camera != null) {
+      camera.close().catchError((Object e) {
+        debugPrint('CambrianCamera.close failed during dispose: $e');
+      });
+    }
     super.dispose();
   }
 
@@ -183,8 +188,9 @@ class _CameraScreenState extends State<CameraScreen> {
     if (param == null) return false;
     switch (param) {
       case CameraSettingType.iso:
+        return _values.isoAuto;
       case CameraSettingType.shutter:
-        return false; // ISO and shutter don't have auto state, just show button
+        return _values.exposureAuto;
       case CameraSettingType.focus:
         return _values.afEnabled;
       case CameraSettingType.wb:
@@ -197,6 +203,22 @@ class _CameraScreenState extends State<CameraScreen> {
   void _onAutoToggleTap(CameraSettingType? param) {
     if (param == null) return;
     switch (param) {
+      case CameraSettingType.iso:
+        final nowAuto = !_values.isoAuto;
+        setState(() => _values = _values.copyWith(isoAuto: nowAuto));
+        _applySettings(CameraSettings(
+          iso: nowAuto ? const AutoValue.auto() : AutoValue.manual(_values.isoValue),
+        ));
+        break;
+      case CameraSettingType.shutter:
+        final nowAuto = !_values.exposureAuto;
+        setState(() => _values = _values.copyWith(exposureAuto: nowAuto));
+        _applySettings(CameraSettings(
+          exposureTimeNs: nowAuto
+              ? const AutoValue.auto()
+              : AutoValue.manual(_values.exposureTimeNs),
+        ));
+        break;
       case CameraSettingType.focus:
         _toggleAf();
         break;

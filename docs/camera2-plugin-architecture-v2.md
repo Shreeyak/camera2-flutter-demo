@@ -187,7 +187,6 @@ Note: no `trackingScale` — downscaling is per-consumer, configured at the C++ 
 enum CameraState {
   closed,       // camera not open
   opening,      // initializing
-  ready,        // configured, not yet streaming
   streaming,    // actively delivering frames
   recovering,   // error occurred, auto-recovering
   error,        // fatal error, requires app action

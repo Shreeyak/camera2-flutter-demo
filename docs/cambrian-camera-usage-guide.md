@@ -25,7 +25,7 @@ Your app also needs `permission_handler` (or equivalent) to request camera acces
 
 ```yaml
 dependencies:
-  permission_handler: ^11.3.1
+  permission_handler: ^12.0.1
 ```
 
 ### Android requirements

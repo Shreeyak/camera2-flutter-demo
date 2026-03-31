@@ -43,7 +43,9 @@ class CameraSettingsSerializer {
     }).catchError((_) {
       if (_disposed) return;
       _inFlight = false;
-      // Error handling is done via the camera error stream; just release.
+      // Discard the pending value so a stale setting is not sent after an error.
+      // Error details are delivered via the camera error stream.
+      _pending = null;
     });
   }
 

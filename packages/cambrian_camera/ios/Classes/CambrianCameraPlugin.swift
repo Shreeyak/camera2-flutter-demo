@@ -2,8 +2,9 @@ import Flutter
 
 /// iOS stub — not yet implemented.
 ///
-/// All methods throw PLATFORM_NOT_SUPPORTED. iOS support will be added in a
-/// future phase once the Android implementation is complete.
+/// The Pigeon `CameraHostApi` is not registered on iOS, so any Dart call to a
+/// camera method will fail with a channel-connection error. iOS support will be
+/// added in a future phase once the Android implementation is complete.
 public class CambrianCameraPlugin: NSObject, FlutterPlugin {
     public static func register(with registrar: FlutterPluginRegistrar) {
         // No-op: iOS is not supported yet.

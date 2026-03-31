@@ -160,9 +160,9 @@ closed → opening → streaming ⟷ recovering ⟷ error
 - `isFatal: bool` — fatal errors require manual close/reopen; non-fatal trigger auto-recovery
 
 **CameraSettingsSerializer** (`camera_settings_serializer.dart`):
-- 50ms debounce timer
-- Cancels pending send on each new call
-- Only the latest settings value reaches the platform channel
+- In-flight serialization only (no time-based debounce)
+- If a send is in progress, updates coalesce so that only the most recent settings are ultimately sent
+- Ensures that the platform channel never has more than one settings update in flight at a time
 
 ---
 

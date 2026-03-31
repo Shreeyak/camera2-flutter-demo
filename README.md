@@ -32,10 +32,10 @@ dart format lib/             # Format Dart code
 ## Diagnostic Logging
 
 All logs use the `CambrianCamera` tag and are controlled by two flags in
-`CameraController.kt` companion object. Both default to `true` — set to `false`
+`CambrianCameraConfig.kt`. Both default to `true` — set to `false`
 before shipping.
 
-### `VERBOSE_DIAGNOSTICS`
+### `verboseDiagnostics`
 
 Frame-flow and capture-result diagnostics. Periodic logs use a **every-60-frames**
 cadence (frame #1, then #60, #120, …).
@@ -51,7 +51,7 @@ cadence (frame #1, then #60, #120, …).
 | YUV surface rebind start | `Rebinding YUV preview surface via createCaptureSession` |
 | YUV surface rebind done | `YUV preview rebind complete target=<surface>` |
 
-### `VERBOSE_SETTINGS`
+### `verboseSettings`
 
 Full ISP settings dump on every `updateSettings` call. Fires at slider rates
 (can be 30+ times/second while dragging), so disable before shipping.

@@ -202,13 +202,16 @@ class CambrianCamera {
   ///
   /// After this call the instance must not be used again.
   Future<void> close() async {
-    await _hostApi.close(_handle);
-    _instances.remove(_handle);
-    _serializer.dispose();
-    // Close streams after removing from instances map to prevent callbacks
-    // arriving after the streams are closed.
-    await _stateController.close();
-    await _errorController.close();
+    try {
+      await _hostApi.close(_handle);
+    } finally {
+      _instances.remove(_handle);
+      _serializer.dispose();
+      // Close streams after removing from instances map to prevent callbacks
+      // arriving after the streams are closed.
+      await _stateController.close();
+      await _errorController.close();
+    }
   }
 
   // ---------------------------------------------------------------------------
