@@ -222,7 +222,7 @@ class CambrianCameraPlugin : FlutterPlugin, ActivityAware, CameraHostApi {
      * @param handle   The camera handle.
      * @param callback Invoked with [Result.success] containing the native pointer (may be 0).
      */
-    override fun getNativePipelineHandle(handle: Long, callback: (Result<Long>) -> Unit) {
+    override fun getNativePipelineHandle(handle: Long, callback: (Result<Long?>) -> Unit) {
         val controller = sessions[handle]?.controller
         if (controller == null) {
             callback(Result.failure(FlutterError("invalid_handle", "No session for handle $handle", null)))

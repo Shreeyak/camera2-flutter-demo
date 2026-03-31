@@ -128,7 +128,6 @@ class CameraCapabilities {
     required this.evCompMin,
     required this.evCompMax,
     required this.evCompensationStep,
-    required this.supportsRgba8888,
     required this.estimatedMemoryBytes,
     required this.streamWidth,
     required this.streamHeight,
@@ -137,7 +136,6 @@ class CameraCapabilities {
   factory CameraCapabilities.fromPigeon(CamCapabilities c) =>
       CameraCapabilities(
         supportedSizes: c.supportedSizes
-            .whereType<CamSize>()
             .map((s) => CameraSize(s.width, s.height))
             .toList(),
         isoMin: c.isoMin,
@@ -151,7 +149,6 @@ class CameraCapabilities {
         evCompMin: c.evCompMin,
         evCompMax: c.evCompMax,
         evCompensationStep: c.evCompensationStep,
-        supportsRgba8888: c.supportsRgba8888,
         estimatedMemoryBytes: c.estimatedMemoryBytes,
         streamWidth: c.streamWidth,
         streamHeight: c.streamHeight,
@@ -169,9 +166,6 @@ class CameraCapabilities {
   final int evCompMin;
   final int evCompMax;
   final double evCompensationStep;
-
-  /// true if the device outputs RGBA_8888 directly (no YUV conversion needed).
-  final bool supportsRgba8888;
 
   /// Estimated native memory usage in bytes (input ring + preview buffer).
   /// Increases as consumers are registered via the C++ API.

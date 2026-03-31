@@ -15,7 +15,8 @@ library;
 
 export 'src/cambrian_camera_controller.dart' show CambrianCamera;
 export 'src/cambrian_camera_preview.dart' show CambrianCameraPreview;
-export 'src/camera_settings.dart' show CameraSettings, ProcessingParams;
+export 'src/camera_settings.dart'
+    show CameraSettings, ProcessingParams, NoiseReductionMode, EdgeMode;
 export 'src/camera_state.dart'
     show
         CameraState,

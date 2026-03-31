@@ -198,13 +198,12 @@ class CamCapabilities {
     required this.evCompMin,
     required this.evCompMax,
     required this.evCompensationStep,
-    required this.supportsRgba8888,
     required this.estimatedMemoryBytes,
     required this.streamWidth,
     required this.streamHeight,
   });
 
-  List<CamSize?> supportedSizes;
+  List<CamSize> supportedSizes;
 
   int isoMin;
 
@@ -228,8 +227,6 @@ class CamCapabilities {
 
   double evCompensationStep;
 
-  bool supportsRgba8888;
-
   int estimatedMemoryBytes;
 
   /// Width of the YUV stream used by the C++ pipeline (pixels).
@@ -252,7 +249,6 @@ class CamCapabilities {
       evCompMin,
       evCompMax,
       evCompensationStep,
-      supportsRgba8888,
       estimatedMemoryBytes,
       streamWidth,
       streamHeight,
@@ -262,7 +258,7 @@ class CamCapabilities {
   static CamCapabilities decode(Object result) {
     result as List<Object?>;
     return CamCapabilities(
-      supportedSizes: (result[0] as List<Object?>?)!.cast<CamSize?>(),
+      supportedSizes: (result[0] as List<Object?>?)!.cast<CamSize>(),
       isoMin: result[1]! as int,
       isoMax: result[2]! as int,
       exposureTimeMinNs: result[3]! as int,
@@ -274,10 +270,9 @@ class CamCapabilities {
       evCompMin: result[9]! as int,
       evCompMax: result[10]! as int,
       evCompensationStep: result[11]! as double,
-      supportsRgba8888: result[12]! as bool,
-      estimatedMemoryBytes: result[13]! as int,
-      streamWidth: result[14]! as int,
-      streamHeight: result[15]! as int,
+      estimatedMemoryBytes: result[12]! as int,
+      streamWidth: result[13]! as int,
+      streamHeight: result[14]! as int,
     );
   }
 }
@@ -525,7 +520,7 @@ class CameraHostApi {
     }
   }
 
-  Future<int> getNativePipelineHandle(int handle) async {
+  Future<int?> getNativePipelineHandle(int handle) async {
     final String pigeonVar_channelName = 'dev.flutter.pigeon.cambrian_camera.CameraHostApi.getNativePipelineHandle$pigeonVar_messageChannelSuffix';
     final BasicMessageChannel<Object?> pigeonVar_channel = BasicMessageChannel<Object?>(
       pigeonVar_channelName,
@@ -542,13 +537,8 @@ class CameraHostApi {
         message: pigeonVar_replyList[1] as String?,
         details: pigeonVar_replyList[2],
       );
-    } else if (pigeonVar_replyList[0] == null) {
-      throw PlatformException(
-        code: 'null-error',
-        message: 'Host platform returned null value for non-null return value.',
-      );
     } else {
-      return (pigeonVar_replyList[0] as int?)!;
+      return (pigeonVar_replyList[0] as int?);
     }
   }
 

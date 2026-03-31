@@ -106,13 +106,6 @@ void main() {
   });
 
   group('CameraSettings', () {
-    test('copyWith overrides only specified fields', () {
-      const original = CameraSettings(iso: 100, zoomRatio: 1.5);
-      final copy = original.copyWith(iso: 200);
-      expect(copy.iso, 200);
-      expect(copy.zoomRatio, 1.5); // unchanged
-    });
-
     test('toCam preserves all fields', () {
       const settings = CameraSettings(
         iso: 400,
@@ -121,8 +114,8 @@ void main() {
         zoomRatio: 2.0,
         afEnabled: false,
         awbLocked: true,
-        noiseReductionMode: 2,
-        edgeMode: 0,
+        noiseReductionMode: NoiseReductionMode.highQuality,
+        edgeMode: EdgeMode.off,
         evCompensation: -2,
       );
       final cam = settings.toCam();
@@ -132,8 +125,8 @@ void main() {
       expect(cam.zoomRatio, 2.0);
       expect(cam.afEnabled, false);
       expect(cam.awbLocked, true);
-      expect(cam.noiseReductionMode, 2);
-      expect(cam.edgeMode, 0);
+      expect(cam.noiseReductionMode, 2); // NoiseReductionMode.highQuality.index
+      expect(cam.edgeMode, 0);           // EdgeMode.off.index
       expect(cam.evCompensation, -2);
     });
   });

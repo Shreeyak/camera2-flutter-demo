@@ -1,12 +1,23 @@
 import 'messages.g.dart';
 
-// Private sentinel used by [CameraSettings.copyWith] to distinguish
-// "caller did not pass this argument" from "caller explicitly passed null".
-class _Unset {
-  const _Unset();
+/// Camera2 `CONTROL_NOISE_REDUCTION_MODE_*` values.
+/// Index matches the Camera2 integer constant directly.
+enum NoiseReductionMode {
+  off,           // 0
+  fast,          // 1
+  highQuality,   // 2
+  minimal,       // 3
+  zeroShutterLag, // 4
 }
 
-const _unset = _Unset();
+/// Camera2 `CONTROL_EDGE_MODE_*` values.
+/// Index matches the Camera2 integer constant directly.
+enum EdgeMode {
+  off,           // 0
+  fast,          // 1
+  highQuality,   // 2
+  zeroShutterLag, // 3
+}
 
 /// ISP-level camera settings mapped to per-request Camera2 CaptureRequest keys.
 /// All fields are nullable; null means "do not change / use current value."
@@ -41,11 +52,11 @@ class CameraSettings {
   /// true = lock auto white-balance.
   final bool? awbLocked;
 
-  /// Camera2 CONTROL_NOISE_REDUCTION_MODE_* constant.
-  final int? noiseReductionMode;
+  /// Noise reduction mode applied by Camera2.
+  final NoiseReductionMode? noiseReductionMode;
 
-  /// Camera2 CONTROL_EDGE_MODE_* constant.
-  final int? edgeMode;
+  /// Edge enhancement mode applied by Camera2.
+  final EdgeMode? edgeMode;
 
   /// Exposure compensation in AE steps.
   final int? evCompensation;
@@ -57,53 +68,9 @@ class CameraSettings {
         zoomRatio: zoomRatio,
         afEnabled: afEnabled,
         awbLocked: awbLocked,
-        noiseReductionMode: noiseReductionMode,
-        edgeMode: edgeMode,
+        noiseReductionMode: noiseReductionMode?.index,
+        edgeMode: edgeMode?.index,
         evCompensation: evCompensation,
-      );
-
-  /// Returns a copy with the given fields replaced.
-  ///
-  /// Pass `null` explicitly to reset a field to "auto" (unset).
-  /// Omitting a parameter preserves the current value.
-  ///
-  /// Example — reset ISO to auto while keeping other settings:
-  /// ```dart
-  /// settings.copyWith(iso: null)
-  /// ```
-  CameraSettings copyWith({
-    Object? iso = _unset,
-    Object? exposureTimeNs = _unset,
-    Object? focusDistanceDiopters = _unset,
-    Object? zoomRatio = _unset,
-    Object? afEnabled = _unset,
-    Object? awbLocked = _unset,
-    Object? noiseReductionMode = _unset,
-    Object? edgeMode = _unset,
-    Object? evCompensation = _unset,
-  }) =>
-      CameraSettings(
-        iso: identical(iso, _unset) ? this.iso : iso as int?,
-        exposureTimeNs: identical(exposureTimeNs, _unset)
-            ? this.exposureTimeNs
-            : exposureTimeNs as int?,
-        focusDistanceDiopters: identical(focusDistanceDiopters, _unset)
-            ? this.focusDistanceDiopters
-            : focusDistanceDiopters as double?,
-        zoomRatio:
-            identical(zoomRatio, _unset) ? this.zoomRatio : zoomRatio as double?,
-        afEnabled:
-            identical(afEnabled, _unset) ? this.afEnabled : afEnabled as bool?,
-        awbLocked:
-            identical(awbLocked, _unset) ? this.awbLocked : awbLocked as bool?,
-        noiseReductionMode: identical(noiseReductionMode, _unset)
-            ? this.noiseReductionMode
-            : noiseReductionMode as int?,
-        edgeMode:
-            identical(edgeMode, _unset) ? this.edgeMode : edgeMode as int?,
-        evCompensation: identical(evCompensation, _unset)
-            ? this.evCompensation
-            : evCompensation as int?,
       );
 }
 

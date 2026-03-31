@@ -73,8 +73,8 @@ class CambrianCamera {
   // Instance state
   // ---------------------------------------------------------------------------
 
-  /// Opaque handle identifying this camera in MethodChannel calls.
-  /// Also serves as the Flutter [Texture] widget's textureId.
+  /// Opaque handle identifying this camera in platform channel calls.
+  /// Also serves as the Flutter [Texture] widget's texture ID.
   final int _handle;
   final CameraHostApi _hostApi;
   final CameraCapabilities _capabilities;
@@ -105,7 +105,7 @@ class CambrianCamera {
     // Ensure Flutter→Dart callbacks are wired before we open.
     _ensureFlutterApiSetup();
 
-    // The handle returned by the platform is also used as the textureId.
+    // The handle returned by the platform is also used as the texture ID.
     final handle = await api.open(cameraId, settings?.toCam());
     final caps = await api.getCapabilities(handle);
 
@@ -123,10 +123,11 @@ class CambrianCamera {
   // Public API
   // ---------------------------------------------------------------------------
 
-  /// The Flutter [Texture] widget ID for displaying the camera preview.
+  /// Unique identifier for this camera instance.
   ///
-  /// This is the same value as the internal platform handle.
-  int get textureId => _handle;
+  /// Also used as the Flutter [Texture] widget's texture ID internally.
+  /// Prefer [buildPreview] over constructing a [Texture] widget manually.
+  int get id => _handle;
 
   /// Device capabilities (resolution list, ISO/exposure ranges, etc.).
   CameraCapabilities get capabilities => _capabilities;
@@ -172,11 +173,12 @@ class CambrianCamera {
   /// Does not interrupt the streaming pipeline.
   Future<String> takePicture() => _hostApi.takePicture(_handle);
 
-  /// Returns the native `IImagePipeline*` pointer as an int64.
+  /// Returns the native `IImagePipeline*` pointer as an int64, or null if the
+  /// pipeline is not yet initialized.
   ///
   /// Application C++ code can use this pointer to register consumer sinks
   /// via the `cambrian_camera_native.h` API.
-  Future<int> getNativePipelineHandle() =>
+  Future<int?> getNativePipelineHandle() =>
       _hostApi.getNativePipelineHandle(_handle);
 
   /// Returns a widget that displays the camera preview.

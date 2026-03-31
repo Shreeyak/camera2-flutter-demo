@@ -57,7 +57,7 @@ class CambrianCameraPreview extends StatelessWidget {
         // These match exactly what the C++ pipeline receives and renders.
         width: camera.capabilities.streamWidth.toDouble(),
         height: camera.capabilities.streamHeight.toDouble(),
-        child: Texture(textureId: camera.textureId),
+        child: Texture(textureId: camera.id),
       ),
     );
   }

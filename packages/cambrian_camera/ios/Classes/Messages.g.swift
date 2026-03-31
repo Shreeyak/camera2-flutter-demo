@@ -207,7 +207,7 @@ struct CamProcessingParams {
 
 /// Generated class from Pigeon that represents data sent in messages.
 struct CamCapabilities {
-  var supportedSizes: [CamSize?]
+  var supportedSizes: [CamSize]
   var isoMin: Int64
   var isoMax: Int64
   var exposureTimeMinNs: Int64
@@ -219,7 +219,6 @@ struct CamCapabilities {
   var evCompMin: Int64
   var evCompMax: Int64
   var evCompensationStep: Double
-  var supportsRgba8888: Bool
   var estimatedMemoryBytes: Int64
   /// Width of the YUV stream used by the C++ pipeline (pixels).
   var streamWidth: Int64
@@ -229,7 +228,7 @@ struct CamCapabilities {
 
   // swift-format-ignore: AlwaysUseLowerCamelCase
   static func fromList(_ pigeonVar_list: [Any?]) -> CamCapabilities? {
-    let supportedSizes = pigeonVar_list[0] as! [CamSize?]
+    let supportedSizes = pigeonVar_list[0] as! [CamSize]
     let isoMin = pigeonVar_list[1] as! Int64
     let isoMax = pigeonVar_list[2] as! Int64
     let exposureTimeMinNs = pigeonVar_list[3] as! Int64
@@ -241,10 +240,9 @@ struct CamCapabilities {
     let evCompMin = pigeonVar_list[9] as! Int64
     let evCompMax = pigeonVar_list[10] as! Int64
     let evCompensationStep = pigeonVar_list[11] as! Double
-    let supportsRgba8888 = pigeonVar_list[12] as! Bool
-    let estimatedMemoryBytes = pigeonVar_list[13] as! Int64
-    let streamWidth = pigeonVar_list[14] as! Int64
-    let streamHeight = pigeonVar_list[15] as! Int64
+    let estimatedMemoryBytes = pigeonVar_list[12] as! Int64
+    let streamWidth = pigeonVar_list[13] as! Int64
+    let streamHeight = pigeonVar_list[14] as! Int64
 
     return CamCapabilities(
       supportedSizes: supportedSizes,
@@ -259,7 +257,6 @@ struct CamCapabilities {
       evCompMin: evCompMin,
       evCompMax: evCompMax,
       evCompensationStep: evCompensationStep,
-      supportsRgba8888: supportsRgba8888,
       estimatedMemoryBytes: estimatedMemoryBytes,
       streamWidth: streamWidth,
       streamHeight: streamHeight
@@ -279,7 +276,6 @@ struct CamCapabilities {
       evCompMin,
       evCompMax,
       evCompensationStep,
-      supportsRgba8888,
       estimatedMemoryBytes,
       streamWidth,
       streamHeight,
@@ -405,7 +401,7 @@ protocol CameraHostApi {
   func updateSettings(handle: Int64, settings: CamSettings) throws
   func setProcessingParams(handle: Int64, params: CamProcessingParams) throws
   func takePicture(handle: Int64, completion: @escaping (Result<String, Error>) -> Void)
-  func getNativePipelineHandle(handle: Int64, completion: @escaping (Result<Int64, Error>) -> Void)
+  func getNativePipelineHandle(handle: Int64, completion: @escaping (Result<Int64?, Error>) -> Void)
   func close(handle: Int64, completion: @escaping (Result<Void, Error>) -> Void)
 }
 

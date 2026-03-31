@@ -88,13 +88,12 @@ class CamCapabilities {
     required this.evCompMin,
     required this.evCompMax,
     required this.evCompensationStep,
-    required this.supportsRgba8888,
     required this.estimatedMemoryBytes,
     required this.streamWidth,
     required this.streamHeight,
   });
 
-  List<CamSize?> supportedSizes;
+  List<CamSize> supportedSizes;
   int isoMin;
   int isoMax;
   int exposureTimeMinNs;
@@ -106,7 +105,6 @@ class CamCapabilities {
   int evCompMin;
   int evCompMax;
   double evCompensationStep;
-  bool supportsRgba8888;
   int estimatedMemoryBytes;
   /// Width of the YUV stream used by the C++ pipeline (pixels).
   int streamWidth;
@@ -153,7 +151,7 @@ abstract class CameraHostApi {
   String takePicture(int handle);
 
   @async
-  int getNativePipelineHandle(int handle);
+  int? getNativePipelineHandle(int handle);
 
   @async
   void close(int handle);

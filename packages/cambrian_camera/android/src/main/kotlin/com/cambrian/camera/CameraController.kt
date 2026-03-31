@@ -412,7 +412,6 @@ class CameraController(
                     evCompMin = evRange?.lower?.toLong() ?: -6L,
                     evCompMax = evRange?.upper?.toLong() ?: 6L,
                     evCompensationStep = evStep?.toDouble() ?: 0.5,
-                    supportsRgba8888 = false,
                     estimatedMemoryBytes = estimatedBytes,
                     streamWidth = streamWidth.toLong(),
                     streamHeight = streamHeight.toLong(),
@@ -542,15 +541,13 @@ class CameraController(
     }
 
     /**
-     * Returns the opaque native pipeline pointer for direct JNI interop.
+     * Returns the opaque native pipeline pointer for direct JNI interop, or null if
+     * the pipeline has not yet been initialised (i.e. before [open] completes).
      *
-     * Returns 0 if the native pipeline has not yet been initialised (i.e. before [open]
-     * completes successfully).
-     *
-     * @param callback Invoked with the native pointer (may be 0).
+     * @param callback Invoked with the native pointer, or null when not ready.
      */
-    fun getNativePipelineHandle(callback: (Result<Long>) -> Unit) {
-        callback(Result.success(nativePipelinePtr))
+    fun getNativePipelineHandle(callback: (Result<Long?>) -> Unit) {
+        callback(Result.success(if (nativePipelinePtr != 0L) nativePipelinePtr else null))
     }
 
     /**

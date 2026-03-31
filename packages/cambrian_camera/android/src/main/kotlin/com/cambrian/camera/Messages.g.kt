@@ -163,7 +163,7 @@ data class CamProcessingParams (
 
 /** Generated class from Pigeon that represents data sent in messages. */
 data class CamCapabilities (
-  val supportedSizes: List<CamSize?>,
+  val supportedSizes: List<CamSize>,
   val isoMin: Long,
   val isoMax: Long,
   val exposureTimeMinNs: Long,
@@ -175,7 +175,6 @@ data class CamCapabilities (
   val evCompMin: Long,
   val evCompMax: Long,
   val evCompensationStep: Double,
-  val supportsRgba8888: Boolean,
   val estimatedMemoryBytes: Long,
   /** Width of the YUV stream used by the C++ pipeline (pixels). */
   val streamWidth: Long,
@@ -185,7 +184,7 @@ data class CamCapabilities (
  {
   companion object {
     fun fromList(pigeonVar_list: List<Any?>): CamCapabilities {
-      val supportedSizes = pigeonVar_list[0] as List<CamSize?>
+      val supportedSizes = pigeonVar_list[0] as List<CamSize>
       val isoMin = pigeonVar_list[1] as Long
       val isoMax = pigeonVar_list[2] as Long
       val exposureTimeMinNs = pigeonVar_list[3] as Long
@@ -197,11 +196,10 @@ data class CamCapabilities (
       val evCompMin = pigeonVar_list[9] as Long
       val evCompMax = pigeonVar_list[10] as Long
       val evCompensationStep = pigeonVar_list[11] as Double
-      val supportsRgba8888 = pigeonVar_list[12] as Boolean
-      val estimatedMemoryBytes = pigeonVar_list[13] as Long
-      val streamWidth = pigeonVar_list[14] as Long
-      val streamHeight = pigeonVar_list[15] as Long
-      return CamCapabilities(supportedSizes, isoMin, isoMax, exposureTimeMinNs, exposureTimeMaxNs, focusMin, focusMax, zoomMin, zoomMax, evCompMin, evCompMax, evCompensationStep, supportsRgba8888, estimatedMemoryBytes, streamWidth, streamHeight)
+      val estimatedMemoryBytes = pigeonVar_list[12] as Long
+      val streamWidth = pigeonVar_list[13] as Long
+      val streamHeight = pigeonVar_list[14] as Long
+      return CamCapabilities(supportedSizes, isoMin, isoMax, exposureTimeMinNs, exposureTimeMaxNs, focusMin, focusMax, zoomMin, zoomMax, evCompMin, evCompMax, evCompensationStep, estimatedMemoryBytes, streamWidth, streamHeight)
     }
   }
   fun toList(): List<Any?> {
@@ -218,7 +216,6 @@ data class CamCapabilities (
       evCompMin,
       evCompMax,
       evCompensationStep,
-      supportsRgba8888,
       estimatedMemoryBytes,
       streamWidth,
       streamHeight,
@@ -343,7 +340,7 @@ interface CameraHostApi {
   fun updateSettings(handle: Long, settings: CamSettings)
   fun setProcessingParams(handle: Long, params: CamProcessingParams)
   fun takePicture(handle: Long, callback: (Result<String>) -> Unit)
-  fun getNativePipelineHandle(handle: Long, callback: (Result<Long>) -> Unit)
+  fun getNativePipelineHandle(handle: Long, callback: (Result<Long?>) -> Unit)
   fun close(handle: Long, callback: (Result<Unit>) -> Unit)
 
   companion object {
@@ -460,7 +457,7 @@ interface CameraHostApi {
           channel.setMessageHandler { message, reply ->
             val args = message as List<Any?>
             val handleArg = args[0] as Long
-            api.getNativePipelineHandle(handleArg) { result: Result<Long> ->
+            api.getNativePipelineHandle(handleArg) { result: Result<Long?> ->
               val error = result.exceptionOrNull()
               if (error != null) {
                 reply.reply(wrapError(error))
