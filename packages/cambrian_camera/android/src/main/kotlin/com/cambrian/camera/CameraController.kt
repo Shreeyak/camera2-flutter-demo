@@ -53,6 +53,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 class CameraController(
     private val context: Context,
     private val surfaceProducer: TextureRegistry.SurfaceProducer,
+    private val rawSurfaceProducer: TextureRegistry.SurfaceProducer,
     private val flutterApi: CameraFlutterApi,
     val handle: Long,
 ) {
@@ -78,10 +79,19 @@ class CameraController(
         @JvmStatic external fun nativeRelease(pipelinePtr: Long)
 
         /**
-         * Notifies the native pipeline of a new preview [Surface] (e.g. after a surface
+         * Notifies the native pipeline of a new processed-preview [Surface] (e.g. after a surface
          * recreation event from [TextureRegistry.SurfaceProducer.Callback]).
          */
         @JvmStatic external fun nativeSetPreviewWindow(
+            pipelinePtr: Long,
+            previewSurface: Surface?,
+        )
+
+        /**
+         * Attaches or replaces the raw (pre-processing) preview [Surface].
+         * The raw surface receives BGR frames before saturation or other processing is applied.
+         */
+        @JvmStatic external fun nativeSetRawPreviewWindow(
             pipelinePtr: Long,
             previewSurface: Surface?,
         )
@@ -243,7 +253,6 @@ class CameraController(
         surfaceProducer.setCallback(
             object : TextureRegistry.SurfaceProducer.Callback {
                 override fun onSurfaceAvailable() {
-                    // Surface was recreated — resize and reconnect native rendering.
                     val ptr = nativePipelinePtr
                     if (ptr == 0L) return
                     val width = previewWidth
@@ -251,18 +260,31 @@ class CameraController(
                     if (width > 0 && height > 0) {
                         surfaceProducer.setSize(width, height)
                     }
-                    val surface = surfaceProducer.getSurface()
-                    nativeSetPreviewWindow(ptr, surface)
-                    // No Camera2 session rebind needed: previewSurface is not a session output,
-                    // so only the C++ pipeline reference needs updating (done above).
+                    nativeSetPreviewWindow(ptr, surfaceProducer.getSurface())
                 }
 
                 override fun onSurfaceCleanup() {
-                    // Surface is going away; pause native rendering until recreated.
                     val ptr = nativePipelinePtr
-                    if (ptr != 0L) {
-                        nativeSetPreviewWindow(ptr, null)
+                    if (ptr != 0L) nativeSetPreviewWindow(ptr, null)
+                }
+            },
+        )
+        rawSurfaceProducer.setCallback(
+            object : TextureRegistry.SurfaceProducer.Callback {
+                override fun onSurfaceAvailable() {
+                    val ptr = nativePipelinePtr
+                    if (ptr == 0L) return
+                    val width = previewWidth
+                    val height = previewHeight
+                    if (width > 0 && height > 0) {
+                        rawSurfaceProducer.setSize(width, height)
                     }
+                    nativeSetRawPreviewWindow(ptr, rawSurfaceProducer.getSurface())
+                }
+
+                override fun onSurfaceCleanup() {
+                    val ptr = nativePipelinePtr
+                    if (ptr != 0L) nativeSetRawPreviewWindow(ptr, null)
                 }
             },
         )
@@ -473,6 +495,7 @@ class CameraController(
                     estimatedMemoryBytes = estimatedBytes,
                     streamWidth = streamWidth.toLong(),
                     streamHeight = streamHeight.toLong(),
+                    rawTextureId = rawSurfaceProducer.id(),
                 )
             callback(Result.success(caps))
         } catch (e: CameraAccessException) {
@@ -781,6 +804,7 @@ class CameraController(
         previewWidth = streamWidth
         previewHeight = streamHeight
         surfaceProducer.setSize(streamWidth, streamHeight)
+        rawSurfaceProducer.setSize(streamWidth, streamHeight)
         if (CambrianCameraConfig.verboseDiagnostics) {
             android.util.Log.d(
                 "CambrianCamera",
@@ -797,9 +821,12 @@ class CameraController(
         val jpegReader = ImageReader.newInstance(streamWidth, streamHeight, ImageFormat.JPEG, 1)
         jpegImageReader = jpegReader
 
-        // Initialise native pipeline with the current SurfaceProducer surface and stream dims.
+        // Initialise native pipeline with the processed-preview surface and stream dims.
         val previewSurface = surfaceProducer.getSurface()
         nativePipelinePtr = nativeInit(previewSurface, streamWidth, streamHeight)
+
+        // Wire the raw (pre-processing) preview surface.
+        nativeSetRawPreviewWindow(nativePipelinePtr, rawSurfaceProducer.getSurface())
 
         // Deliver YUV frames to the C++ pipeline for post-processing and preview output.
         streamReader.setOnImageAvailableListener({ reader ->

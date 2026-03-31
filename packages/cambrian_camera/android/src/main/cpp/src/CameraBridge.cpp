@@ -125,6 +125,40 @@ Java_com_cambrian_camera_CameraController_nativeSetPreviewWindow(
 }
 
 // ---------------------------------------------------------------------------
+// nativeSetRawPreviewWindow
+//
+// Called once after nativeInit to attach the raw (pre-processing) preview surface.
+// May also be called on surface recreation events.
+//
+// @param pipelinePtr      Handle returned by nativeInit.
+// @param previewSurface   Android Surface for the raw preview, or null to stop rendering.
+// ---------------------------------------------------------------------------
+JNIEXPORT void JNICALL
+Java_com_cambrian_camera_CameraController_nativeSetRawPreviewWindow(
+        JNIEnv* env, jclass /*clazz*/,
+        jlong pipelinePtr, jobject previewSurface) {
+    if (!pipelinePtr) {
+        LOGE("nativeSetRawPreviewWindow: null pipeline handle");
+        return;
+    }
+
+    ANativeWindow* window = nullptr;
+    if (previewSurface) {
+        window = ANativeWindow_fromSurface(env, previewSurface);
+        if (!window) {
+            LOGE("nativeSetRawPreviewWindow: ANativeWindow_fromSurface returned null");
+            return;
+        }
+    }
+
+    pipelineFromHandle(pipelinePtr)->setRawPreviewWindow(window);
+
+    if (window) {
+        ANativeWindow_release(window);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // nativeDeliverYuv
 //
 // Copies one YUV_420_888 frame into the C++ input ring and returns immediately.

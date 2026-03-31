@@ -66,8 +66,11 @@ public:
     ImagePipeline(const ImagePipeline&) = delete;
     ImagePipeline& operator=(const ImagePipeline&) = delete;
 
-    /// Replace the preview surface (e.g. after Flutter PlatformView recreation).
+    /// Replace the processed-preview surface (e.g. after Flutter surface recreation).
     void setPreviewWindow(ANativeWindow* window);
+
+    /// Replace the raw-preview surface — receives BGR frames before any processing.
+    void setRawPreviewWindow(ANativeWindow* window);
 
     /// Push a YUV frame into the input ring. Returns immediately — the caller may
     /// close the camera Image right after this call returns.
@@ -86,13 +89,16 @@ public:
     void removeSink(const std::string& name) override;
 
 private:
-    // -- Preview window ----------------------------------------------------------
+    // -- Preview windows ---------------------------------------------------------
     std::mutex windowMu_;
-    ANativeWindow* previewWindow_ = nullptr;
-    int lastWidth_  = 0;
-    int lastHeight_ = 0;
-    cv::Mat previewRgba_;  ///< Pre-allocated RGBA buffer; reused each frame to avoid
-                           ///< per-frame 32 MB allocation at 4K.
+    ANativeWindow* previewWindow_    = nullptr;  ///< processed output (post-saturation)
+    ANativeWindow* rawPreviewWindow_ = nullptr;  ///< raw output (pre-processing)
+    int lastWidth_     = 0;
+    int lastHeight_    = 0;
+    int rawLastWidth_  = 0;
+    int rawLastHeight_ = 0;
+    cv::Mat previewRgba_;     ///< RGBA scratch buffer for processed preview; reused each frame
+    cv::Mat rawPreviewRgba_;  ///< RGBA scratch buffer for raw preview; reused each frame
 
     // -- Processing params -------------------------------------------------------
     std::mutex paramsMu_;
@@ -123,6 +129,7 @@ private:
 
     // -- Helpers -----------------------------------------------------------------
     void blitToPreview(const cv::Mat& rgba);
+    void blitToRawPreview(const cv::Mat& rgba);
 };
 
 } // namespace cam

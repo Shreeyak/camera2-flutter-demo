@@ -281,6 +281,8 @@ struct CamCapabilities {
   var streamWidth: Int64
   /// Height of the YUV stream used by the C++ pipeline (pixels).
   var streamHeight: Int64
+  /// Flutter texture ID for the raw (pre-processing) preview.
+  var rawTextureId: Int64
 
 
   // swift-format-ignore: AlwaysUseLowerCamelCase
@@ -300,6 +302,7 @@ struct CamCapabilities {
     let estimatedMemoryBytes = pigeonVar_list[12] as! Int64
     let streamWidth = pigeonVar_list[13] as! Int64
     let streamHeight = pigeonVar_list[14] as! Int64
+    let rawTextureId = pigeonVar_list[15] as! Int64
 
     return CamCapabilities(
       supportedSizes: supportedSizes,
@@ -316,7 +319,8 @@ struct CamCapabilities {
       evCompensationStep: evCompensationStep,
       estimatedMemoryBytes: estimatedMemoryBytes,
       streamWidth: streamWidth,
-      streamHeight: streamHeight
+      streamHeight: streamHeight,
+      rawTextureId: rawTextureId
     )
   }
   func toList() -> [Any?] {
@@ -336,6 +340,7 @@ struct CamCapabilities {
       estimatedMemoryBytes,
       streamWidth,
       streamHeight,
+      rawTextureId,
     ]
   }
 }
@@ -680,7 +685,7 @@ class CameraFlutterApi: CameraFlutterApiProtocol {
       if listResponse.count > 1 {
         let code: String = listResponse[0] as! String
         let message: String? = nilOrValue(listResponse[1])
-        let details: Any? = listResponse[2]
+        let details: String? = nilOrValue(listResponse[2])
         completion(.failure(PigeonError(code: code, message: message, details: details)))
       } else {
         completion(.success(Void()))
@@ -698,7 +703,7 @@ class CameraFlutterApi: CameraFlutterApiProtocol {
       if listResponse.count > 1 {
         let code: String = listResponse[0] as! String
         let message: String? = nilOrValue(listResponse[1])
-        let details: Any? = listResponse[2]
+        let details: String? = nilOrValue(listResponse[2])
         completion(.failure(PigeonError(code: code, message: message, details: details)))
       } else {
         completion(.success(Void()))
@@ -716,7 +721,7 @@ class CameraFlutterApi: CameraFlutterApiProtocol {
       if listResponse.count > 1 {
         let code: String = listResponse[0] as! String
         let message: String? = nilOrValue(listResponse[1])
-        let details: Any? = listResponse[2]
+        let details: String? = nilOrValue(listResponse[2])
         completion(.failure(PigeonError(code: code, message: message, details: details)))
       } else {
         completion(.success(Void()))

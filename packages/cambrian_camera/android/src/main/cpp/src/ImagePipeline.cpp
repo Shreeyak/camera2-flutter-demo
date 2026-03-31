@@ -60,8 +60,12 @@ ImagePipeline::~ImagePipeline() {
     if (previewWindow_) {
         ANativeWindow_release(previewWindow_);
         previewWindow_ = nullptr;
-        LOGD("ImagePipeline destroyed");
     }
+    if (rawPreviewWindow_) {
+        ANativeWindow_release(rawPreviewWindow_);
+        rawPreviewWindow_ = nullptr;
+    }
+    LOGD("ImagePipeline destroyed");
 }
 
 // ---------------------------------------------------------------------------
@@ -82,6 +86,23 @@ void ImagePipeline::setPreviewWindow(ANativeWindow* window) {
         LOGD("ImagePipeline: preview window updated, window=%p", previewWindow_);
     } else {
         LOGD("ImagePipeline: preview window cleared");
+    }
+}
+
+void ImagePipeline::setRawPreviewWindow(ANativeWindow* window) {
+    std::lock_guard<std::mutex> lock(windowMu_);
+    if (rawPreviewWindow_) {
+        ANativeWindow_release(rawPreviewWindow_);
+        rawPreviewWindow_ = nullptr;
+    }
+    rawPreviewWindow_ = window;
+    rawLastWidth_  = 0;
+    rawLastHeight_ = 0;
+    if (rawPreviewWindow_) {
+        ANativeWindow_acquire(rawPreviewWindow_);
+        LOGD("ImagePipeline: raw preview window updated, window=%p", rawPreviewWindow_);
+    } else {
+        LOGD("ImagePipeline: raw preview window cleared");
     }
 }
 
@@ -121,6 +142,43 @@ void ImagePipeline::blitToPreview(const cv::Mat& rgba) {
     }
 
     ANativeWindow_unlockAndPost(previewWindow_);
+}
+
+void ImagePipeline::blitToRawPreview(const cv::Mat& rgba) {
+    std::lock_guard<std::mutex> lock(windowMu_);
+    if (!rawPreviewWindow_) return;
+
+    const int width  = rgba.cols;
+    const int height = rgba.rows;
+
+    if (width != rawLastWidth_ || height != rawLastHeight_) {
+        if (ANativeWindow_setBuffersGeometry(
+                rawPreviewWindow_, width, height, WINDOW_FORMAT_RGBA_8888) != 0) {
+            LOGE("blitToRawPreview: setBuffersGeometry failed");
+            return;
+        }
+        rawLastWidth_  = width;
+        rawLastHeight_ = height;
+    }
+
+    ANativeWindow_Buffer buf;
+    if (ANativeWindow_lock(rawPreviewWindow_, &buf, nullptr) != 0) {
+        LOGE("blitToRawPreview: ANativeWindow_lock failed");
+        return;
+    }
+
+    const int dstStride = buf.stride * 4;
+    const int safeH = std::min(height, static_cast<int>(buf.height));
+    const int safeW = std::min(width,  static_cast<int>(buf.width));
+    auto* dst = reinterpret_cast<uint8_t*>(buf.bits);
+
+    for (int row = 0; row < safeH; ++row) {
+        memcpy(dst + row * dstStride,
+               rgba.data + row * rgba.step,
+               static_cast<size_t>(safeW) * 4);
+    }
+
+    ANativeWindow_unlockAndPost(rawPreviewWindow_);
 }
 
 // ---------------------------------------------------------------------------
@@ -190,6 +248,10 @@ void ImagePipeline::processingLoop() {
                              : cv::COLOR_YUV2BGR_NV12;
             cv::cvtColorTwoPlane(y_mat, uv_mat, bgr, code);
         }
+
+        // Raw preview: blit before any processing so it shows the unmodified BGR.
+        cv::cvtColor(bgr, rawPreviewRgba_, cv::COLOR_BGR2RGBA);
+        blitToRawPreview(rawPreviewRgba_);
 
         // Apply saturation (HSV S-channel scaling; identity when saturation ≈ 1).
         if (std::abs(p.saturation - 1.0f) > 1e-4f) {

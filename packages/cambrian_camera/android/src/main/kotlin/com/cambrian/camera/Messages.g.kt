@@ -241,7 +241,9 @@ data class CamCapabilities (
   /** Width of the YUV stream used by the C++ pipeline (pixels). */
   val streamWidth: Long,
   /** Height of the YUV stream used by the C++ pipeline (pixels). */
-  val streamHeight: Long
+  val streamHeight: Long,
+  /** Flutter texture ID for the raw (pre-processing) preview. */
+  val rawTextureId: Long
 )
  {
   companion object {
@@ -261,7 +263,8 @@ data class CamCapabilities (
       val estimatedMemoryBytes = pigeonVar_list[12] as Long
       val streamWidth = pigeonVar_list[13] as Long
       val streamHeight = pigeonVar_list[14] as Long
-      return CamCapabilities(supportedSizes, isoMin, isoMax, exposureTimeMinNs, exposureTimeMaxNs, focusMin, focusMax, zoomMin, zoomMax, evCompMin, evCompMax, evCompensationStep, estimatedMemoryBytes, streamWidth, streamHeight)
+      val rawTextureId = pigeonVar_list[15] as Long
+      return CamCapabilities(supportedSizes, isoMin, isoMax, exposureTimeMinNs, exposureTimeMaxNs, focusMin, focusMax, zoomMin, zoomMax, evCompMin, evCompMax, evCompensationStep, estimatedMemoryBytes, streamWidth, streamHeight, rawTextureId)
     }
   }
   fun toList(): List<Any?> {
@@ -281,6 +284,7 @@ data class CamCapabilities (
       estimatedMemoryBytes,
       streamWidth,
       streamHeight,
+      rawTextureId,
     )
   }
 }

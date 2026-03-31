@@ -95,6 +95,8 @@ class _CameraScreenState extends State<CameraScreen> {
     }
     try {
       final camera = await CambrianCamera.open(settings: _kInitialSettings);
+      // High saturation so the processed pane is visually distinct from the raw pane.
+      await camera.setProcessingParams(ProcessingParams(saturation: 3.0));
       final caps = camera.capabilities;
       final ranges = CameraRanges(
         isoMin: caps.isoMin,
@@ -329,13 +331,11 @@ class _CameraScreenState extends State<CameraScreen> {
           bottom: false,
           child: Column(
             children: [
-              // Two side-by-side previews demonstrate the future dual-consumer
-              // architecture: full-res stream on the left, low-res stream on
-              // the right. Both share the same camera session for now.
+              // Two preview panes side by side: raw (left) vs processed (right).
               Expanded(
                 child: Row(
                   children: [
-                    Expanded(child: _buildCameraPreview()),
+                    Expanded(child: _buildRawPreview()),
                     Expanded(child: _buildCameraPreview()),
                   ],
                 ),
@@ -402,12 +402,31 @@ class _CameraScreenState extends State<CameraScreen> {
   Widget _buildCameraPreview() {
     final camera = _camera;
     if (camera == null) {
-      // Camera not yet opened — show black placeholder.
       return const ColoredBox(color: Colors.black);
     }
     return camera.buildPreview(
       fit: BoxFit.cover,
       placeholder: const ColoredBox(color: Colors.black),
+    );
+  }
+
+  /// Raw preview: direct YUV→BGR output before any post-processing.
+  Widget _buildRawPreview() {
+    final camera = _camera;
+    if (camera == null) {
+      return const ColoredBox(color: Colors.black);
+    }
+    final caps = camera.capabilities;
+    if (caps.rawTextureId == 0) {
+      return const ColoredBox(color: Colors.black);
+    }
+    return FittedBox(
+      fit: BoxFit.cover,
+      child: SizedBox(
+        width: caps.streamWidth.toDouble(),
+        height: caps.streamHeight.toDouble(),
+        child: Texture(textureId: caps.rawTextureId),
+      ),
     );
   }
 }

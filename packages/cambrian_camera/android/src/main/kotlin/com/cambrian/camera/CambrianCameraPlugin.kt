@@ -20,6 +20,7 @@ import io.flutter.view.TextureRegistry
  */
 data class CameraSession(
     val producer: TextureRegistry.SurfaceProducer,
+    val rawProducer: TextureRegistry.SurfaceProducer,
     val controller: CameraController,
 )
 
@@ -89,6 +90,7 @@ class CambrianCameraPlugin : FlutterPlugin, ActivityAware, CameraHostApi {
         sessions.values.forEach { session ->
             try { session.controller.release() } catch (_: Exception) {}
             try { session.producer.release() } catch (_: Exception) {}
+            try { session.rawProducer.release() } catch (_: Exception) {}
         }
         sessions.clear()
         flutterApi = null
@@ -147,17 +149,19 @@ class CambrianCameraPlugin : FlutterPlugin, ActivityAware, CameraHostApi {
         }
 
         val producer = registry.createSurfaceProducer()
+        val rawProducer = registry.createSurfaceProducer()
         val handle = producer.id()
-        val controller = CameraController(ctx, producer, api, handle)
+        val controller = CameraController(ctx, producer, rawProducer, api, handle)
 
         // Register the session immediately so that close() can tear it down even if open()
         // hasn't returned yet.  On failure, remove the session and release resources.
-        sessions[handle] = CameraSession(producer, controller)
+        sessions[handle] = CameraSession(producer, rawProducer, controller)
         controller.open(cameraId, settings) { result ->
             if (result.isFailure) {
                 sessions.remove(handle)
                 try { controller.release() } catch (_: Exception) {}
                 try { producer.release() } catch (_: Exception) {}
+                try { rawProducer.release() } catch (_: Exception) {}
             }
             callback(result)
         }
@@ -248,6 +252,7 @@ class CambrianCameraPlugin : FlutterPlugin, ActivityAware, CameraHostApi {
         }
         session.controller.close { result ->
             session.producer.release()
+            session.rawProducer.release()
             callback(result)
         }
     }
