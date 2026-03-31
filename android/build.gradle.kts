@@ -22,3 +22,8 @@ subprojects {
 tasks.register<Delete>("clean") {
     delete(rootProject.layout.buildDirectory)
 }
+
+// Allow kotlin-language-server to find a `classes` task
+tasks.register("classes") {
+    dependsOn(":app:compileDebugKotlin")
+}

@@ -14,6 +14,8 @@ import android.hardware.camera2.CameraManager
 import android.hardware.camera2.CaptureRequest
 import android.hardware.camera2.CaptureResult
 import android.hardware.camera2.TotalCaptureResult
+import android.hardware.camera2.params.OutputConfiguration
+import android.hardware.camera2.params.SessionConfiguration
 import android.hardware.camera2.params.StreamConfigurationMap
 import android.media.Image
 import android.media.ImageReader
@@ -259,22 +261,33 @@ class CameraController(
         emitState("opening")
         setState(State.OPENING)
 
+        // Guard against Camera2 firing both onDisconnected and onError for the same
+        // open attempt — Pigeon reply channels accept exactly one reply per call.
+        var replied = false
+        val safeCallback: (Result<Long>) -> Unit = { result ->
+            if (!replied) {
+                replied = true
+                callback(result)
+            }
+        }
+
         try {
             openLock.acquire()
         } catch (e: InterruptedException) {
-            callback(Result.failure(FlutterError("interrupted", "Open interrupted", null)))
+            safeCallback(Result.failure(FlutterError("interrupted", "Open interrupted", null)))
             return
         }
 
         try {
             cameraManager.openCamera(
                 id,
+                { command -> backgroundHandler.post(command) },
                 object : CameraDevice.StateCallback() {
                     override fun onOpened(camera: CameraDevice) {
                         openLock.release()
                         cameraDevice = camera
                         retryCount = 0 // Reset backoff counter on successful open.
-                        startCaptureSession(callback)
+                        startCaptureSession(safeCallback)
                     }
 
                     override fun onDisconnected(camera: CameraDevice) {
@@ -283,7 +296,7 @@ class CameraController(
                         cameraDevice = null
                         // Non-fatal — attempt recovery.
                         handleNonFatalError("camera_disconnected", "Camera disconnected unexpectedly")
-                        mainHandler.post { callback(Result.failure(FlutterError("camera_disconnected", "Camera disconnected", null))) }
+                        mainHandler.post { safeCallback(Result.failure(FlutterError("camera_disconnected", "Camera disconnected", null))) }
                     }
 
                     override fun onError(
@@ -301,10 +314,9 @@ class CameraController(
                         } else {
                             handleNonFatalError(code, message)
                         }
-                        mainHandler.post { callback(Result.failure(FlutterError(code, message, null))) }
+                        mainHandler.post { safeCallback(Result.failure(FlutterError(code, message, null))) }
                     }
                 },
-                backgroundHandler,
             )
         } catch (e: CameraAccessException) {
             openLock.release()
@@ -316,11 +328,11 @@ class CameraController(
             } else {
                 handleNonFatalError(code, message)
             }
-            callback(Result.failure(FlutterError(code, message, null)))
+            safeCallback(Result.failure(FlutterError(code, message, null)))
         } catch (e: SecurityException) {
             openLock.release()
             handleFatalError("permission_denied", e.message ?: "SecurityException")
-            callback(Result.failure(FlutterError("permission_denied", e.message, null)))
+            safeCallback(Result.failure(FlutterError("permission_denied", e.message, null)))
         }
     }
 
@@ -681,49 +693,51 @@ class CameraController(
         val previewTarget = if (supportsRgba) streamReader.surface else previewSurface
         repeatingTargetSurface = previewTarget
 
+        val outputs = surfaces.map { OutputConfiguration(it) }
         device.createCaptureSession(
-            surfaces,
-            object : CameraCaptureSession.StateCallback() {
-                override fun onConfigured(session: CameraCaptureSession) {
-                    captureSession = session
-
-                    try {
-                        val settings = pendingSettings
-                        val request =
-                            if (settings != null) {
-                                buildCaptureRequest(device, previewTarget, settings)
-                            } else {
-                                buildDefaultCaptureRequest(device, previewTarget)
+            SessionConfiguration(
+                SessionConfiguration.SESSION_REGULAR,
+                outputs,
+                { command -> backgroundHandler.post(command) },
+                object : CameraCaptureSession.StateCallback() {
+                    override fun onConfigured(session: CameraCaptureSession) {
+                        captureSession = session
+                        try {
+                            val settings = pendingSettings
+                            val request =
+                                if (settings != null) {
+                                    buildCaptureRequest(device, previewTarget, settings)
+                                } else {
+                                    buildDefaultCaptureRequest(device, previewTarget)
+                                }
+                            repeatingRequest = request
+                            if (VERBOSE_DIAGNOSTICS) {
+                                android.util.Log.d(
+                                    "CambrianCamera",
+                                    "setRepeatingRequest target=${describeTargetSurface(previewTarget)} " +
+                                        "initialIso=${settings?.iso ?: "auto"} initialExposureNs=${settings?.exposureTimeNs ?: "auto"}",
+                                )
                             }
-                        repeatingRequest = request
-                        if (VERBOSE_DIAGNOSTICS) {
-                            android.util.Log.d(
-                                "CambrianCamera",
-                                "setRepeatingRequest target=${describeTargetSurface(previewTarget)} " +
-                                    "initialIso=${settings?.iso ?: "auto"} initialExposureNs=${settings?.exposureTimeNs ?: "auto"}",
+                            session.setRepeatingRequest(request, repeatingCaptureCallback, backgroundHandler)
+                            setState(State.STREAMING)
+                            emitState("streaming")
+                            mainHandler.post { openCallback(Result.success(handle)) }
+                        } catch (e: CameraAccessException) {
+                            handleNonFatalError("camera_access_error", e.message ?: "CameraAccessException")
+                            mainHandler.post { openCallback(Result.failure(FlutterError("camera_access_error", e.message, null))) }
+                        }
+                    }
+
+                    override fun onConfigureFailed(session: CameraCaptureSession) {
+                        handleNonFatalError("configure_failed", "CaptureSession configuration failed")
+                        mainHandler.post {
+                            openCallback(
+                                Result.failure(FlutterError("configure_failed", "Session configuration failed", null)),
                             )
                         }
-                        session.setRepeatingRequest(request, repeatingCaptureCallback, backgroundHandler)
-
-                        setState(State.STREAMING)
-                        emitState("streaming")
-                        mainHandler.post { openCallback(Result.success(handle)) }
-                    } catch (e: CameraAccessException) {
-                        handleNonFatalError("camera_access_error", e.message ?: "CameraAccessException")
-                        mainHandler.post { openCallback(Result.failure(FlutterError("camera_access_error", e.message, null))) }
                     }
-                }
-
-                override fun onConfigureFailed(session: CameraCaptureSession) {
-                    handleNonFatalError("configure_failed", "CaptureSession configuration failed")
-                    mainHandler.post {
-                        openCallback(
-                            Result.failure(FlutterError("configure_failed", "Session configuration failed", null)),
-                        )
-                    }
-                }
-            },
-            backgroundHandler,
+                },
+            ),
         )
     }
 
@@ -777,7 +791,7 @@ class CameraController(
         surface: Surface,
     ): CaptureRequest =
         device
-            .createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW)
+            .createCaptureRequest(CameraDevice.TEMPLATE_ZERO_SHUTTER_LAG)
             .apply {
                 addTarget(surface)
                 set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
@@ -795,7 +809,7 @@ class CameraController(
         settings: CamSettings,
     ): CaptureRequest =
         device
-            .createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW)
+            .createCaptureRequest(CameraDevice.TEMPLATE_ZERO_SHUTTER_LAG)
             .apply {
                 addTarget(surface)
                 set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
@@ -906,38 +920,42 @@ class CameraController(
         if (VERBOSE_DIAGNOSTICS) {
             android.util.Log.d("CambrianCamera", "Rebinding YUV preview surface via createCaptureSession")
         }
+        val outputs = surfaces.map { OutputConfiguration(it) }
         device.createCaptureSession(
-            surfaces,
-            object : CameraCaptureSession.StateCallback() {
-                override fun onConfigured(session: CameraCaptureSession) {
-                    captureSession = session
-                    try {
-                        val settings = pendingSettings
-                        val request =
-                            if (settings != null) {
-                                buildCaptureRequest(device, previewSurface, settings)
-                            } else {
-                                buildDefaultCaptureRequest(device, previewSurface)
+            SessionConfiguration(
+                SessionConfiguration.SESSION_REGULAR,
+                outputs,
+                { command -> backgroundHandler.post(command) },
+                object : CameraCaptureSession.StateCallback() {
+                    override fun onConfigured(session: CameraCaptureSession) {
+                        captureSession = session
+                        try {
+                            val settings = pendingSettings
+                            val request =
+                                if (settings != null) {
+                                    buildCaptureRequest(device, previewSurface, settings)
+                                } else {
+                                    buildDefaultCaptureRequest(device, previewSurface)
+                                }
+                            repeatingTargetSurface = previewSurface
+                            repeatingRequest = request
+                            session.setRepeatingRequest(request, repeatingCaptureCallback, backgroundHandler)
+                            if (VERBOSE_DIAGNOSTICS) {
+                                android.util.Log.d(
+                                    "CambrianCamera",
+                                    "YUV preview rebind complete target=${describeTargetSurface(previewSurface)}",
+                                )
                             }
-                        repeatingTargetSurface = previewSurface
-                        repeatingRequest = request
-                        session.setRepeatingRequest(request, repeatingCaptureCallback, backgroundHandler)
-                        if (VERBOSE_DIAGNOSTICS) {
-                            android.util.Log.d(
-                                "CambrianCamera",
-                                "YUV preview rebind complete target=${describeTargetSurface(previewSurface)}",
-                            )
+                        } catch (e: CameraAccessException) {
+                            handleNonFatalError("camera_access_error", e.message ?: "CameraAccessException")
                         }
-                    } catch (e: CameraAccessException) {
-                        handleNonFatalError("camera_access_error", e.message ?: "CameraAccessException")
                     }
-                }
 
-                override fun onConfigureFailed(session: CameraCaptureSession) {
-                    handleNonFatalError("configure_failed", "CaptureSession rebind failed")
-                }
-            },
-            backgroundHandler,
+                    override fun onConfigureFailed(session: CameraCaptureSession) {
+                        handleNonFatalError("configure_failed", "CaptureSession rebind failed")
+                    }
+                },
+            ),
         )
     }
 
@@ -1031,6 +1049,7 @@ class CameraController(
                 openLock.acquire()
                 cameraManager.openCamera(
                     id,
+                    { command -> backgroundHandler.post(command) },
                     object : CameraDevice.StateCallback() {
                         override fun onOpened(camera: CameraDevice) {
                             openLock.release()
@@ -1063,7 +1082,6 @@ class CameraController(
                             }
                         }
                     },
-                    backgroundHandler,
                 )
             } catch (e: CameraAccessException) {
                 openLock.release()

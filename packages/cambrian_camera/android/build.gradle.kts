@@ -5,22 +5,22 @@ plugins {
 
 android {
     namespace = "com.cambrian.camera"
-    // API 35 for latest Camera2 features; minSdk 21 for broad device support.
+    // API 35 for latest Camera2 features; minSdk 33 targets Android 13+.
     compileSdk = 35
     // NDK version matching the OpenCV prebuilt used in Phase 4.
     ndkVersion = "25.1.8937393"
 
     compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_11
-        targetCompatibility = JavaVersion.VERSION_11
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
     }
 
     kotlinOptions {
-        jvmTarget = "11"
+        jvmTarget = "17"
     }
 
     defaultConfig {
-        minSdk = 21
+        minSdk = 33
     }
 
     // C++ JNI bridge and image pipeline (Phase 3+).
