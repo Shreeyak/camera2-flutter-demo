@@ -123,9 +123,14 @@ class CambrianCamera {
       initialState: CameraState.streaming,
     );
 
-    final caps = await api.getCapabilities(handle);
-    camera._capabilities = CameraCapabilities.fromPigeon(caps);
-    return camera;
+    try {
+      final caps = await api.getCapabilities(handle);
+      camera._capabilities = CameraCapabilities.fromPigeon(caps);
+      return camera;
+    } catch (_) {
+      await camera.close();
+      rethrow;
+    }
   }
 
   // ---------------------------------------------------------------------------

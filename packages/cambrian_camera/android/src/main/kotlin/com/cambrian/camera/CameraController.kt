@@ -32,6 +32,7 @@ import java.io.FileOutputStream
 import java.nio.ByteBuffer
 import java.util.concurrent.Semaphore
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Camera2 lifecycle manager for the cambrian_camera plugin.
@@ -125,6 +126,9 @@ class CameraController(
     @Volatile private var imageReader: ImageReader? = null
 
     @Volatile private var jpegImageReader: ImageReader? = null
+
+    /** True while a still-capture is in flight; prevents listener overwrites from concurrent calls. */
+    private val isCaptureInFlight = AtomicBoolean(false)
 
     /** Repeating request rebuilt whenever settings change. */
     @Volatile private var repeatingRequest: CaptureRequest? = null
@@ -624,6 +628,11 @@ class CameraController(
             return
         }
 
+        if (!isCaptureInFlight.compareAndSet(false, true)) {
+            callback(Result.failure(FlutterError("capture_in_progress", "A capture is already in progress", null)))
+            return
+        }
+
         try {
             // Register the listener BEFORE triggering capture so the image can never
             // arrive before the listener is installed (eliminating the race condition).
@@ -632,6 +641,7 @@ class CameraController(
                 reader.setOnImageAvailableListener(null, null)
                 val image: Image? = try { reader.acquireNextImage() } catch (_: Exception) { null }
                 if (image == null) {
+                    isCaptureInFlight.set(false)
                     mainHandler.post { callback(Result.failure(FlutterError("capture_failed", "Failed to acquire JPEG image", null))) }
                     return@setOnImageAvailableListener
                 }
@@ -647,6 +657,7 @@ class CameraController(
                     mainHandler.post { callback(Result.failure(FlutterError("capture_failed", e.message, null))) }
                 } finally {
                     image.close()
+                    isCaptureInFlight.set(false)
                 }
             }, backgroundHandler)
 
@@ -659,6 +670,7 @@ class CameraController(
 
             session.capture(jpegRequest, null, backgroundHandler)
         } catch (e: CameraAccessException) {
+            isCaptureInFlight.set(false)
             jpegReader.setOnImageAvailableListener(null, null) // clear listener on failure
             callback(Result.failure(FlutterError("camera_access_error", e.message, null)))
         }
@@ -1180,9 +1192,7 @@ class CameraController(
                             openLock.release()
                             cameraDevice = camera
                             retryCount = 0
-                            startCaptureSession { result ->
-                                result.onFailure { handleNonFatalError(CamErrorCode.CONFIGURATION_FAILED, it.message ?: "Session error") }
-                            }
+                            startCaptureSession {}
                         }
 
                         override fun onDisconnected(camera: CameraDevice) {
