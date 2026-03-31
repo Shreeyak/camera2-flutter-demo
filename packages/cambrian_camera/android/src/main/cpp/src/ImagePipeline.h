@@ -21,9 +21,11 @@ namespace cam {
 ///   - Dispatch processed frames to registered IImagePipeline sinks
 class ImagePipeline {
 public:
-    /// Construct the pipeline and take ownership of the given ANativeWindow.
-    /// @param window  ANativeWindow obtained from ANativeWindow_fromSurface().
-    ///                Must not be null. The pipeline calls ANativeWindow_acquire()
+    /// Construct the pipeline with an optional preview window.
+    /// @param window  ANativeWindow obtained from ANativeWindow_fromSurface(),
+    ///                or nullptr to start with no preview (same as calling
+    ///                setPreviewWindow(nullptr) after construction).  When
+    ///                non-null the pipeline calls ANativeWindow_acquire()
     ///                internally, so the caller may release their reference.
     explicit ImagePipeline(ANativeWindow* window);
 

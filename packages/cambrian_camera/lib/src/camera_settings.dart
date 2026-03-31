@@ -319,11 +319,9 @@ class ProcessingParams {
     this.autoStretchHigh = 0.99,
     this.brightness = 0.0,
     this.saturation = 1.0,
-  })  : assert(gamma > 0 && !gamma.isNaN, 'gamma must be > 0'),
-        assert(histBlackPoint <= histWhitePoint,
-            'histBlackPoint must be <= histWhitePoint'),
-        assert(!autoStretch || autoStretchLow < autoStretchHigh,
-            'autoStretchLow must be < autoStretchHigh when autoStretch is true');
+  }) {
+    _validate();
+  }
 
   /// Per-channel black level subtraction in [0.0, 0.5].
   final double blackR;
@@ -353,6 +351,46 @@ class ProcessingParams {
 
   /// Saturation multiplier in [0, 3]. 1.0 = identity.
   final double saturation;
+
+  void _validate() {
+    // NaN checks — all double fields must be finite numbers.
+    if (blackR.isNaN) throw ArgumentError.value(blackR, 'blackR', 'must not be NaN');
+    if (blackG.isNaN) throw ArgumentError.value(blackG, 'blackG', 'must not be NaN');
+    if (blackB.isNaN) throw ArgumentError.value(blackB, 'blackB', 'must not be NaN');
+    if (gamma.isNaN || gamma <= 0) {
+      throw ArgumentError.value(gamma, 'gamma', 'must be > 0 and not NaN');
+    }
+    if (histBlackPoint.isNaN) {
+      throw ArgumentError.value(histBlackPoint, 'histBlackPoint', 'must not be NaN');
+    }
+    if (histWhitePoint.isNaN) {
+      throw ArgumentError.value(histWhitePoint, 'histWhitePoint', 'must not be NaN');
+    }
+    if (autoStretchLow.isNaN) {
+      throw ArgumentError.value(autoStretchLow, 'autoStretchLow', 'must not be NaN');
+    }
+    if (autoStretchHigh.isNaN) {
+      throw ArgumentError.value(autoStretchHigh, 'autoStretchHigh', 'must not be NaN');
+    }
+    if (brightness.isNaN) {
+      throw ArgumentError.value(brightness, 'brightness', 'must not be NaN');
+    }
+    if (saturation.isNaN) {
+      throw ArgumentError.value(saturation, 'saturation', 'must not be NaN');
+    }
+    // Range checks.
+    if (histBlackPoint > histWhitePoint) {
+      throw ArgumentError(
+        'histBlackPoint ($histBlackPoint) must be <= histWhitePoint ($histWhitePoint)',
+      );
+    }
+    if (autoStretch && autoStretchLow >= autoStretchHigh) {
+      throw ArgumentError(
+        'autoStretchLow ($autoStretchLow) must be < autoStretchHigh ($autoStretchHigh) '
+        'when autoStretch is true',
+      );
+    }
+  }
 
   CamProcessingParams toCam() => CamProcessingParams(
         blackR: blackR,

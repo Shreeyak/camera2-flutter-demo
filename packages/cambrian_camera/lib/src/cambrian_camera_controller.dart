@@ -179,13 +179,12 @@ class CambrianCamera {
 
   /// Updates C++ pipeline processing parameters immediately.
   ///
-  /// This is fire-and-forget: the call is non-blocking and the new parameters
-  /// are picked up on the next processed frame. No queuing is applied.
-  void setProcessingParams(ProcessingParams params) {
-    // Direct pass-through — no serialization needed since C++ applies
-    // params atomically at the start of the next frame.
-    _hostApi.setProcessingParams(_handle, params.toCam());
-  }
+  /// The returned [Future] completes when the platform channel round-trip
+  /// finishes. Callers may await it to observe channel errors, or ignore it
+  /// for fire-and-forget semantics. No queuing is applied; the new parameters
+  /// are picked up on the next processed frame.
+  Future<void> setProcessingParams(ProcessingParams params) =>
+      _hostApi.setProcessingParams(_handle, params.toCam());
 
   /// Captures a high-quality still image and returns its file path.
   ///
