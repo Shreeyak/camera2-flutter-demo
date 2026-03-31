@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:material_symbols_icons/symbols.dart';
+
+import '../../camera/camera_format_utils.dart';
 import 'camera_dial_config.dart';
 
 /// Bundles the slider config + initial value + callback for one camera param.
@@ -19,18 +21,19 @@ class CameraDialModel {
 /// ISO dial object for direct use by the camera UI.
 @immutable
 class IsoDialPreset {
-  final List<int> isoRange;
+  final int isoMin;
+  final int isoMax;
   final int isoValue;
   final ValueChanged<int> onIsoChanged;
 
   const IsoDialPreset({
-    required this.isoRange,
+    required this.isoMin,
+    required this.isoMax,
     required this.isoValue,
     required this.onIsoChanged,
   });
 
   CameraDialModel toModel() {
-    assert(isoRange.length >= 2, 'isoRange must contain [min, max]');
     // dart format off
     const all = <double>[
        50,   57,   64,   72,   80,   90,
@@ -43,8 +46,8 @@ class IsoDialPreset {
     ];
     // dart format on
 
-    final minIso = isoRange[0].toDouble();
-    final maxIso = isoRange[1].toDouble();
+    final minIso = isoMin.toDouble();
+    final maxIso = isoMax.toDouble();
     final stops = all.where((v) => v >= minIso && v <= maxIso).toList();
 
     final config = CameraDialConfig(
@@ -67,19 +70,19 @@ class IsoDialPreset {
 /// Shutter dial object for direct use by the camera UI.
 @immutable
 class ShutterDialPreset {
-  final List<int> exposureTimeRangeNs;
+  final int exposureTimeMinNs;
+  final int exposureTimeMaxNs;
   final int exposureTimeNs;
   final ValueChanged<int> onExposureTimeNsChanged;
 
   const ShutterDialPreset({
-    required this.exposureTimeRangeNs,
+    required this.exposureTimeMinNs,
+    required this.exposureTimeMaxNs,
     required this.exposureTimeNs,
     required this.onExposureTimeNsChanged,
   });
 
   CameraDialModel toModel() {
-    assert(exposureTimeRangeNs.length >= 2,
-        'exposureTimeRangeNs must contain [min, max]');
     // dart format off
     const shutterSeconds = <double>[
       1/8000, 1/6400, 1/5000, 1/4000, 1/3200, 1/2500,
@@ -90,19 +93,15 @@ class ShutterDialPreset {
     ];
     // dart format on
 
-    final minNs = exposureTimeRangeNs[0].toDouble();
-    final maxNs = exposureTimeRangeNs[1].toDouble();
+    final minNs = exposureTimeMinNs.toDouble();
+    final maxNs = exposureTimeMaxNs.toDouble();
     final allNs = shutterSeconds.map((s) => s * 1e9).toList();
     final stops = allNs.where((v) => v >= minNs && v <= maxNs).toList();
 
     final config = CameraDialConfig(
       stops: stops.isEmpty ? [minNs, maxNs] : stops,
       majorTickEvery: 3,
-      formatter: (v) {
-        final secs = v / 1e9;
-        if (secs < 1.0) return '1/${(1.0 / secs).round()}';
-        return '${secs.toStringAsFixed(1)}s';
-      },
+      formatter: formatShutterNs,
       leftIcon: Symbols.shutter_speed_add,
       rightIcon: Symbols.shutter_speed_minus,
       iconSize: 20,
@@ -178,18 +177,18 @@ class ZoomDialPreset {
 /// Focus dial object for direct use by the camera UI.
 @immutable
 class FocusDialPreset {
-  final double minFocusDiopters;
+  final double focusMaxDiopters;
   final double currentFocusDiopters;
   final ValueChanged<double> onFocusChanged;
 
   const FocusDialPreset({
-    required this.minFocusDiopters,
+    required this.focusMaxDiopters,
     required this.currentFocusDiopters,
     required this.onFocusChanged,
   });
 
   CameraDialModel toModel() {
-    final double max = minFocusDiopters > 0.05 ? minFocusDiopters : 10.0;
+    final double max = focusMaxDiopters > 0.05 ? focusMaxDiopters : 10.0;
     const anchors = <double>[0.0, 0.25, 0.5, 1.0, 2.0, 3.0, 5.0, 7.0, 10.0];
     final valid = anchors.where((d) => d <= max + 0.05).toList();
     if ((valid.last - max).abs() > 0.05) valid.add(max);

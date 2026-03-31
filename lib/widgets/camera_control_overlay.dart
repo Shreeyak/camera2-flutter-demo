@@ -39,14 +39,16 @@ class CameraControlOverlay extends StatelessWidget {
     switch (param) {
       case CameraSettingType.iso:
         model = IsoDialPreset(
-          isoRange: ranges.isoRange,
+          isoMin: ranges.isoMin,
+          isoMax: ranges.isoMax,
           isoValue: values.isoValue,
           onIsoChanged: callbacks.onIsoChanged,
         ).toModel();
         break;
       case CameraSettingType.shutter:
         model = ShutterDialPreset(
-          exposureTimeRangeNs: ranges.exposureTimeRangeNs,
+          exposureTimeMinNs: ranges.exposureTimeMinNs,
+          exposureTimeMaxNs: ranges.exposureTimeMaxNs,
           exposureTimeNs: values.exposureTimeNs,
           onExposureTimeNsChanged: callbacks.onExposureTimeNsChanged,
         ).toModel();
@@ -61,14 +63,11 @@ class CameraControlOverlay extends StatelessWidget {
         break;
       case CameraSettingType.focus:
         model = FocusDialPreset(
-          minFocusDiopters: ranges.minFocusDiopters,
+          focusMaxDiopters: ranges.focusMaxDiopters,
           currentFocusDiopters: values.focusDiopters,
           onFocusChanged: callbacks.onFocusChanged,
         ).toModel();
         break;
-      case CameraSettingType.af:
-        // AF is handled separately; should not reach here if properly filtered.
-        return const SizedBox.shrink();
       case CameraSettingType.wb:
         // Unreachable — WB is handled by the guard at the top of build().
         return const SizedBox.shrink();

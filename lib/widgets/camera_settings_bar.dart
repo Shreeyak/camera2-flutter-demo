@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
 
-import '../camera/camera_settings_values.dart';
 import '../camera/camera_callbacks.dart';
+import '../camera/camera_format_utils.dart';
+import '../camera/camera_settings_values.dart';
 import 'bottom_bar_buttons.dart';
 
 class CameraSettingsBar extends StatelessWidget {
@@ -70,7 +71,7 @@ class CameraSettingsBar extends StatelessWidget {
                       CameraSettingChip(
                         icon: Icons.shutter_speed,
                         label: 'SHUTTER',
-                        valueLabel: _formatShutter(values.exposureTimeNs),
+                        valueLabel: formatShutterNs(values.exposureTimeNs.toDouble()),
                         isActive: activeSetting == CameraSettingType.shutter,
                         onTap: () => onSettingChipTap(
                           activeSetting == CameraSettingType.shutter
@@ -124,10 +125,4 @@ class CameraSettingsBar extends StatelessWidget {
     );
   }
 
-  String _formatShutter(int ns) {
-    if (ns == 0) return '0';
-    final secs = ns / 1e9;
-    if (secs < 1.0) return '1/${(1.0 / secs).round()}';
-    return '${secs.toStringAsFixed(1)}s';
-  }
 }

@@ -20,6 +20,7 @@ android {
     }
 
     defaultConfig {
+        // Targets OPD2403 hardware running API 33+. Single-device target for now.
         minSdk = 33
     }
 
