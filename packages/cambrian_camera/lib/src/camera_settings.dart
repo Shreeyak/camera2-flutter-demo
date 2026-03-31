@@ -132,16 +132,22 @@ enum EdgeMode {
 ///   // Switches both iso AND exposureTimeNs to auto:
 ///   camera.updateSettings(CameraSettings(iso: AutoValue.auto()));
 ///   ```
-/// - **Manual requires both in the same call:** switching to [Manual] requires
-///   providing both fields together. Sending only one while the base state has
-///   the other as auto results in a [CameraErrorCode.settingsConflict] error:
+/// - **Manual latches from last AE values:** you only need to set one field to
+///   [Manual] — the partner is automatically seeded with the last sensor value
+///   that Camera2's AE algorithm was using, so brightness is continuous:
 ///   ```dart
-///   // Correct — both manual in one call:
+///   // Only iso is set; exposureTimeNs is filled from the last AE result:
+///   camera.updateSettings(CameraSettings(iso: AutoValue.manual(800)));
+///   ```
+///   You can still provide both explicitly if you want full control:
+///   ```dart
 ///   camera.updateSettings(CameraSettings(
 ///     iso: AutoValue.manual(800),
 ///     exposureTimeNs: AutoValue.manual(16666666), // 1/60 s
 ///   ));
 ///   ```
+///   If no capture result has arrived yet (camera just opened), single-field
+///   manual is rejected with [CameraErrorCode.settingsConflict].
 /// - **Explicit mix is always an error:** passing [Manual] for one and [Auto]
 ///   for the other in the same `CameraSettings` object asserts in debug mode.
 ///

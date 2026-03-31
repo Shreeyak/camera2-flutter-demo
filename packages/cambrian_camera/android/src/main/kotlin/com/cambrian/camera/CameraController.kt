@@ -160,6 +160,15 @@ class CameraController(
     /** Capture-result counter used for periodic diagnostics. */
     @Volatile private var captureResultCount: Long = 0L
 
+    /**
+     * Last sensor values reported by Camera2 capture results.
+     * Updated on every frame while AE is running; preserved when AE is off.
+     * Used to seed manual mode when the user switches one field to manual —
+     * the partner is initialised to the last live AE value so exposure is continuous.
+     */
+    @Volatile private var lastKnownIso: Int? = null
+    @Volatile private var lastKnownExposureTimeNs: Long? = null
+
     // -------------------------------------------------------------------------
     // Auto-recovery
     // -------------------------------------------------------------------------
@@ -447,10 +456,13 @@ class CameraController(
      * - **Auto is contagious:** setting either field to `"auto"` automatically
      *   propagates to the other field.  You may set only one to `"auto"` in a call —
      *   the partner is pulled along silently.
-     * - **Manual requires both:** when switching to manual you must provide both
-     *   `isoMode = "manual"` and `exposureMode = "manual"` (with values) in the
-     *   same call.  Sending only one while the other is null or auto is a
-     *   [CamErrorCode.SETTINGS_CONFLICT] error.
+     * - **Manual latches from last AE values:** when only one field is set to manual,
+     *   the partner is automatically seeded from the last sensor values reported by
+     *   Camera2 capture results (`lastKnownIso` / `lastKnownExposureTimeNs`).  This
+     *   means setting only `isoMode = "manual"` is enough — the exposure is
+     *   initialised to whatever AE was using, so the image brightness is continuous.
+     *   If no capture result has arrived yet (camera just opened), the call is
+     *   rejected with [CamErrorCode.SETTINGS_CONFLICT].
      * - **Explicit mix is always rejected:** sending `isoMode = "manual"` and
      *   `exposureMode = "auto"` (or vice versa) in the same call is an error
      *   regardless of the prior state.
@@ -492,20 +504,38 @@ class CameraController(
             merged = merged.copy(isoMode = "auto", iso = null)
         }
 
-        // Phase 3: validate the final merged state.  After propagation the only remaining
-        // invalid case is one side manual and the other null (user set one to manual without
-        // providing the partner in the same call while the base state had no prior mode).
+        // Phase 3: if one side is manual and the other is not (user only set one field),
+        // auto-fill the partner from the last known AE values.  This implements "latch on
+        // manual": the sensor transitions smoothly without a brightness jump because it
+        // starts from the value AE was already using.
         val finalIsoManual = merged.isoMode == "manual"
         val finalExpManual = merged.exposureMode == "manual"
-        if (finalIsoManual != finalExpManual) {
-            val msg = "Settings conflict after merge: isoMode=${merged.isoMode}, " +
-                "exposureMode=${merged.exposureMode}. When switching to manual, set both " +
-                "iso and exposureTimeNs to Manual in the same updateSettings call."
-            android.util.Log.e("CambrianCamera", msg)
-            mainHandler.post {
-                flutterApi.onError(handle, CamError(CamErrorCode.SETTINGS_CONFLICT, msg, false)) {}
+        if (finalIsoManual && !finalExpManual) {
+            val knownExp = lastKnownExposureTimeNs
+            if (knownExp == null) {
+                val msg = "Cannot switch to manual ISO: no prior AE exposure value available yet. " +
+                    "Provide exposureTimeNs explicitly or wait for the first capture result."
+                android.util.Log.e("CambrianCamera", msg)
+                mainHandler.post {
+                    flutterApi.onError(handle, CamError(CamErrorCode.SETTINGS_CONFLICT, msg, false)) {}
+                }
+                return
             }
-            return
+            android.util.Log.d("CambrianCamera", "Auto-filled exposureTimeNs=$knownExp from last AE result")
+            merged = merged.copy(exposureMode = "manual", exposureTimeNs = knownExp)
+        } else if (finalExpManual && !finalIsoManual) {
+            val knownIso = lastKnownIso
+            if (knownIso == null) {
+                val msg = "Cannot switch to manual exposure: no prior AE ISO value available yet. " +
+                    "Provide iso explicitly or wait for the first capture result."
+                android.util.Log.e("CambrianCamera", msg)
+                mainHandler.post {
+                    flutterApi.onError(handle, CamError(CamErrorCode.SETTINGS_CONFLICT, msg, false)) {}
+                }
+                return
+            }
+            android.util.Log.d("CambrianCamera", "Auto-filled iso=$knownIso from last AE result")
+            merged = merged.copy(isoMode = "manual", iso = knownIso.toLong())
         }
 
         appliedSettings = merged
@@ -1106,6 +1136,8 @@ class CameraController(
         repeatingTargetSurface = null
         streamFrameCount = 0L
         captureResultCount = 0L
+        lastKnownIso = null
+        lastKnownExposureTimeNs = null
 
         // Release native pipeline.
         val ptr = nativePipelinePtr
@@ -1246,17 +1278,20 @@ class CameraController(
                 request: CaptureRequest,
                 result: TotalCaptureResult,
             ) {
+                // Always track the latest sensor values so that switching to manual mode
+                // can seed the partner field with the last live AE value.
+                result.get(CaptureResult.SENSOR_SENSITIVITY)?.let { lastKnownIso = it }
+                result.get(CaptureResult.SENSOR_EXPOSURE_TIME)?.let { lastKnownExposureTimeNs = it }
+
                 if (!CambrianCameraConfig.verboseDiagnostics) return
                 captureResultCount++
                 if (captureResultCount != 1L && captureResultCount % 60L != 0L) return
                 val aeMode = result.get(CaptureResult.CONTROL_AE_MODE)
                 val aeState = result.get(CaptureResult.CONTROL_AE_STATE)
-                val iso = result.get(CaptureResult.SENSOR_SENSITIVITY)
-                val exposure = result.get(CaptureResult.SENSOR_EXPOSURE_TIME)
                 android.util.Log.d(
                     "CambrianCamera",
                     "capture result#$captureResultCount target=${describeTargetSurface(repeatingTargetSurface)} " +
-                        "aeMode=$aeMode aeState=$aeState iso=$iso exposureNs=$exposure",
+                        "aeMode=$aeMode aeState=$aeState iso=$lastKnownIso exposureNs=$lastKnownExposureTimeNs",
                 )
             }
         }

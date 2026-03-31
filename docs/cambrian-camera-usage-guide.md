@@ -188,19 +188,28 @@ All fields are nullable. `null` means "don't change this setting."
 >   // Switches BOTH iso and exposureTimeNs to auto:
 >   camera.updateSettings(CameraSettings(iso: AutoValue.auto()));
 >   ```
-> - **Manual requires both in the same call.** Sending only one to manual while the other remains auto (from prior state) is rejected with `CameraErrorCode.settingsConflict`. Always provide both:
+> - **Manual latches from last AE values.** You only need to set one field to manual — the partner is automatically seeded from the last sensor value that AE was using, keeping brightness continuous. This is useful for ISO/exposure sliders:
+>   ```dart
+>   // Drag an ISO slider — exposureTimeNs fills in from the last AE value:
+>   camera.updateSettings(CameraSettings(iso: AutoValue.manual(800)));
+>   ```
+>   You can still provide both explicitly for full control:
 >   ```dart
 >   camera.updateSettings(CameraSettings(
 >     iso: AutoValue.manual(800),
 >     exposureTimeNs: AutoValue.manual(16666666), // 1/60 s
 >   ));
 >   ```
+>   If the camera has not yet delivered a capture result (just opened), single-field manual is rejected with `CameraErrorCode.settingsConflict`.
 > - **Explicit mix is always an error.** Passing manual for one and auto for the other in the same `CameraSettings` object asserts in debug and is rejected at runtime.
 
 #### Examples
 
 ```dart
-// Manual ISO + manual exposure — both required in same call
+// Slide ISO slider — exposure auto-fills from last AE value, brightness is continuous
+camera.updateSettings(CameraSettings(iso: AutoValue.manual(800)));
+
+// Or provide both explicitly if you want a specific shutter speed too
 camera.updateSettings(CameraSettings(
   iso: AutoValue.manual(800),
   exposureTimeNs: AutoValue.manual(16666666), // 1/60 s
