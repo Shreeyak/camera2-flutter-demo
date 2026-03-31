@@ -28,8 +28,11 @@ struct ProcessingParams {
 /// and outputs processed RGBA frames to an ANativeWindow (Flutter SurfaceProducer).
 ///
 /// Thread safety:
-///   - setPreviewWindow() / processFrame() share mutex_ for previewWindow_ access.
+///   - setPreviewWindow() / processFrame() / processFrameYuv() share mutex_ for
+///     ANativeWindow access.
 ///   - setParams() / processFrameYuv() share paramsMu_ for ProcessingParams access.
+///   - processFrameYuv() acquires paramsMu_ (params snapshot) then releases it before
+///     acquiring mutex_ (window blit); the two locks are never held simultaneously.
 class ImagePipeline {
 public:
     /// Construct with an optional preview window (acquires its own ANativeWindow reference).
