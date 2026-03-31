@@ -124,28 +124,33 @@ enum EdgeMode {
 ///
 /// ## ISO + Exposure coupling
 ///
-/// [iso] and [exposureTimeNs] **must always be set to the same mode together**.
-/// Camera2 maps them to a single hardware knob (`CONTROL_AE_MODE`):
-/// - Both `Auto` (or both `null`) → `AE_MODE_ON`: the AE algorithm controls both.
-/// - Both `Manual` → `AE_MODE_OFF`: your values take effect.
-/// - Mixed (one manual, one auto) → `AE_MODE_OFF` is set but the "auto" partner
-///   has no explicit value — the driver falls back to an undefined default.
+/// [iso] and [exposureTimeNs] share a single Camera2 flag (`CONTROL_AE_MODE`):
 ///
-/// The plugin rejects mixed-mode updates with a [CameraErrorCode.settingsConflict]
-/// error. Always set both in the same [updateSettings] call:
-/// ```dart
-/// camera.updateSettings(CameraSettings(
-///   iso: AutoValue.manual(800),
-///   exposureTimeNs: AutoValue.manual(20000000), // 20 ms
-/// ));
-/// ```
+/// - **Auto is contagious:** setting either to [Auto] propagates to the other
+///   automatically on the native side. You may send only one in a call:
+///   ```dart
+///   // Switches both iso AND exposureTimeNs to auto:
+///   camera.updateSettings(CameraSettings(iso: AutoValue.auto()));
+///   ```
+/// - **Manual requires both in the same call:** switching to [Manual] requires
+///   providing both fields together. Sending only one while the base state has
+///   the other as auto results in a [CameraErrorCode.settingsConflict] error:
+///   ```dart
+///   // Correct — both manual in one call:
+///   camera.updateSettings(CameraSettings(
+///     iso: AutoValue.manual(800),
+///     exposureTimeNs: AutoValue.manual(16666666), // 1/60 s
+///   ));
+///   ```
+/// - **Explicit mix is always an error:** passing [Manual] for one and [Auto]
+///   for the other in the same `CameraSettings` object asserts in debug mode.
 ///
 /// ## EV compensation
 ///
 /// [evCompensation] is applied by the AE algorithm and has **no effect** when
 /// either [iso] or [exposureTimeNs] is manual (AE is disabled in that mode).
 class CameraSettings {
-  const CameraSettings({
+  CameraSettings({
     this.iso,
     this.exposureTimeNs,
     this.focus,
@@ -154,22 +159,30 @@ class CameraSettings {
     this.noiseReductionMode,
     this.edgeMode,
     this.evCompensation,
-  });
+  }) : assert(
+          !(iso is Manual<int> && exposureTimeNs is Auto<int>) &&
+              !(iso is Auto<int> && exposureTimeNs is Manual<int>),
+          'iso and exposureTimeNs cannot be mixed manual/auto in the same '
+          'CameraSettings object. Set both to the same mode, or leave one null '
+          '(null = don\'t change). Auto propagates automatically on the native side.',
+        );
 
   /// Sensor sensitivity (e.g. 100–3200).
   ///
   /// [Auto] = Camera2 AE controls ISO. [Manual] = fixed value.
   ///
-  /// Must be set to the same mode as [exposureTimeNs]. Setting one to manual
-  /// without the other causes a [CameraErrorCode.settingsConflict] error.
+  /// Setting this to [Auto] automatically pulls [exposureTimeNs] to auto as
+  /// well. Setting this to [Manual] requires [exposureTimeNs] to also be
+  /// [Manual] in the same call.
   final AutoValue<int>? iso;
 
   /// Exposure duration in nanoseconds.
   ///
   /// [Auto] = Camera2 AE controls shutter speed. [Manual] = fixed value.
   ///
-  /// Must be set to the same mode as [iso]. Setting one to manual without the
-  /// other causes a [CameraErrorCode.settingsConflict] error.
+  /// Setting this to [Auto] automatically pulls [iso] to auto as well.
+  /// Setting this to [Manual] requires [iso] to also be [Manual] in the
+  /// same call.
   final AutoValue<int>? exposureTimeNs;
 
   /// Focus distance in diopters (0 = infinity).

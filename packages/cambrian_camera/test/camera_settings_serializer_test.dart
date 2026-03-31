@@ -15,7 +15,7 @@ void main() {
         onSend: (s) async => sent.add(s),
       );
 
-      serializer.send(const CameraSettings(iso: AutoValue.manual(100)));
+      serializer.send(CameraSettings(iso: AutoValue.manual(100)));
       // Allow the async completion to propagate.
       await Future<void>.delayed(Duration.zero);
 
@@ -37,12 +37,12 @@ void main() {
       );
 
       // First send kicks off a call.
-      serializer.send(const CameraSettings(iso: AutoValue.manual(100)));
+      serializer.send(CameraSettings(iso: AutoValue.manual(100)));
       expect(sent.length, 1); // dispatched immediately
 
       // Two more sends while in-flight — only the last should be pending.
-      serializer.send(const CameraSettings(iso: AutoValue.manual(200)));
-      serializer.send(const CameraSettings(iso: AutoValue.manual(300)));
+      serializer.send(CameraSettings(iso: AutoValue.manual(200)));
+      serializer.send(CameraSettings(iso: AutoValue.manual(300)));
 
       // Complete the first in-flight call.
       completer!.complete();
@@ -65,8 +65,8 @@ void main() {
         },
       );
 
-      serializer.send(const CameraSettings(iso: AutoValue.manual(100)));
-      serializer.send(const CameraSettings(iso: AutoValue.manual(200))); // queued as pending
+      serializer.send(CameraSettings(iso: AutoValue.manual(100)));
+      serializer.send(CameraSettings(iso: AutoValue.manual(200))); // queued as pending
 
       completer!.complete(); // complete first in-flight
       await Future<void>.delayed(Duration.zero);
@@ -83,7 +83,7 @@ void main() {
       );
 
       serializer.dispose();
-      serializer.send(const CameraSettings(iso: AutoValue.manual(100)));
+      serializer.send(CameraSettings(iso: AutoValue.manual(100)));
       await Future<void>.delayed(Duration.zero);
 
       expect(sent, isEmpty);
@@ -98,7 +98,7 @@ void main() {
         },
       );
 
-      serializer.send(const CameraSettings(iso: AutoValue.manual(100)));
+      serializer.send(CameraSettings(iso: AutoValue.manual(100)));
       // Should not throw.
       await Future<void>.delayed(Duration.zero);
       expect(callCount, 1);
@@ -108,7 +108,7 @@ void main() {
 
   group('CameraSettings', () {
     test('toCam encodes manual values with mode strings', () {
-      const settings = CameraSettings(
+      final settings = CameraSettings(
         iso: AutoValue.manual(400),
         exposureTimeNs: AutoValue.manual(10000000),
         focus: AutoValue.manual(0.5),
@@ -133,7 +133,7 @@ void main() {
     });
 
     test('toCam encodes auto modes correctly', () {
-      const settings = CameraSettings(
+      final settings = CameraSettings(
         iso: AutoValue.auto(),
         exposureTimeNs: AutoValue.auto(),
         focus: AutoValue.auto(),
@@ -150,7 +150,7 @@ void main() {
     });
 
     test('toCam encodes manual white balance gains', () {
-      const settings = CameraSettings(
+      final settings = CameraSettings(
         whiteBalance: WhiteBalance.manual(gainR: 1.82, gainG: 1.0, gainB: 1.45),
       );
       final cam = settings.toCam();
@@ -161,7 +161,7 @@ void main() {
     });
 
     test('toCam leaves null fields as null (don\'t change)', () {
-      const settings = CameraSettings(zoomRatio: 3.0);
+      final settings = CameraSettings(zoomRatio: 3.0);
       final cam = settings.toCam();
       expect(cam.isoMode, isNull);
       expect(cam.iso, isNull);

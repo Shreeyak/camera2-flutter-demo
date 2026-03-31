@@ -181,19 +181,36 @@ All fields are nullable. `null` means "don't change this setting."
 | `edgeMode` | `EdgeMode?` | Camera2 edge enhancement mode enum. Null = don't change. |
 | `evCompensation` | `int?` | Exposure compensation in AE steps. **No effect when ISO or exposure is manual** (AE is disabled). Null = don't change. |
 
-> **ISO + Exposure coupling:** `iso` and `exposureTimeNs` must always be set to the **same mode** in the same call. Camera2 uses a single `CONTROL_AE_MODE` flag for both: `AE_MODE_ON` (both auto) or `AE_MODE_OFF` (both manual). A mixed update — one manual, one auto — leaves the "auto" partner with no explicit sensor value, producing undefined exposure. The plugin rejects mixed updates with a `CameraErrorCode.settingsConflict` error.
+> **ISO + Exposure coupling:** `iso` and `exposureTimeNs` share a single Camera2 flag (`CONTROL_AE_MODE`: ON = both auto, OFF = both manual).
+>
+> - **Auto is contagious.** Setting either field to `AutoValue.auto()` propagates to the other automatically. You only need to set one:
+>   ```dart
+>   // Switches BOTH iso and exposureTimeNs to auto:
+>   camera.updateSettings(CameraSettings(iso: AutoValue.auto()));
+>   ```
+> - **Manual requires both in the same call.** Sending only one to manual while the other remains auto (from prior state) is rejected with `CameraErrorCode.settingsConflict`. Always provide both:
+>   ```dart
+>   camera.updateSettings(CameraSettings(
+>     iso: AutoValue.manual(800),
+>     exposureTimeNs: AutoValue.manual(16666666), // 1/60 s
+>   ));
+>   ```
+> - **Explicit mix is always an error.** Passing manual for one and auto for the other in the same `CameraSettings` object asserts in debug and is rejected at runtime.
 
 #### Examples
 
 ```dart
-// Manual ISO + manual exposure (must be set together)
+// Manual ISO + manual exposure — both required in same call
 camera.updateSettings(CameraSettings(
   iso: AutoValue.manual(800),
   exposureTimeNs: AutoValue.manual(16666666), // 1/60 s
   focus: AutoValue.auto(),
 ));
 
-// Switch to full auto
+// Switch iso back to auto — exposureTimeNs follows automatically
+camera.updateSettings(CameraSettings(iso: AutoValue.auto()));
+
+// Switch to full auto (explicit; equivalent to the line above for iso+exposure)
 camera.updateSettings(CameraSettings(
   iso: AutoValue.auto(),
   exposureTimeNs: AutoValue.auto(),

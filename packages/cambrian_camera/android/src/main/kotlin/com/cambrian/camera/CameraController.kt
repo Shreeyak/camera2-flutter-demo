@@ -439,21 +439,68 @@ class CameraController(
      * If no session is active the merged settings are stored as [pendingSettings]
      * and applied when the next session starts.
      *
+     * ## ISO + Exposure coupling
+     *
+     * [CamSettings.isoMode] and [CamSettings.exposureMode] are tied to a single
+     * Camera2 flag (`CONTROL_AE_MODE`), so they must always end up in the same mode:
+     *
+     * - **Auto is contagious:** setting either field to `"auto"` automatically
+     *   propagates to the other field.  You may set only one to `"auto"` in a call —
+     *   the partner is pulled along silently.
+     * - **Manual requires both:** when switching to manual you must provide both
+     *   `isoMode = "manual"` and `exposureMode = "manual"` (with values) in the
+     *   same call.  Sending only one while the other is null or auto is a
+     *   [CamErrorCode.SETTINGS_CONFLICT] error.
+     * - **Explicit mix is always rejected:** sending `isoMode = "manual"` and
+     *   `exposureMode = "auto"` (or vice versa) in the same call is an error
+     *   regardless of the prior state.
+     *
      * @param incoming The settings to merge and apply.
      */
     fun updateSettings(incoming: CamSettings) {
-        val merged = mergeSettings(appliedSettings, incoming)
+        // Phase 1: reject an explicitly contradictory update (one manual + one auto in the
+        // same call).  Sending only one side (the other is null = "don't change") is fine —
+        // the auto-propagation step below will make them consistent.
+        val incomingIsoManual = incoming.isoMode == "manual"
+        val incomingExpManual = incoming.exposureMode == "manual"
+        val incomingIsoAuto   = incoming.isoMode == "auto"
+        val incomingExpAuto   = incoming.exposureMode == "auto"
+        if ((incomingIsoManual && incomingExpAuto) || (incomingIsoAuto && incomingExpManual)) {
+            val msg = "Settings conflict in incoming update: isoMode=${incoming.isoMode}, " +
+                "exposureMode=${incoming.exposureMode}. Both must be the same mode — " +
+                "manual ISO and auto exposure (or vice versa) is undefined in Camera2."
+            android.util.Log.e("CambrianCamera", msg)
+            mainHandler.post {
+                flutterApi.onError(handle, CamError(CamErrorCode.SETTINGS_CONFLICT, msg, false)) {}
+            }
+            return
+        }
 
-        // Camera2 requires CONTROL_AE_MODE = OFF for manual SENSOR_SENSITIVITY /
-        // SENSOR_EXPOSURE_TIME to take effect.  When AE is off the driver needs
-        // explicit values for BOTH keys — it does not interpolate the "auto" partner.
-        // A mixed state (one manual, one auto) therefore produces undefined behaviour.
-        val isoManual = merged.isoMode == "manual"
-        val expManual = merged.exposureMode == "manual"
-        if (isoManual != expManual) {
-            val msg = "Settings conflict: isoMode=${merged.isoMode}, exposureMode=${merged.exposureMode}. " +
-                "Camera2 requires both to be manual (or both auto) — set iso and exposureTimeNs " +
-                "to the same mode in the same updateSettings call."
+        // Phase 2: merge and apply auto-propagation.
+        // Camera2 ties ISO and exposure to a single CONTROL_AE_MODE flag (ON = both auto,
+        // OFF = both manual).  Setting one field to "auto" therefore implies the other
+        // should also be "auto" — auto is contagious.  Manual is not propagated; both fields
+        // must be set explicitly when switching to manual.
+        var merged = mergeSettings(appliedSettings, incoming)
+        val mergedIsoAuto = merged.isoMode == "auto"
+        val mergedExpAuto = merged.exposureMode == "auto"
+        if (mergedIsoAuto && !mergedExpAuto) {
+            // iso switched to auto — pull exposure along with it
+            merged = merged.copy(exposureMode = "auto", exposureTimeNs = null)
+        } else if (mergedExpAuto && !mergedIsoAuto) {
+            // exposure switched to auto — pull iso along with it
+            merged = merged.copy(isoMode = "auto", iso = null)
+        }
+
+        // Phase 3: validate the final merged state.  After propagation the only remaining
+        // invalid case is one side manual and the other null (user set one to manual without
+        // providing the partner in the same call while the base state had no prior mode).
+        val finalIsoManual = merged.isoMode == "manual"
+        val finalExpManual = merged.exposureMode == "manual"
+        if (finalIsoManual != finalExpManual) {
+            val msg = "Settings conflict after merge: isoMode=${merged.isoMode}, " +
+                "exposureMode=${merged.exposureMode}. When switching to manual, set both " +
+                "iso and exposureTimeNs to Manual in the same updateSettings call."
             android.util.Log.e("CambrianCamera", msg)
             mainHandler.post {
                 flutterApi.onError(handle, CamError(CamErrorCode.SETTINGS_CONFLICT, msg, false)) {}
