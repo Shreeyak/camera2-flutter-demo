@@ -251,8 +251,8 @@ class CameraController(
                     val surface = surfaceProducer.getSurface()
                     nativeSetPreviewWindow(ptr, surface)
                     if (state == State.STREAMING) {
-                        // Camera2 writes directly to SurfaceProducer for YUV preview.
-                        // If SurfaceProducer recreated the surface, recreate session targets.
+                        // The C++ pipeline writes processed frames to the ANativeWindow backed by
+                        // this surface. Rebind so it targets the new surface after recreation.
                         backgroundHandler.post { rebindYuvPreviewSurface(surface) }
                     }
                 }
@@ -788,8 +788,8 @@ class CameraController(
             )
         }
 
-        // Streaming ImageReader — YUV_420_888 frames are drained to prevent overflow.
-        // Preview is served by Camera2 writing directly to the SurfaceProducer surface.
+        // Streaming ImageReader — YUV_420_888 frames are delivered to the C++ pipeline
+        // for post-processing; the pipeline writes processed RGBA frames to the ANativeWindow.
         val streamReader = ImageReader.newInstance(streamWidth, streamHeight, streamFormat, 2)
         imageReader = streamReader
 
@@ -801,7 +801,7 @@ class CameraController(
         val previewSurface = surfaceProducer.getSurface()
         nativePipelinePtr = nativeInit(previewSurface)
 
-        // Drain YUV frames to prevent ImageReader overflow.
+        // Deliver YUV frames to the C++ pipeline for post-processing and preview output.
         streamReader.setOnImageAvailableListener({ reader ->
             val image = reader.acquireLatestImage() ?: return@setOnImageAvailableListener
             try {
@@ -835,7 +835,8 @@ class CameraController(
         // Session surfaces: streaming reader + JPEG reader + SurfaceProducer for preview.
         val surfaces = listOf(streamReader.surface, jpegReader.surface, previewSurface)
 
-        // The repeating request targets the SurfaceProducer; Camera2 writes preview frames directly.
+        // previewTarget is kept as a session output so the SurfaceProducer stays valid;
+        // it is NOT a repeating request target — the C++ pipeline writes to it directly.
         val previewTarget = previewSurface
         repeatingTargetSurface = previewTarget
 
@@ -928,6 +929,7 @@ class CameraController(
      * applied. The JPEG [jpegImageReader] is intentionally excluded — it is targeted only by the
      * one-shot request in [takePicture].
      */
+    @Suppress("UNUSED_PARAMETER") // surface is a session output only; C++ writes to it via ANativeWindow
     private fun createRepeatingRequestBuilder(
         device: CameraDevice,
         surface: Surface,
