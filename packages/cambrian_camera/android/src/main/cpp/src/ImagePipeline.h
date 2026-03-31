@@ -1,6 +1,7 @@
 #pragma once
-// Internal header for the Phase 3 identity image pipeline.
-// Not part of the public consumer API (see cambrian_camera_native.h).
+// Internal header for the image pipeline.
+// Phase 3: identity passthrough (processFrame, kept for reference).
+// Phase 4: YUV_420_888 → RGBA conversion + per-frame saturation (processFrameYuv).
 
 #include <android/native_window.h>
 #include <cstdint>
@@ -8,25 +9,30 @@
 
 namespace cam {
 
-/// Phase 3 identity pipeline: receives raw RGBA frames from Kotlin (via a
-/// direct ByteBuffer backed by ImageReader) and copies them pixel-row by
-/// pixel-row into an ANativeWindow for display.
+/// User-adjustable processing parameters. All fields have identity defaults.
+/// setParams() is thread-safe; the per-frame loop reads a snapshot under paramsMu_.
+/// Phase 4 uses only saturation. Future phases will apply the remaining fields.
+struct ProcessingParams {
+    float blackR = 0.f, blackG = 0.f, blackB = 0.f;  // [0, 0.5] per-channel black level
+    float gamma           = 1.f;                       // [0.1, 4.0]; 1.0 = identity
+    float histBlackPoint  = 0.f;                       // [0, 1]
+    float histWhitePoint  = 1.f;                       // [0, 1]
+    bool  autoStretch     = false;
+    float autoStretchLow  = 0.01f;
+    float autoStretchHigh = 0.99f;
+    float brightness      = 0.f;                       // [-1, 1]; 0.0 = identity
+    float saturation      = 1.f;                       // [0, 3]; 1.0 = identity
+};
+
+/// Image pipeline: receives frames from the Android camera, applies post-processing,
+/// and outputs processed RGBA frames to an ANativeWindow (Flutter SurfaceProducer).
 ///
-/// Thread safety: setPreviewWindow() may be called from the UI thread while
-/// processFrame() runs on the camera background thread. Both methods hold
-/// mutex_ for the duration of their access to previewWindow_.
-///
-/// Phase 4 will extend this class to:
-///   - Apply black balance, white balance, LUT, and saturation corrections
-///   - Dispatch processed frames to registered IImagePipeline sinks
+/// Thread safety:
+///   - setPreviewWindow() / processFrame() share mutex_ for previewWindow_ access.
+///   - setParams() / processFrameYuv() share paramsMu_ for ProcessingParams access.
 class ImagePipeline {
 public:
-    /// Construct the pipeline with an optional preview window.
-    /// @param window  ANativeWindow obtained from ANativeWindow_fromSurface(),
-    ///                or nullptr to start with no preview (same as calling
-    ///                setPreviewWindow(nullptr) after construction).  When
-    ///                non-null the pipeline calls ANativeWindow_acquire()
-    ///                internally, so the caller may release their reference.
+    /// Construct with an optional preview window (acquires its own ANativeWindow reference).
     explicit ImagePipeline(ANativeWindow* window);
 
     /// Releases the ANativeWindow reference held by this pipeline.
@@ -36,32 +42,38 @@ public:
     ImagePipeline(const ImagePipeline&) = delete;
     ImagePipeline& operator=(const ImagePipeline&) = delete;
 
-    /// Replace the preview surface, e.g. when the Flutter PlatformView is
-    /// recreated after an app resume.  The old ANativeWindow reference is
-    /// released before the new one is stored.
-    /// @param window  New ANativeWindow, or nullptr to pause rendering.
+    /// Replace the preview surface (e.g. after Flutter PlatformView recreation).
     void setPreviewWindow(ANativeWindow* window);
 
-    /// Copy one RGBA frame into the preview ANativeWindow (identity pipeline).
-    ///
-    /// @param data    Pointer to the first byte of the frame (top-left pixel).
-    ///                Obtained via JNIEnv::GetDirectBufferAddress().
-    /// @param width   Frame width in pixels.
-    /// @param height  Frame height in pixels.
-    /// @param stride  Source row stride in **bytes**  (>= width * 4).
-    ///                May differ from width * 4 due to ImageReader alignment.
-    ///
-    /// The destination stride is taken from ANativeWindow_Buffer::stride which
-    /// is expressed in **pixels**; we multiply by 4 to get bytes per row.
+    /// Phase 3 identity pipeline (RGBA passthrough). Kept for reference; not called in Phase 4.
     void processFrame(const uint8_t* data, int width, int height, int stride);
+
+    /// Phase 4 pipeline: convert YUV_420_888 planes → RGBA, apply saturation, write to preview.
+    ///
+    /// @param yData         Y plane pointer (one byte per pixel, yRowStride bytes/row).
+    /// @param yRowStride    Row stride of Y plane in bytes.
+    /// @param uData         U (Cb) plane pointer (one byte per chroma sample).
+    /// @param vData         V (Cr) plane pointer (one byte per chroma sample).
+    /// @param uvRowStride   Row stride of U and V planes in bytes.
+    /// @param uvPixelStride Pixel stride of U/V planes: 1 for I420, 2 for NV12/NV21.
+    /// @param width         Frame width in pixels.
+    /// @param height        Frame height in pixels.
+    void processFrameYuv(const uint8_t* yData, int yRowStride,
+                         const uint8_t* uData, const uint8_t* vData,
+                         int uvRowStride, int uvPixelStride,
+                         int width, int height);
+
+    /// Atomically update processing parameters. Takes effect on the next frame.
+    void setParams(const ProcessingParams& p);
 
 private:
     std::mutex mutex_;
     ANativeWindow* previewWindow_ = nullptr;
-    /// Cached frame dimensions — ANativeWindow_setBuffersGeometry is only
-    /// called when these change, keeping it out of the per-frame hot path.
     int lastWidth_  = 0;
     int lastHeight_ = 0;
+
+    std::mutex paramsMu_;
+    ProcessingParams params_;  // protected by paramsMu_
 };
 
 } // namespace cam
