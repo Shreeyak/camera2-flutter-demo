@@ -113,4 +113,91 @@ void ImagePipeline::processFrame(const uint8_t* data,
     ANativeWindow_unlockAndPost(previewWindow_);
 }
 
+void ImagePipeline::setParams(const ProcessingParams& p) {
+    std::lock_guard<std::mutex> lock(paramsMu_);
+    params_ = p;
+}
+
+void ImagePipeline::processFrameYuv(
+        const uint8_t* yData, int yRowStride,
+        const uint8_t* uData, const uint8_t* vData,
+        int uvRowStride, int uvPixelStride,
+        int width, int height) {
+
+    // Read a local copy of params so the inner loop does not hold paramsMu_.
+    ProcessingParams p;
+    {
+        std::lock_guard<std::mutex> plk(paramsMu_);
+        p = params_;
+    }
+
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    if (!previewWindow_) {
+        return;
+    }
+
+    // Configure surface geometry only when dimensions change (expensive call; keep off hot path).
+    if (width != lastWidth_ || height != lastHeight_) {
+        int32_t res = ANativeWindow_setBuffersGeometry(
+                previewWindow_, width, height, WINDOW_FORMAT_RGBA_8888);
+        if (res != 0) {
+            LOGE("processFrameYuv: setBuffersGeometry failed: %d", res);
+            return;
+        }
+        lastWidth_  = width;
+        lastHeight_ = height;
+        LOGD("processFrameYuv: geometry set to %dx%d", width, height);
+    }
+
+    ANativeWindow_Buffer buf;
+    if (ANativeWindow_lock(previewWindow_, &buf, nullptr) != 0) {
+        LOGE("processFrameYuv: ANativeWindow_lock failed");
+        return;
+    }
+
+    const float sat       = p.saturation;
+    const int   dstStride = buf.stride * 4;   // buf.stride is in pixels; multiply for bytes
+    auto* dst = reinterpret_cast<uint8_t*>(buf.bits);
+
+    // Clamp to locked buffer dimensions in case of surface resize races.
+    const int safeH = std::min(height, static_cast<int>(buf.height));
+    const int safeW = std::min(width,  static_cast<int>(buf.width));
+
+    for (int row = 0; row < safeH; ++row) {
+        uint8_t* dstRow = dst + row * dstStride;
+
+        for (int col = 0; col < safeW; ++col) {
+            // Y plane: one byte per pixel.
+            const float y = static_cast<float>(yData[row * yRowStride + col]);
+
+            // U/V planes: one sample per 2×2 pixel block.
+            // uvPixelStride handles both I420 (stride=1) and NV12/NV21 (stride=2).
+            const int uvOff = (row / 2) * uvRowStride + (col / 2) * uvPixelStride;
+            const float u = static_cast<float>(uData[uvOff]) - 128.f;
+            const float v = static_cast<float>(vData[uvOff]) - 128.f;
+
+            // Full-range BT.601 YUV → RGB.
+            float r = y + 1.370705f * v;
+            float g = y - 0.337633f * u - 0.698001f * v;
+            float b = y + 1.732446f * u;
+
+            // Saturation: luminance-deviation method.
+            // sat=1.0 → identity  |  sat=0.0 → grayscale  |  sat>1.0 → boosted color
+            const float lum = 0.299f * r + 0.587f * g + 0.114f * b;
+            r = lum + sat * (r - lum);
+            g = lum + sat * (g - lum);
+            b = lum + sat * (b - lum);
+
+            // Clamp to [0, 255] and write RGBA (alpha = 255).
+            dstRow[col * 4 + 0] = static_cast<uint8_t>(std::min(255.f, std::max(0.f, r)));
+            dstRow[col * 4 + 1] = static_cast<uint8_t>(std::min(255.f, std::max(0.f, g)));
+            dstRow[col * 4 + 2] = static_cast<uint8_t>(std::min(255.f, std::max(0.f, b)));
+            dstRow[col * 4 + 3] = 255;
+        }
+    }
+
+    ANativeWindow_unlockAndPost(previewWindow_);
+}
+
 } // namespace cam
