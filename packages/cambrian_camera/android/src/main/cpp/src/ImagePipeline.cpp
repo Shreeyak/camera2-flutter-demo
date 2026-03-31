@@ -177,10 +177,10 @@ void ImagePipeline::processFrameYuv(
             const float u = static_cast<float>(uData[uvOff]) - 128.f;
             const float v = static_cast<float>(vData[uvOff]) - 128.f;
 
-            // Full-range BT.601 YUV → RGB.
-            float r = y + 1.370705f * v;
-            float g = y - 0.337633f * u - 0.698001f * v;
-            float b = y + 1.732446f * u;
+            // Full-range BT.601 YUV → RGB (ITU-R BT.601, Y/U/V all in [0,255], U/V centred at 128).
+            float r = y + 1.402000f * v;
+            float g = y - 0.344136f * u - 0.714136f * v;
+            float b = y + 1.772000f * u;
 
             // Saturation: luminance-deviation method.
             // sat=1.0 → identity  |  sat=0.0 → grayscale  |  sat>1.0 → boosted color
