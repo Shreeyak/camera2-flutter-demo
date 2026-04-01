@@ -15,6 +15,14 @@ add_library(cambrian_camera SHARED
     src/InputRing.cpp
 )
 
+# Aggressive optimization for pixel-processing hot loops (NEON auto-vectorization,
+# fused multiply-add).  -ffast-math is safe here: all values are uint8 [0,255]
+# or float intermediates — no NaN/denormal edge cases.
+target_compile_options(cambrian_camera PRIVATE
+    $<$<CONFIG:Release>:-O3 -ffast-math -ftree-vectorize>
+    $<$<CONFIG:RelWithDebInfo>:-O2 -ffast-math -ftree-vectorize>
+)
+
 target_include_directories(cambrian_camera PRIVATE include)
 
 target_link_libraries(cambrian_camera

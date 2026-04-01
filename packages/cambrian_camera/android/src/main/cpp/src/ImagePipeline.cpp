@@ -181,6 +181,31 @@ void ImagePipeline::deliverYuv(
 }
 
 // ---------------------------------------------------------------------------
+// Processing helpers
+// ---------------------------------------------------------------------------
+
+/// Luminance-preserving saturation: gray + sat * (channel - gray).
+/// Reads from `src`, writes to pre-allocated `dst`. Uses parallel_for_ to
+/// spread rows across available cores.  Equivalent to Photoshop/Lightroom
+/// saturation — no BGR↔HSV round-trip needed.
+static void applySaturation(const cv::Mat& src, cv::Mat& dst, float sat) {
+    dst.create(src.size(), src.type());
+    cv::parallel_for_(cv::Range(0, src.rows), [&](const cv::Range& range) {
+        for (int r = range.start; r < range.end; ++r) {
+            const auto* s = src.ptr<uint8_t>(r);
+            auto*       d = dst.ptr<uint8_t>(r);
+            for (int c = 0, n = src.cols * 3; c < n; c += 3) {
+                float B = s[c], G = s[c + 1], R = s[c + 2];
+                float gray = 0.114f * B + 0.587f * G + 0.299f * R;
+                d[c]     = cv::saturate_cast<uint8_t>(gray + sat * (B - gray));
+                d[c + 1] = cv::saturate_cast<uint8_t>(gray + sat * (G - gray));
+                d[c + 2] = cv::saturate_cast<uint8_t>(gray + sat * (R - gray));
+            }
+        }
+    });
+}
+
+// ---------------------------------------------------------------------------
 // Processing thread
 // ---------------------------------------------------------------------------
 
@@ -224,9 +249,33 @@ void ImagePipeline::processingLoop() {
             cv::cvtColorTwoPlane(y_mat, uv_mat, bgr, code);
         }
 
-        // Publish raw (pre-saturation) frame to the raw preview dispatch thread.
-        // Non-blocking: just drops into the mailbox, dispatch thread does the blit.
-        // Skip the clone entirely when no raw window is configured.
+        // -- Build raw frame (zero-copy move of the YUV→BGR output) -----------
+        auto rawFrame    = std::make_shared<Frame>();
+        rawFrame->id     = slot.frameId;
+        rawFrame->meta   = slot.meta;
+        rawFrame->bgr    = std::move(bgr);
+        rawFrame->width  = slot.width;
+        rawFrame->height = slot.height;
+        rawFrame->stride = static_cast<int>(rawFrame->bgr.step);
+        rawFrame->format = PixelFormat::BGR;
+
+        // -- Processing chain (lazy-copy: first step copies, rest in-place) --
+        // Each step reads from rawFrame->bgr (untouched) or `processed`
+        // (accumulated result).  When no step fires, processedFrame aliases
+        // rawFrame — zero-copy shared_ptr.
+        cv::Mat processed;
+        bool modified = false;
+
+        // Step: saturation (luminance-preserving, parallel across cores)
+        if (std::abs(p.saturation - 1.0f) > 1e-4f) {
+            applySaturation(rawFrame->bgr, processed, p.saturation);
+            modified = true;
+        }
+        // Future steps: black level, gamma, brightness, auto-stretch.
+        // Each would check `modified` and operate on `processed` in-place,
+        // or copy from rawFrame->bgr on first use.
+
+        // -- Dispatch to consumers -------------------------------------------
         {
             bool hasRawWindow;
             {
@@ -234,44 +283,23 @@ void ImagePipeline::processingLoop() {
                 hasRawWindow = rawPreviewWindow_ != nullptr;
             }
             if (hasRawWindow) {
-                auto rawFrame    = std::make_shared<Frame>();
-                rawFrame->bgr    = bgr.clone();
-                rawFrame->id     = slot.frameId;
-                rawFrame->meta   = slot.meta;
-                rawFrame->width  = slot.width;
-                rawFrame->height = slot.height;
-                rawFrame->stride = static_cast<int>(rawFrame->bgr.step);
-                rawFrame->format = PixelFormat::BGR;
-                publishToRawConsumer(std::move(rawFrame));
+                publishToRawConsumer(rawFrame);
             }
         }
 
-        // Apply saturation (HSV S-channel scaling; identity when saturation ≈ 1).
-        if (std::abs(p.saturation - 1.0f) > 1e-4f) {
-            cv::Mat hsv;
-            cv::cvtColor(bgr, hsv, cv::COLOR_BGR2HSV);
-            std::vector<cv::Mat> ch;
-            cv::split(hsv, ch);
-            // ch[1] is S channel, CV_8U in [0, 255].
-            cv::Mat sFlt;
-            ch[1].convertTo(sFlt, CV_32F);
-            sFlt *= p.saturation;
-            cv::min(sFlt, 255.0f, sFlt);
-            sFlt.convertTo(ch[1], CV_8U);
-            cv::merge(ch, hsv);
-            cv::cvtColor(hsv, bgr, cv::COLOR_HSV2BGR);
+        if (modified) {
+            auto pFrame    = std::make_shared<Frame>();
+            pFrame->id     = slot.frameId;
+            pFrame->meta   = slot.meta;
+            pFrame->bgr    = std::move(processed);
+            pFrame->width  = slot.width;
+            pFrame->height = slot.height;
+            pFrame->stride = static_cast<int>(pFrame->bgr.step);
+            pFrame->format = PixelFormat::BGR;
+            publishToConsumers(std::move(pFrame));
+        } else {
+            publishToConsumers(rawFrame);
         }
-
-        auto frame     = std::make_shared<Frame>();
-        frame->id      = slot.frameId;
-        frame->meta    = slot.meta;
-        frame->bgr     = std::move(bgr);
-        frame->width   = slot.width;
-        frame->height  = slot.height;
-        frame->stride  = static_cast<int>(frame->bgr.step);
-        frame->format  = PixelFormat::BGR;
-
-        publishToConsumers(std::move(frame));
     }
     LOGD("processingLoop: exiting");
 }
