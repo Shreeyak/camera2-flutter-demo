@@ -56,7 +56,7 @@ class GpuSinkConsistencyTest {
 
         // 2. Create an offscreen GpuRenderer (null preview surface = pbuffer only).
         //    nativeGpuInit creates an EGL context and makes it current on this thread.
-        val gpuHandle = GpuPipeline.nativeGpuInit(null, width, height)
+        val gpuHandle = GpuPipeline.nativeGpuInit(null, width, height, null, 0, 0)
         assertNotEquals("nativeGpuInit must return a non-zero GPU handle", 0L, gpuHandle)
 
         try {

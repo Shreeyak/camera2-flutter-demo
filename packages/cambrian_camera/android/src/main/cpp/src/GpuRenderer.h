@@ -8,6 +8,8 @@
 //   - Preview output via EGL window surface blit + eglSwapBuffers
 //   - Double-buffered async PBO readback for full-res and tracker outputs
 //   - Thread-safe uniform updates (brightness, contrast, saturation, black balance)
+//   - Optional raw (passthrough) stream: passthrough shader → rawFBO → rawPBOs
+//     and optional raw preview window surface
 //
 // All GL calls must be issued from the same GL thread. GpuRenderer does not
 // manage a thread — the caller (GpuPipeline.kt) is responsible for that.
@@ -35,9 +37,14 @@ public:
 
     /// Initialize EGL context, surfaces, shaders, FBOs, and PBOs.
     /// Must be called on the GL thread before any other GL methods.
-    /// @param windowSurface  ANativeWindow for preview output; may be null for offscreen-only.
+    /// @param windowSurface      ANativeWindow for processed preview output; may be null.
+    /// @param rawPreviewWindow   ANativeWindow for raw preview output; may be null.
+    /// @param rawW               Raw stream width; 0 to disable raw path.
+    /// @param rawH               Raw stream height; 0 to disable raw path.
     /// @return true on success; false if EGL or GL init fails (resources are cleaned up).
-    bool init(EGLNativeWindowType windowSurface);
+    bool init(EGLNativeWindowType windowSurface,
+              ANativeWindow* rawPreviewWindow = nullptr,
+              int rawW = 0, int rawH = 0);
 
     /// Release all GL and EGL resources. Idempotent — safe to call multiple times.
     /// Must be called on the GL thread.
@@ -51,6 +58,8 @@ public:
     ///   3. Blit full-res FBO → EGL window surface and swap buffers (preview)
     ///   4. Issue async PBO readbacks for full-res and tracker FBOs (writeIdx)
     ///   5. Map previous frame's PBOs (readIdx) and invoke callbacks
+    ///   6. If raw stream enabled: render passthrough → rawFBO, blit to rawEGLSurface,
+    ///      issue raw PBO readback, map previous raw PBO and invoke rawCb
     ///
     /// Must be called on the GL thread.
     ///
@@ -62,6 +71,12 @@ public:
     ///                     along with the frameId and metadata stored at write time
     /// @param trackerCb    Called with 480p RGBA data (pointer valid only during call),
     ///                     along with the frameId and metadata stored at write time
+    /// @param rawCb        Called with raw (passthrough) RGBA data; not called when raw
+    ///                     stream is disabled (rawW == 0) or on the first frame
+    using RawCallback = std::function<void(const uint8_t* rgba, int w, int h,
+                                           int stride, uint64_t frameId,
+                                           const cam::FrameMetadata& meta)>;
+
     void drawAndReadback(
         GLuint oesTexture,
         const float texMatrix[16],
@@ -70,7 +85,8 @@ public:
         std::function<void(const uint8_t*, int w, int h, int stride,
                            uint64_t frameId, const cam::FrameMetadata&)> fullResCb,
         std::function<void(const uint8_t*, int w, int h, int stride,
-                           uint64_t frameId, const cam::FrameMetadata&)> trackerCb);
+                           uint64_t frameId, const cam::FrameMetadata&)> trackerCb,
+        RawCallback rawCb = nullptr);
 
     /// Update shader uniforms. Thread-safe; changes take effect on the next drawAndReadback().
     /// @param brightness   Additive brightness offset [-1, 1]; 0 = identity
@@ -117,6 +133,21 @@ private:
     struct PboMeta { uint64_t frameId; cam::FrameMetadata meta; };
     PboMeta pboMeta_[2] = {};
 
+    // Raw stream resources (all zero/null when raw is disabled)
+    int rawW_ = 0;
+    int rawH_ = 0;
+    GLuint rawProgram_    = 0;
+    GLuint rawFbo_        = 0;
+    GLuint rawFboTexture_ = 0;
+    GLuint rawPbo_[2]     = {0, 0};
+    bool   rawFirstFrame_ = true;
+    PboMeta rawPboMeta_[2] = {};
+    EGLSurface rawEGLSurface_ = EGL_NO_SURFACE;
+
+    // Cached uniform locations for passthrough program
+    GLint rawUTexture_   = -1;
+    GLint rawUTexMatrix_ = -1;
+
     // Pending uniforms — written by setAdjustments(), read under uniformMu_ at draw time
     std::mutex uniformMu_;
     float brightness_      = 0.f;
@@ -137,7 +168,11 @@ private:
     // -- Private helpers ----------------------------------------------------------
 
     /// Initialize EGL display, config, context, and surfaces.
-    bool initEgl(EGLNativeWindowType windowSurface);
+    /// @param rawPreviewWindow  Optional ANativeWindow for raw preview EGL surface.
+    /// @param rawW              Raw stream width (stored to rawW_); 0 = disabled.
+    /// @param rawH              Raw stream height (stored to rawH_); 0 = disabled.
+    bool initEgl(EGLNativeWindowType windowSurface,
+                 ANativeWindow* rawPreviewWindow, int rawW, int rawH);
 
     /// Initialize GL objects (shaders, VBO, FBOs, PBOs). Assumes EGL is current.
     bool initGl();

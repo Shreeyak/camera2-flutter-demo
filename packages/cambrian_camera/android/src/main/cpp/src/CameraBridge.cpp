@@ -2,7 +2,7 @@
 // and GpuRenderer.
 //
 // CPU pipeline entry points: nativeInit, nativeRelease, nativeSetPreviewWindow,
-// nativeSetRawPreviewWindow, nativeDeliverYuv, nativeSetProcessingParams.
+// nativeDeliverYuv, nativeSetProcessingParams.
 // GPU pipeline entry points: nativeGpuInit, nativeGpuRelease,
 // nativeGpuSetAdjustments, nativeGpuDrawAndReadback.
 // Test helper entry points (GpuPipelineTestBridge):
@@ -201,40 +201,6 @@ Java_com_cambrian_camera_CameraController_nativeSetPreviewWindow(
 }
 
 // ---------------------------------------------------------------------------
-// nativeSetRawPreviewWindow
-//
-// Called once after nativeInit to attach the raw (pre-processing) preview surface.
-// May also be called on surface recreation events.
-//
-// @param pipelinePtr      Handle returned by nativeInit.
-// @param previewSurface   Android Surface for the raw preview, or null to stop rendering.
-// ---------------------------------------------------------------------------
-JNIEXPORT void JNICALL
-Java_com_cambrian_camera_CameraController_nativeSetRawPreviewWindow(
-        JNIEnv* env, jclass /*clazz*/,
-        jlong pipelinePtr, jobject previewSurface) {
-    if (!pipelinePtr) {
-        LOGE("nativeSetRawPreviewWindow: null pipeline handle");
-        return;
-    }
-
-    ANativeWindow* window = nullptr;
-    if (previewSurface) {
-        window = ANativeWindow_fromSurface(env, previewSurface);
-        if (!window) {
-            LOGE("nativeSetRawPreviewWindow: ANativeWindow_fromSurface returned null");
-            return;
-        }
-    }
-
-    pipelineFromHandle(pipelinePtr)->setRawPreviewWindow(window);
-
-    if (window) {
-        ANativeWindow_release(window);
-    }
-}
-
-// ---------------------------------------------------------------------------
 // nativeDeliverYuv
 //
 // Copies one YUV_420_888 frame into the C++ input ring and returns immediately.
@@ -346,17 +312,21 @@ Java_com_cambrian_camera_CameraController_nativeSetProcessingParams(
 // shaders, FBOs, and PBOs.  Must be called on the GL thread before any other
 // GPU JNI functions.
 //
-// @param previewSurface  Android Surface for preview output; may be null for
-//                        offscreen-only rendering.
-// @param width           Stream width in pixels.
-// @param height          Stream height in pixels.
+// @param previewSurface      Android Surface for processed preview output; may be null.
+// @param width               Stream width in pixels.
+// @param height              Stream height in pixels.
+// @param rawPreviewSurface   Android Surface for raw preview output; may be null.
+// @param rawW                Raw stream width; 0 to disable raw path.
+// @param rawH                Raw stream height; 0 to disable raw path.
 // @return  Non-zero GpuRenderer handle on success; 0 on failure.
 // ---------------------------------------------------------------------------
 JNIEXPORT jlong JNICALL
 Java_com_cambrian_camera_GpuPipeline_nativeGpuInit(
         JNIEnv* env, jclass /*clazz*/,
         jobject previewSurface,
-        jint width, jint height) {
+        jint width, jint height,
+        jobject rawPreviewSurface,
+        jint rawW, jint rawH) {
     auto* renderer = new cam::GpuRenderer(static_cast<int>(width),
                                           static_cast<int>(height));
 
@@ -370,12 +340,24 @@ Java_com_cambrian_camera_GpuPipeline_nativeGpuInit(
         }
     }
 
-    const bool ok = renderer->init(nativeWindow);
-
-    // GpuRenderer acquires its own EGL reference; release the JNI-owned ref.
-    if (nativeWindow) {
-        ANativeWindow_release(nativeWindow);
+    ANativeWindow* rawNativeWindow = nullptr;
+    if (rawPreviewSurface) {
+        rawNativeWindow = ANativeWindow_fromSurface(env, rawPreviewSurface);
+        if (!rawNativeWindow) {
+            LOGE("nativeGpuInit: ANativeWindow_fromSurface for raw preview returned null — "
+                 "continuing without raw preview window");
+            // Non-fatal: raw path continues without preview blit
+        }
     }
+
+    const bool ok = renderer->init(nativeWindow,
+                                   rawNativeWindow,
+                                   static_cast<int>(rawW),
+                                   static_cast<int>(rawH));
+
+    // GpuRenderer acquires its own EGL references; release the JNI-owned refs.
+    if (nativeWindow)    ANativeWindow_release(nativeWindow);
+    if (rawNativeWindow) ANativeWindow_release(rawNativeWindow);
 
     if (!ok) {
         LOGE("nativeGpuInit: GpuRenderer::init failed");
@@ -383,8 +365,9 @@ Java_com_cambrian_camera_GpuPipeline_nativeGpuInit(
         return 0;
     }
 
-    LOGD("nativeGpuInit: renderer created at %p dims=%dx%d", renderer,
-         static_cast<int>(width), static_cast<int>(height));
+    LOGD("nativeGpuInit: renderer created at %p dims=%dx%d raw=%dx%d", renderer,
+         static_cast<int>(width), static_cast<int>(height),
+         static_cast<int>(rawW),  static_cast<int>(rawH));
     return static_cast<jlong>(reinterpret_cast<uintptr_t>(renderer));
 }
 
@@ -451,7 +434,7 @@ Java_com_cambrian_camera_GpuPipeline_nativeGpuSetAdjustments(
 //
 // Called every frame on the GL thread.  Renders one frame from the OES texture
 // through the shader, blits to the preview surface, and delivers RGBA readback
-// data to the ImagePipeline sinks (full-res and tracker).
+// data to the ImagePipeline sinks (full-res, tracker, and raw).
 //
 // @param gpuHandle          Handle returned by nativeGpuInit.
 // @param pipelinePtr        Handle returned by nativeInit (ImagePipeline).
@@ -510,6 +493,10 @@ Java_com_cambrian_camera_GpuPipeline_nativeGpuDrawAndReadback(
             [pipeline](const uint8_t* d, int w, int h, int s,
                        uint64_t fId, const cam::FrameMetadata& m) {
                 pipeline->deliverTrackerRgba(d, w, h, s, fId, m);
+            },
+            [pipeline](const uint8_t* d, int w, int h, int s,
+                       uint64_t fId, const cam::FrameMetadata& m) {
+                pipeline->deliverRawRgba(d, w, h, s, fId, m);
             });
 
     env->ReleaseFloatArrayElements(texMatrix, texMatrixPtr, JNI_ABORT);

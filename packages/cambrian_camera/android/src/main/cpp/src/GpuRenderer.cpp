@@ -68,6 +68,22 @@ void main() {
 }
 )glsl";
 
+// Passthrough fragment shader: pure sensor output, no color adjustments.
+// Used by the raw stream path.
+static const char* kRawFragSrc = R"glsl(
+#version 300 es
+#extension GL_OES_EGL_image_external_essl3 : require
+precision mediump float;
+in vec2 vTexCoord;
+out vec4 fragColor;
+uniform samplerExternalOES uTexture;
+uniform mat4 uTexMatrix;
+void main() {
+    vec2 texUv = (uTexMatrix * vec4(vTexCoord, 0.0, 1.0)).xy;
+    fragColor = vec4(texture(uTexture, texUv).rgb, 1.0);
+}
+)glsl";
+
 // ---------------------------------------------------------------------------
 // Fullscreen quad: 2 triangles covering NDC [-1,1]x[-1,1]
 // ---------------------------------------------------------------------------
@@ -115,8 +131,10 @@ GpuRenderer::~GpuRenderer() {
 // Public: init / release
 // ---------------------------------------------------------------------------
 
-bool GpuRenderer::init(EGLNativeWindowType windowSurface) {
-    if (!initEgl(windowSurface)) {
+bool GpuRenderer::init(EGLNativeWindowType windowSurface,
+                       ANativeWindow* rawPreviewWindow,
+                       int rawW, int rawH) {
+    if (!initEgl(windowSurface, rawPreviewWindow, rawW, rawH)) {
         LOGE("init: EGL setup failed");
         return false;
     }
@@ -146,7 +164,8 @@ void GpuRenderer::drawAndReadback(
     std::function<void(const uint8_t*, int w, int h, int stride,
                        uint64_t frameId, const cam::FrameMetadata&)> fullResCb,
     std::function<void(const uint8_t*, int w, int h, int stride,
-                       uint64_t frameId, const cam::FrameMetadata&)> trackerCb)
+                       uint64_t frameId, const cam::FrameMetadata&)> trackerCb,
+    RawCallback rawCb)
 {
     // -----------------------------------------------------------------------
     // 1. Snapshot uniforms under the lock so the GL thread gets a consistent copy.
@@ -299,6 +318,76 @@ void GpuRenderer::drawAndReadback(
     // -----------------------------------------------------------------------
     pboIndex_   = 1 - pboIndex_;
     firstFrame_ = false;
+
+    // -----------------------------------------------------------------------
+    // 8. Raw stream: passthrough render → rawFBO, optional preview blit,
+    //    double-buffered PBO readback
+    // -----------------------------------------------------------------------
+    if (rawW_ > 0) {
+        const int rawWriteIdx = pboIndex_;        // already advanced above
+        const int rawReadIdx  = 1 - pboIndex_;
+
+        // Render passthrough shader → rawFBO
+        glBindFramebuffer(GL_FRAMEBUFFER, rawFbo_);
+        glViewport(0, 0, rawW_, rawH_);
+        glUseProgram(rawProgram_);
+
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_EXTERNAL_OES, oesTexture);
+        glUniform1i(rawUTexture_, 0);
+        glUniformMatrix4fv(rawUTexMatrix_, 1, GL_FALSE, texMatrix);
+
+        glBindBuffer(GL_ARRAY_BUFFER, vbo_);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, nullptr);
+        glDrawArrays(GL_TRIANGLES, 0, 6);
+        glDisableVertexAttribArray(0);
+        glBindBuffer(GL_ARRAY_BUFFER, 0);
+        checkGlError("raw passthrough render");
+
+        // Optional raw preview window blit
+        if (rawEGLSurface_ != EGL_NO_SURFACE) {
+            eglMakeCurrent(eglDisplay_, rawEGLSurface_, rawEGLSurface_, eglContext_);
+            glBindFramebuffer(GL_READ_FRAMEBUFFER, rawFbo_);
+            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+            glBlitFramebuffer(0, 0, rawW_, rawH_,
+                              0, 0, rawW_, rawH_,
+                              GL_COLOR_BUFFER_BIT, GL_NEAREST);
+            eglSwapBuffers(eglDisplay_, rawEGLSurface_);
+            eglMakeCurrent(eglDisplay_, eglPbufferSurface_, eglPbufferSurface_, eglContext_);
+            checkGlError("raw preview blit");
+        }
+
+        // Issue async PBO readback for raw frame
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, rawFbo_);
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, rawPbo_[rawWriteIdx]);
+        glReadPixels(0, 0, rawW_, rawH_, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+        checkGlError("raw PBO readback");
+
+        // Store metadata alongside PBO write
+        rawPboMeta_[rawWriteIdx] = {frameId, meta};
+
+        // Map previous raw PBO and invoke callback
+        if (!rawFirstFrame_ && rawCb) {
+            const auto& rawMeta = rawPboMeta_[rawReadIdx];
+            glBindBuffer(GL_PIXEL_PACK_BUFFER, rawPbo_[rawReadIdx]);
+            auto* rawPtr = static_cast<const uint8_t*>(
+                glMapBufferRange(GL_PIXEL_PACK_BUFFER, 0,
+                                 static_cast<GLsizeiptr>(rawW_) * rawH_ * 4,
+                                 GL_MAP_READ_BIT));
+            if (rawPtr) {
+                rawCb(rawPtr, rawW_, rawH_, rawW_ * 4,
+                      rawMeta.frameId, rawMeta.meta);
+                glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
+            } else {
+                LOGE("drawAndReadback: failed to map raw PBO[%d]", rawReadIdx);
+            }
+            glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+            checkGlError("map raw PBO");
+        }
+        rawFirstFrame_ = false;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -321,7 +410,9 @@ void GpuRenderer::setAdjustments(float brightness, float contrast, float saturat
 // Private: EGL setup
 // ---------------------------------------------------------------------------
 
-bool GpuRenderer::initEgl(EGLNativeWindowType windowSurface) {
+bool GpuRenderer::initEgl(EGLNativeWindowType windowSurface,
+                          ANativeWindow* rawPreviewWindow,
+                          int rawW, int rawH) {
     eglDisplay_ = eglGetDisplay(EGL_DEFAULT_DISPLAY);
     if (eglDisplay_ == EGL_NO_DISPLAY) {
         LOGE("initEgl: eglGetDisplay failed");
@@ -384,6 +475,19 @@ bool GpuRenderer::initEgl(EGLNativeWindowType windowSurface) {
         if (eglWindowSurface_ == EGL_NO_SURFACE) {
             LOGE("initEgl: eglCreateWindowSurface failed — continuing offscreen-only");
             // Non-fatal: preview just won't be shown
+        }
+    }
+
+    // Store raw dimensions (checked by initGl to decide whether to allocate raw resources)
+    rawW_ = rawW;
+    rawH_ = rawH;
+
+    // Create raw preview window surface if requested
+    if (rawW_ > 0 && rawH_ > 0 && rawPreviewWindow != nullptr) {
+        rawEGLSurface_ = eglCreateWindowSurface(eglDisplay_, config, rawPreviewWindow, nullptr);
+        if (rawEGLSurface_ == EGL_NO_SURFACE) {
+            LOGE("initEgl: eglCreateWindowSurface for raw preview failed — raw preview disabled");
+            // Non-fatal: raw path continues without preview blit
         }
     }
 
@@ -496,6 +600,76 @@ bool GpuRenderer::initGl() {
     glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
     checkGlError("tracker PBOs");
 
+    // --- Raw stream resources (only when raw dimensions were set in initEgl) ---
+    if (rawW_ > 0 && rawH_ > 0) {
+        // Compile and link passthrough program
+        GLuint rawVert = compileShader(GL_VERTEX_SHADER,   kVertSrc);
+        GLuint rawFrag = compileShader(GL_FRAGMENT_SHADER, kRawFragSrc);
+        if (!rawVert || !rawFrag) {
+            glDeleteShader(rawVert);
+            glDeleteShader(rawFrag);
+            LOGE("initGl: raw passthrough shader compile failed — disabling raw");
+            rawW_ = 0;
+        } else {
+            rawProgram_ = linkProgram(rawVert, rawFrag);
+            glDeleteShader(rawVert);
+            glDeleteShader(rawFrag);
+            if (!rawProgram_) {
+                LOGE("initGl: raw passthrough program link failed — disabling raw");
+                rawW_ = 0;
+            }
+        }
+
+        if (rawW_ > 0) {
+            // Cache uniform locations
+            rawUTexture_   = glGetUniformLocation(rawProgram_, "uTexture");
+            rawUTexMatrix_ = glGetUniformLocation(rawProgram_, "uTexMatrix");
+
+            // Raw FBO with RGBA8 color attachment
+            glGenTextures(1, &rawFboTexture_);
+            glBindTexture(GL_TEXTURE_2D, rawFboTexture_);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, rawW_, rawH_, 0,
+                         GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+            glBindTexture(GL_TEXTURE_2D, 0);
+
+            glGenFramebuffers(1, &rawFbo_);
+            glBindFramebuffer(GL_FRAMEBUFFER, rawFbo_);
+            glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                                   GL_TEXTURE_2D, rawFboTexture_, 0);
+            if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+                LOGE("initGl: raw FBO incomplete — disabling raw");
+                glBindFramebuffer(GL_FRAMEBUFFER, 0);
+                rawW_ = 0;
+            } else {
+                glBindFramebuffer(GL_FRAMEBUFFER, 0);
+                checkGlError("raw FBO");
+
+                // Raw PBOs (double-buffered)
+                glGenBuffers(2, rawPbo_);
+                for (int i = 0; i < 2; ++i) {
+                    glBindBuffer(GL_PIXEL_PACK_BUFFER, rawPbo_[i]);
+                    glBufferData(GL_PIXEL_PACK_BUFFER,
+                                 (GLsizeiptr)(rawW_ * rawH_ * 4),
+                                 nullptr, GL_STREAM_READ);
+                }
+                glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+                checkGlError("raw PBOs");
+
+                LOGI("GpuRenderer: raw stream enabled %dx%d", rawW_, rawH_);
+            }
+
+            // If any step above disabled raw, clean up partially-allocated resources
+            if (rawW_ == 0) {
+                if (rawPbo_[0])        { glDeleteBuffers(2, rawPbo_);              rawPbo_[0] = rawPbo_[1] = 0; }
+                if (rawFbo_)           { glDeleteFramebuffers(1, &rawFbo_);        rawFbo_        = 0; }
+                if (rawFboTexture_)    { glDeleteTextures(1, &rawFboTexture_);     rawFboTexture_ = 0; }
+                if (rawProgram_)       { glDeleteProgram(rawProgram_);             rawProgram_    = 0; }
+            }
+        }
+    }
+
     LOGI("initGl: OK");
     return true;
 }
@@ -505,6 +679,13 @@ bool GpuRenderer::initGl() {
 // ---------------------------------------------------------------------------
 
 void GpuRenderer::releaseGl() {
+    // Raw stream resources
+    if (rawPbo_[0])        { glDeleteBuffers(2, rawPbo_);              rawPbo_[0] = rawPbo_[1] = 0; }
+    if (rawFbo_)           { glDeleteFramebuffers(1, &rawFbo_);        rawFbo_        = 0; }
+    if (rawFboTexture_)    { glDeleteTextures(1, &rawFboTexture_);     rawFboTexture_ = 0; }
+    if (rawProgram_)       { glDeleteProgram(rawProgram_);             rawProgram_    = 0; }
+
+    // Processed pipeline resources
     if (fullResPbo_[0]) { glDeleteBuffers(2, fullResPbo_); fullResPbo_[0] = fullResPbo_[1] = 0; }
     if (trackerPbo_[0]) { glDeleteBuffers(2, trackerPbo_); trackerPbo_[0] = trackerPbo_[1] = 0; }
     if (trackerFbo_)     { glDeleteFramebuffers(1, &trackerFbo_);  trackerFbo_     = 0; }
@@ -515,8 +696,11 @@ void GpuRenderer::releaseGl() {
     if (program_)        { glDeleteProgram(program_);              program_        = 0; }
 
     // Reset per-frame state so init() can be called again
-    pboIndex_   = 0;
-    firstFrame_ = true;
+    pboIndex_      = 0;
+    firstFrame_    = true;
+    rawW_          = 0;
+    rawH_          = 0;
+    rawFirstFrame_ = true;
 }
 
 void GpuRenderer::releaseEgl() {
@@ -524,6 +708,10 @@ void GpuRenderer::releaseEgl() {
 
     eglMakeCurrent(eglDisplay_, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
 
+    if (rawEGLSurface_ != EGL_NO_SURFACE) {
+        eglDestroySurface(eglDisplay_, rawEGLSurface_);
+        rawEGLSurface_ = EGL_NO_SURFACE;
+    }
     if (eglWindowSurface_ != EGL_NO_SURFACE) {
         eglDestroySurface(eglDisplay_, eglWindowSurface_);
         eglWindowSurface_ = EGL_NO_SURFACE;
