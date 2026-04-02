@@ -136,7 +136,8 @@ private:
     void shutdownConsumers();
 
     // -- Helpers -----------------------------------------------------------------
-    /// Blit an RGBA mat to an ANativeWindow. Must NOT be called with any lock held.
+    /// Blit an RGBA mat to an ANativeWindow. Acquires windowMu_ internally;
+    /// must NOT be called with windowMu_ already held (deadlock).
     /// window/lastW/lastH are the pipeline members for that window slot.
     void blitToWindow(ANativeWindow*& window, int& lastW, int& lastH, const cv::Mat& rgba);
 };

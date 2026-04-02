@@ -1,7 +1,16 @@
 import 'dart:async' show StreamSubscription;
 import 'dart:math' show max;
 
-import 'package:cambrian_camera/cambrian_camera.dart';
+import 'package:cambrian_camera/cambrian_camera.dart'
+    show
+        AutoValue,
+        CambrianCamera,
+        CameraError,
+        CameraErrorCode,
+        CameraSettings,
+        FrameResult,
+        ProcessingParams,
+        WhiteBalance;
 import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
 

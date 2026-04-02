@@ -183,6 +183,15 @@ class CameraController(
     /** Opaque pointer to the native pipeline, set after [nativeInit]. */
     @Volatile private var nativePipelinePtr: Long = 0L
 
+    /**
+     * Guards [nativePipelinePtr] reads/writes and JNI calls that touch the native pipeline.
+     * Ensures [nativeDeliverYuv] and [nativeRelease] never run concurrently for the same pointer.
+     */
+    private val pipelineLock = Any()
+
+    /** Last processing params applied via [setProcessingParams]; replayed after pipeline recreation. */
+    @Volatile private var lastProcessingParams: CamProcessingParams? = null
+
     /** Latest preview dimensions configured on [surfaceProducer]. */
     @Volatile private var previewWidth: Int = 0
 
@@ -475,8 +484,11 @@ class CameraController(
             val streamWidth: Int = largestYuv?.width ?: 1280
             val streamHeight: Int = largestYuv?.height ?: 960
 
-            // Estimate 4 ring-buffer slots of YUV at the stream resolution.
-            val estimatedBytes: Long = streamWidth.toLong() * streamHeight * 4L * 4L
+            // Estimate 4 YUV_420_888 ring-buffer slots (1.5 bytes/pixel each) plus
+            // one RGBA texture buffer if the raw preview surface is active.
+            val yuvBytes: Long = streamWidth.toLong() * streamHeight * 3L / 2L * 4L
+            val textureBytes: Long = if (rawSurfaceProducer != null) streamWidth.toLong() * streamHeight * 4L else 0L
+            val estimatedBytes: Long = yuvBytes + textureBytes
 
             val caps =
                 CamCapabilities(
@@ -667,6 +679,7 @@ class CameraController(
      * @param params Image processing parameters (black balance, gamma, saturation, etc.).
      */
     fun setProcessingParams(params: CamProcessingParams) {
+        lastProcessingParams = params
         val ptr = nativePipelinePtr
         if (ptr == 0L) return
         nativeSetProcessingParams(
@@ -824,6 +837,17 @@ class CameraController(
         // Initialise native pipeline with the processed-preview surface and stream dims.
         val previewSurface = surfaceProducer.getSurface()
         nativePipelinePtr = nativeInit(previewSurface, streamWidth, streamHeight)
+        if (nativePipelinePtr == 0L) {
+            android.util.Log.e("CambrianCamera", "startCaptureSession: nativeInit failed — aborting session startup")
+            imageReader = null
+            jpegImageReader = null
+            streamReader.close()
+            jpegReader.close()
+            return
+        }
+
+        // Replay any previously set processing params so they survive pipeline recreation.
+        lastProcessingParams?.let { setProcessingParams(it) }
 
         // Wire the raw (pre-processing) preview surface.
         nativeSetRawPreviewWindow(nativePipelinePtr, rawSurfaceProducer.getSurface())
@@ -841,35 +865,38 @@ class CameraController(
                 }
                 // Copy YUV planes into the C++ input ring; image.close() below releases
                 // the camera buffer — the native side has already memcpy'd the data.
-                val ptr = nativePipelinePtr
-                if (ptr != 0L) {
-                    val yPlane = image.planes[0]
-                    val uPlane = image.planes[1]
-                    val vPlane = image.planes[2]
+                // pipelineLock serializes this JNI call with teardown's nativeRelease.
+                synchronized(pipelineLock) {
+                    val ptr = nativePipelinePtr
+                    if (ptr != 0L) {
+                        val yPlane = image.planes[0]
+                        val uPlane = image.planes[1]
+                        val vPlane = image.planes[2]
 
-                    // Detect YUV layout from plane strides on the first frame; cache it.
-                    // The layout is a hardware property of the device and never changes
-                    // mid-session, so we lock in the result and assert in debug builds.
-                    if (detectedYuvFormat == YUV_FORMAT_UNKNOWN) {
-                        detectedYuvFormat = detectYuvFormat(image)
-                        android.util.Log.d(
-                            "CambrianCamera",
-                            "Detected YUV format: ${yuvFormatName(detectedYuvFormat)}",
+                        // Detect YUV layout from plane strides on the first frame; cache it.
+                        // The layout is a hardware property of the device and never changes
+                        // mid-session, so we lock in the result and assert in debug builds.
+                        if (detectedYuvFormat == YUV_FORMAT_UNKNOWN) {
+                            detectedYuvFormat = detectYuvFormat(image)
+                            android.util.Log.d(
+                                "CambrianCamera",
+                                "Detected YUV format: ${yuvFormatName(detectedYuvFormat)}",
+                            )
+                        }
+
+                        nativeDeliverYuv(
+                            ptr,
+                            yPlane.buffer, yPlane.rowStride,
+                            uPlane.buffer, uPlane.rowStride, uPlane.pixelStride,
+                            vPlane.buffer,
+                            image.width, image.height,
+                            streamFrameCount,
+                            lastKnownIso ?: 0,
+                            lastKnownExposureTimeNs ?: 0L,
+                            image.timestamp,
+                            detectedYuvFormat,
                         )
                     }
-
-                    nativeDeliverYuv(
-                        ptr,
-                        yPlane.buffer, yPlane.rowStride,
-                        uPlane.buffer, uPlane.rowStride, uPlane.pixelStride,
-                        vPlane.buffer,
-                        image.width, image.height,
-                        streamFrameCount,
-                        lastKnownIso ?: 0,
-                        lastKnownExposureTimeNs ?: 0L,
-                        image.timestamp,
-                        detectedYuvFormat,
-                    )
                 }
             } finally {
                 image.close()
@@ -1228,11 +1255,14 @@ class CameraController(
         lastKnownIso = null
         lastKnownExposureTimeNs = null
 
-        // Release native pipeline.
-        val ptr = nativePipelinePtr
-        if (ptr != 0L) {
-            nativeRelease(ptr)
-            nativePipelinePtr = 0L
+        // Release native pipeline; pipelineLock ensures no nativeDeliverYuv call is
+        // in-flight when nativeRelease runs (prevents use-after-free).
+        synchronized(pipelineLock) {
+            val ptr = nativePipelinePtr
+            if (ptr != 0L) {
+                nativePipelinePtr = 0L
+                nativeRelease(ptr)
+            }
         }
     }
 

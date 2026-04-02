@@ -71,9 +71,11 @@ dart format lib/            # Format code to match Flutter conventions
 The native pipeline uses OpenCV. The SDK is **not** checked in; it is symlinked from a host build:
 
 ```bash
-ln -s /Users/shrek/software/opencv-build-android/opencv-android-sdk \
+ln -s <OPENCV_ANDROID_SDK_PATH> \
       packages/cambrian_camera/android/opencv
 ```
+
+Replace `<OPENCV_ANDROID_SDK_PATH>` with the absolute path to your OpenCV Android SDK (e.g. `$HOME/software/opencv-build-android/opencv-android-sdk`).
 
 Run this once per worktree clone. The symlink is git-ignored. Without it, the NDK build will fail with a missing `OpenCV_DIR` error.
 

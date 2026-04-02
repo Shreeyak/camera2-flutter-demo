@@ -1,5 +1,14 @@
 // ignore_for_file: one_member_abstracts
-import 'package:pigeon/pigeon.dart';
+import 'package:pigeon/pigeon.dart'
+    show
+        ConfigurePigeon,
+        PigeonOptions,
+        DartOptions,
+        KotlinOptions,
+        SwiftOptions,
+        HostApi,
+        FlutterApi,
+        async;
 
 @ConfigurePigeon(PigeonOptions(
   dartOut: 'lib/src/messages.g.dart',

@@ -56,9 +56,20 @@ Java_com_cambrian_camera_CameraController_nativeInit(
         return 0;
     }
 
-    auto* pipeline = new cam::ImagePipeline(window,
-                                            static_cast<int>(width),
-                                            static_cast<int>(height));
+    cam::ImagePipeline* pipeline;
+    try {
+        pipeline = new cam::ImagePipeline(window,
+                                          static_cast<int>(width),
+                                          static_cast<int>(height));
+    } catch (const std::exception& e) {
+        LOGE("nativeInit: ImagePipeline construction failed: %s", e.what());
+        ANativeWindow_release(window);
+        return 0;
+    } catch (...) {
+        LOGE("nativeInit: ImagePipeline construction failed with unknown exception");
+        ANativeWindow_release(window);
+        return 0;
+    }
 
     // ImagePipeline acquires its own reference; release the one from fromSurface.
     ANativeWindow_release(window);
