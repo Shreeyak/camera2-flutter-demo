@@ -505,9 +505,9 @@ class CameraController(
                     evCompMax = evRange?.upper?.toLong() ?: 6L,
                     evCompensationStep = evStep?.toDouble() ?: 0.5,
                     estimatedMemoryBytes = estimatedBytes,
-                    streamWidth = streamWidth.toLong(),
-                    streamHeight = streamHeight.toLong(),
-                    rawTextureId = rawSurfaceProducer.id(),
+                    yuvStreamWidth = streamWidth.toLong(),
+                    yuvStreamHeight = streamHeight.toLong(),
+                    rawStreamTextureId = rawSurfaceProducer.id(),
                 )
             callback(Result.success(caps))
         } catch (e: CameraAccessException) {

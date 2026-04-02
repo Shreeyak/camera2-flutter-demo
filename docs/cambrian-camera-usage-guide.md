@@ -510,8 +510,8 @@ print('Resolutions: ${caps.supportedSizes}');
 | `zoomMin` / `zoomMax` | `double` | Zoom ratio range |
 | `evCompMin` / `evCompMax` | `int` | EV compensation range (in steps) |
 | `evCompensationStep` | `double` | Size of one EV step |
-| `streamWidth` / `streamHeight` | `int` | YUV stream dimensions delivered to the C++ pipeline (pixels). Used by the preview widget for correct aspect ratio. |
-| `rawTextureId` | `int` | Flutter texture ID for the raw (pre-processing) preview stream. Pass to `Texture(textureId: caps.rawTextureId)` to render the unprocessed preview pane. |
+| `yuvStreamWidth` / `yuvStreamHeight` | `int` | YUV stream dimensions delivered to the C++ pipeline (pixels). Used by the preview widget for correct aspect ratio. |
+| `rawStreamTextureId` | `int` | Flutter texture ID for the raw (pre-processing) preview stream. Pass to `Texture(textureId: caps.rawStreamTextureId)` to render the unprocessed preview pane. |
 | `estimatedMemoryBytes` | `int` | Estimated native memory usage |
 
 ---
@@ -669,7 +669,7 @@ Memory per frame (BGR, 3 bytes/pixel):
 width * height * 3 bytes per frame × (up to consumers + 1 in-flight) frames
 ```
 
-Example at 4K (4160×3120, as reported by `streamWidth`/`streamHeight`):
+Example at 4K (4160×3120, as reported by `yuvStreamWidth`/`yuvStreamHeight`):
 
 | Allocation | Size |
 |-----------|------|

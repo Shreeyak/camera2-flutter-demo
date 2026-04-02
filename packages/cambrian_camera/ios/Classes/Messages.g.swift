@@ -278,11 +278,11 @@ struct CamCapabilities {
   var evCompensationStep: Double
   var estimatedMemoryBytes: Int64
   /// Width of the YUV stream used by the C++ pipeline (pixels).
-  var streamWidth: Int64
+  var yuvStreamWidth: Int64
   /// Height of the YUV stream used by the C++ pipeline (pixels).
-  var streamHeight: Int64
+  var yuvStreamHeight: Int64
   /// Flutter texture ID for the raw (pre-processing) preview.
-  var rawTextureId: Int64
+  var rawStreamTextureId: Int64
 
 
   // swift-format-ignore: AlwaysUseLowerCamelCase
@@ -300,9 +300,9 @@ struct CamCapabilities {
     let evCompMax = pigeonVar_list[10] as! Int64
     let evCompensationStep = pigeonVar_list[11] as! Double
     let estimatedMemoryBytes = pigeonVar_list[12] as! Int64
-    let streamWidth = pigeonVar_list[13] as! Int64
-    let streamHeight = pigeonVar_list[14] as! Int64
-    let rawTextureId = pigeonVar_list[15] as! Int64
+    let yuvStreamWidth = pigeonVar_list[13] as! Int64
+    let yuvStreamHeight = pigeonVar_list[14] as! Int64
+    let rawStreamTextureId = pigeonVar_list[15] as! Int64
 
     return CamCapabilities(
       supportedSizes: supportedSizes,
@@ -318,9 +318,9 @@ struct CamCapabilities {
       evCompMax: evCompMax,
       evCompensationStep: evCompensationStep,
       estimatedMemoryBytes: estimatedMemoryBytes,
-      streamWidth: streamWidth,
-      streamHeight: streamHeight,
-      rawTextureId: rawTextureId
+      yuvStreamWidth: yuvStreamWidth,
+      yuvStreamHeight: yuvStreamHeight,
+      rawStreamTextureId: rawStreamTextureId
     )
   }
   func toList() -> [Any?] {
@@ -338,9 +338,9 @@ struct CamCapabilities {
       evCompMax,
       evCompensationStep,
       estimatedMemoryBytes,
-      streamWidth,
-      streamHeight,
-      rawTextureId,
+      yuvStreamWidth,
+      yuvStreamHeight,
+      rawStreamTextureId,
     ]
   }
 }

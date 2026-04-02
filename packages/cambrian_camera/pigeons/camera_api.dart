@@ -128,9 +128,9 @@ class CamCapabilities {
     required this.evCompMax,
     required this.evCompensationStep,
     required this.estimatedMemoryBytes,
-    required this.streamWidth,
-    required this.streamHeight,
-    required this.rawTextureId,
+    required this.yuvStreamWidth,
+    required this.yuvStreamHeight,
+    required this.rawStreamTextureId,
   });
 
   List<CamSize> supportedSizes;
@@ -147,11 +147,11 @@ class CamCapabilities {
   double evCompensationStep;
   int estimatedMemoryBytes;
   /// Width of the YUV stream used by the C++ pipeline (pixels).
-  int streamWidth;
+  int yuvStreamWidth;
   /// Height of the YUV stream used by the C++ pipeline (pixels).
-  int streamHeight;
+  int yuvStreamHeight;
   /// Flutter texture ID for the raw (pre-processing) preview.
-  int rawTextureId;
+  int rawStreamTextureId;
 }
 
 class CamStateUpdate {

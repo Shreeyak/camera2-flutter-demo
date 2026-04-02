@@ -15,12 +15,13 @@ import io.flutter.view.TextureRegistry
  * is used as the camera handle returned to Dart, and the [CameraController] that manages
  * the Camera2 lifecycle for this session.
  *
- * @property producer  Flutter texture entry backing the camera preview.
+ * @property producer             Flutter texture entry backing the processed preview.
+ * @property rawSurfaceProducer  Flutter texture entry backing the raw (pre-processing) preview.
  * @property controller  Camera2 lifecycle manager for this session.
  */
 data class CameraSession(
     val producer: TextureRegistry.SurfaceProducer,
-    val rawProducer: TextureRegistry.SurfaceProducer,
+    val rawSurfaceProducer: TextureRegistry.SurfaceProducer,
     val controller: CameraController,
 )
 
@@ -90,7 +91,7 @@ class CambrianCameraPlugin : FlutterPlugin, ActivityAware, CameraHostApi {
         sessions.values.forEach { session ->
             try { session.controller.release() } catch (_: Exception) {}
             try { session.producer.release() } catch (_: Exception) {}
-            try { session.rawProducer.release() } catch (_: Exception) {}
+            try { session.rawSurfaceProducer.release() } catch (_: Exception) {}
         }
         sessions.clear()
         flutterApi = null
@@ -149,19 +150,19 @@ class CambrianCameraPlugin : FlutterPlugin, ActivityAware, CameraHostApi {
         }
 
         val producer = registry.createSurfaceProducer()
-        val rawProducer = registry.createSurfaceProducer()
+        val rawSurfaceProducer = registry.createSurfaceProducer()
         val handle = producer.id()
-        val controller = CameraController(ctx, producer, rawProducer, api, handle)
+        val controller = CameraController(ctx, producer, rawSurfaceProducer, api, handle)
 
         // Register the session immediately so that close() can tear it down even if open()
         // hasn't returned yet.  On failure, remove the session and release resources.
-        sessions[handle] = CameraSession(producer, rawProducer, controller)
+        sessions[handle] = CameraSession(producer, rawSurfaceProducer, controller)
         controller.open(cameraId, settings) { result ->
             if (result.isFailure) {
                 sessions.remove(handle)
                 try { controller.release() } catch (_: Exception) {}
                 try { producer.release() } catch (_: Exception) {}
-                try { rawProducer.release() } catch (_: Exception) {}
+                try { rawSurfaceProducer.release() } catch (_: Exception) {}
             }
             callback(result)
         }
@@ -252,7 +253,7 @@ class CambrianCameraPlugin : FlutterPlugin, ActivityAware, CameraHostApi {
         }
         session.controller.close { result ->
             session.producer.release()
-            session.rawProducer.release()
+            session.rawSurfaceProducer.release()
             callback(result)
         }
     }

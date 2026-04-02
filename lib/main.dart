@@ -426,15 +426,15 @@ class _CameraScreenState extends State<CameraScreen> {
       return const ColoredBox(color: Colors.black);
     }
     final caps = camera.capabilities;
-    if (caps.rawTextureId == 0) {
+    if (caps.rawStreamTextureId == 0) {
       return const ColoredBox(color: Colors.black);
     }
     return FittedBox(
       fit: BoxFit.cover,
       child: SizedBox(
-        width: caps.streamWidth.toDouble(),
-        height: caps.streamHeight.toDouble(),
-        child: Texture(textureId: caps.rawTextureId),
+        width: caps.yuvStreamWidth.toDouble(),
+        height: caps.yuvStreamHeight.toDouble(),
+        child: Texture(textureId: caps.rawStreamTextureId),
       ),
     );
   }
