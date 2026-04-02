@@ -32,6 +32,7 @@ android {
             // prebuilts would be needed for each additional ABI.
             abiFilters += "arm64-v8a"
         }
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         externalNativeBuild {
             cmake {
                 // c++_shared: makes AGP package libc++_shared.so in the APK
@@ -56,4 +57,6 @@ dependencies {
     // script injects flutter.jar (FlutterPlugin, ActivityAware, TextureRegistry, etc.)
     // as compileOnly automatically when this module is included by the host app.
     compileOnly("androidx.lifecycle:lifecycle-common:2.7.0")
+    androidTestImplementation("androidx.test.ext:junit:1.1.5")
+    androidTestImplementation("androidx.test:runner:1.5.2")
 }
