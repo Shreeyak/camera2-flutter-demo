@@ -1,0 +1,14 @@
+CompileFlags:
+  Add:
+    - --target=aarch64-linux-android24
+    - --sysroot=/Users/shrek/Library/Android/sdk/ndk/27.0.12077973/toolchains/llvm/prebuilt/darwin-x86_64/sysroot
+    - -I/Users/shrek/Library/Android/sdk/ndk/27.0.12077973/toolchains/llvm/prebuilt/darwin-x86_64/sysroot/usr/include
+    - -I/Users/shrek/Library/Android/sdk/ndk/27.0.12077973/toolchains/llvm/prebuilt/darwin-x86_64/sysroot/usr/include/aarch64-linux-android
+    - -D__ANDROID__
+    - -D__ANDROID_API__=24
+    - -std=c++17
+    # Project headers
+    - -I/Users/shrek/work/cambrian/camera2_flutter_demo.worktrees/camera2_flutter_demo-feature-gpu-shader/packages/cambrian_camera/android/src/main/cpp/include
+    - -I/Users/shrek/work/cambrian/camera2_flutter_demo.worktrees/camera2_flutter_demo-feature-gpu-shader/packages/cambrian_camera/android/src/main/cpp/src
+    # OpenCV (adjust path if SDK is elsewhere)
+    - -I/Users/shrek/software/opencv-build-android/opencv-android-sdk/sdk/native/jni/include
