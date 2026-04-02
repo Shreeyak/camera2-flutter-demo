@@ -53,6 +53,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 class CameraController(
     private val context: Context,
     private val surfaceProducer: TextureRegistry.SurfaceProducer,
+    private val rawSurfaceProducer: TextureRegistry.SurfaceProducer,
     private val flutterApi: CameraFlutterApi,
     val handle: Long,
 ) {
@@ -65,36 +66,79 @@ class CameraController(
             System.loadLibrary("cambrian_camera")
         }
 
-        /** Initialises the native pipeline. Returns an opaque pointer used in subsequent calls. */
-        @JvmStatic external fun nativeInit(previewSurface: Surface): Long
+        /** Initialises the native pipeline and pre-allocates the input ring for the given dims. */
+        @JvmStatic external fun nativeInit(previewSurface: Surface, width: Int, height: Int): Long
 
-        /**
-         * Delivers one RGBA frame to the native pipeline.
-         *
-         * @param pipelinePtr Pointer returned by [nativeInit].
-         * @param data        Direct [ByteBuffer] containing pixel data.
-         * @param width       Frame width in pixels.
-         * @param height      Frame height in pixels.
-         * @param stride      Row stride in bytes (may be > width * 4 due to padding).
-         */
-        @JvmStatic external fun nativeDeliverFrame(
-            pipelinePtr: Long,
-            data: ByteBuffer,
-            width: Int,
-            height: Int,
-            stride: Int,
-        )
+        // YUV layout constants — kept in sync with InputRing.h.
+        const val YUV_FORMAT_UNKNOWN = 0
+        const val YUV_FORMAT_NV21    = 1  // VU interleaved (Android default)
+        const val YUV_FORMAT_NV12    = 2  // UV interleaved
+        const val YUV_FORMAT_I420    = 3  // Planar
 
         /** Releases all resources held by the native pipeline. */
         @JvmStatic external fun nativeRelease(pipelinePtr: Long)
 
         /**
-         * Notifies the native pipeline of a new preview [Surface] (e.g. after a surface
+         * Notifies the native pipeline of a new processed-preview [Surface] (e.g. after a surface
          * recreation event from [TextureRegistry.SurfaceProducer.Callback]).
          */
         @JvmStatic external fun nativeSetPreviewWindow(
             pipelinePtr: Long,
             previewSurface: Surface?,
+        )
+
+        /**
+         * Attaches or replaces the raw (pre-processing) preview [Surface].
+         * The raw surface receives BGR frames before saturation or other processing is applied.
+         */
+        @JvmStatic external fun nativeSetRawPreviewWindow(
+            pipelinePtr: Long,
+            previewSurface: Surface?,
+        )
+
+        /**
+         * Copies one YUV_420_888 frame into the C++ input ring. Returns immediately;
+         * the caller may close the camera Image right after this call returns.
+         *
+         * @param pipelinePtr      Pointer returned by [nativeInit].
+         * @param yBuffer          Direct ByteBuffer for the Y plane.
+         * @param yRowStride       Row stride of the Y plane in bytes.
+         * @param uBuffer          Direct ByteBuffer for the U (Cb) plane.
+         * @param uvRowStride      Row stride of U/V planes in bytes.
+         * @param uvPixelStride    Pixel stride of U/V planes (1=I420, 2=NV12/NV21).
+         * @param vBuffer          Direct ByteBuffer for the V (Cr) plane.
+         * @param width            Frame width in pixels.
+         * @param height           Frame height in pixels.
+         * @param frameId          Monotonic frame counter (streamFrameCount).
+         * @param iso              Sensor ISO from latest capture result; 0 if not yet known.
+         * @param exposureTimeNs   Exposure duration in ns from latest capture result; 0 if unknown.
+         * @param sensorTimestamp  Sensor timestamp from [android.media.Image.getTimestamp].
+         * @param yuvFormat        YUV layout constant ([YUV_FORMAT_NV21]/NV12/I420).
+         */
+        @JvmStatic external fun nativeDeliverYuv(
+            pipelinePtr: Long,
+            yBuffer: ByteBuffer, yRowStride: Int,
+            uBuffer: ByteBuffer, uvRowStride: Int, uvPixelStride: Int,
+            vBuffer: ByteBuffer,
+            width: Int, height: Int,
+            frameId: Long,
+            iso: Int, exposureTimeNs: Long, sensorTimestamp: Long,
+            yuvFormat: Int,
+        )
+
+        /**
+         * Updates the C++ pipeline's processing parameters (fire-and-forget).
+         * The next frame will pick up the new values.
+         */
+        @JvmStatic external fun nativeSetProcessingParams(
+            pipelinePtr: Long,
+            blackR: Double, blackG: Double, blackB: Double,
+            gamma: Double,
+            histBlackPoint: Double, histWhitePoint: Double,
+            autoStretch: Boolean,
+            autoStretchLow: Double, autoStretchHigh: Double,
+            brightness: Double,
+            saturation: Double,
         )
     }
 
@@ -139,6 +183,15 @@ class CameraController(
     /** Opaque pointer to the native pipeline, set after [nativeInit]. */
     @Volatile private var nativePipelinePtr: Long = 0L
 
+    /**
+     * Guards [nativePipelinePtr] reads/writes and JNI calls that touch the native pipeline.
+     * Ensures [nativeDeliverYuv] and [nativeRelease] never run concurrently for the same pointer.
+     */
+    private val pipelineLock = Any()
+
+    /** Last processing params applied via [setProcessingParams]; replayed after pipeline recreation. */
+    @Volatile private var lastProcessingParams: CamProcessingParams? = null
+
     /** Latest preview dimensions configured on [surfaceProducer]. */
     @Volatile private var previewWidth: Int = 0
 
@@ -158,11 +211,18 @@ class CameraController(
      */
     @Volatile private var appliedSettings: CamSettings = CamSettings()
 
-    /** Frame counter used for periodic diagnostics. */
+    /** Frame counter used for periodic diagnostics and as frameId for the native pipeline. */
     @Volatile private var streamFrameCount: Long = 0L
 
     /** Capture-result counter used for periodic diagnostics. */
     @Volatile private var captureResultCount: Long = 0L
+
+    /**
+     * YUV layout of the Camera2 stream, detected from plane strides on the first frame
+     * and cached for all subsequent frames. Reset to [YUV_FORMAT_UNKNOWN] at each
+     * session start. Accessed only from the camera background thread; no @Volatile needed.
+     */
+    private var detectedYuvFormat: Int = YUV_FORMAT_UNKNOWN
 
     /**
      * Last sensor values reported by Camera2 capture results.
@@ -202,7 +262,6 @@ class CameraController(
         surfaceProducer.setCallback(
             object : TextureRegistry.SurfaceProducer.Callback {
                 override fun onSurfaceAvailable() {
-                    // Surface was recreated — resize and reconnect native rendering.
                     val ptr = nativePipelinePtr
                     if (ptr == 0L) return
                     val width = previewWidth
@@ -210,21 +269,31 @@ class CameraController(
                     if (width > 0 && height > 0) {
                         surfaceProducer.setSize(width, height)
                     }
-                    val surface = surfaceProducer.getSurface()
-                    nativeSetPreviewWindow(ptr, surface)
-                    if (state == State.STREAMING) {
-                        // Camera2 writes directly to SurfaceProducer for YUV preview.
-                        // If SurfaceProducer recreated the surface, recreate session targets.
-                        backgroundHandler.post { rebindYuvPreviewSurface(surface) }
-                    }
+                    nativeSetPreviewWindow(ptr, surfaceProducer.getSurface())
                 }
 
                 override fun onSurfaceCleanup() {
-                    // Surface is going away; pause native rendering until recreated.
                     val ptr = nativePipelinePtr
-                    if (ptr != 0L) {
-                        nativeSetPreviewWindow(ptr, null)
+                    if (ptr != 0L) nativeSetPreviewWindow(ptr, null)
+                }
+            },
+        )
+        rawSurfaceProducer.setCallback(
+            object : TextureRegistry.SurfaceProducer.Callback {
+                override fun onSurfaceAvailable() {
+                    val ptr = nativePipelinePtr
+                    if (ptr == 0L) return
+                    val width = previewWidth
+                    val height = previewHeight
+                    if (width > 0 && height > 0) {
+                        rawSurfaceProducer.setSize(width, height)
                     }
+                    nativeSetRawPreviewWindow(ptr, rawSurfaceProducer.getSurface())
+                }
+
+                override fun onSurfaceCleanup() {
+                    val ptr = nativePipelinePtr
+                    if (ptr != 0L) nativeSetRawPreviewWindow(ptr, null)
                 }
             },
         )
@@ -415,8 +484,11 @@ class CameraController(
             val streamWidth: Int = largestYuv?.width ?: 1280
             val streamHeight: Int = largestYuv?.height ?: 960
 
-            // Estimate 4 ring-buffer slots of YUV at the stream resolution.
-            val estimatedBytes: Long = streamWidth.toLong() * streamHeight * 4L * 4L
+            // Estimate 4 YUV_420_888 ring-buffer slots (1.5 bytes/pixel each) plus
+            // one RGBA texture buffer if the raw preview surface is active.
+            val yuvBytes: Long = streamWidth.toLong() * streamHeight * 3L / 2L * 4L
+            val textureBytes: Long = if (rawSurfaceProducer != null) streamWidth.toLong() * streamHeight * 4L else 0L
+            val estimatedBytes: Long = yuvBytes + textureBytes
 
             val caps =
                 CamCapabilities(
@@ -433,8 +505,9 @@ class CameraController(
                     evCompMax = evRange?.upper?.toLong() ?: 6L,
                     evCompensationStep = evStep?.toDouble() ?: 0.5,
                     estimatedMemoryBytes = estimatedBytes,
-                    streamWidth = streamWidth.toLong(),
-                    streamHeight = streamHeight.toLong(),
+                    yuvStreamWidth = streamWidth.toLong(),
+                    yuvStreamHeight = streamHeight.toLong(),
+                    rawStreamTextureId = rawSurfaceProducer.id(),
                 )
             callback(Result.success(caps))
         } catch (e: CameraAccessException) {
@@ -492,7 +565,7 @@ class CameraController(
             merged = merged.copy(isoMode = "auto", iso = null)
         }
 
-        // Phase 3: if one side is manual and the other is not (user only set one field),
+        // If one side is manual and the other is not (user only set one field),
         // auto-fill the partner from the last known AE values.  This implements "latch on
         // manual": the sensor transitions smoothly without a brightness jump because it
         // starts from the value AE was already using.
@@ -600,14 +673,25 @@ class CameraController(
     }
 
     /**
-     * No-op in Phase 3.
+     * Forwards processing parameters to the C++ pipeline via JNI (fire-and-forget).
+     * The next frame processed by [nativeDeliverYuv] will pick up the new values.
      *
-     * Phase 4 will forward these parameters to the C++ image pipeline via JNI.
-     *
-     * @param params Image processing parameters (tone-mapping, auto-stretch, etc.).
+     * @param params Image processing parameters (black balance, gamma, saturation, etc.).
      */
     fun setProcessingParams(params: CamProcessingParams) {
-        // Phase 4: forward params to nativeSetProcessingParams(nativePipelinePtr, params)
+        lastProcessingParams = params
+        val ptr = nativePipelinePtr
+        if (ptr == 0L) return
+        nativeSetProcessingParams(
+            ptr,
+            params.blackR, params.blackG, params.blackB,
+            params.gamma,
+            params.histBlackPoint, params.histWhitePoint,
+            params.autoStretch,
+            params.autoStretchLow, params.autoStretchHigh,
+            params.brightness,
+            params.saturation,
+        )
     }
 
     /**
@@ -712,7 +796,7 @@ class CameraController(
      * Streams YUV_420_888 at the device's largest supported resolution. A separate JPEG [ImageReader] is pre-allocated for
      * still capture. Preview is routed via [surfaceProducer] added directly to the session.
      *
-     * Frame path: Camera2 → SurfaceProducer (display) + ImageReader (drained, reserved for JNI)
+     * Frame path: Camera2 → YUV ImageReader → C++ pipeline (nativeDeliverYuv) → ANativeWindow (Flutter Texture)
      */
     private fun startCaptureSession(openCallback: (Result<Long>) -> Unit) {
         val device =
@@ -728,10 +812,12 @@ class CameraController(
         val (streamFormat, streamWidth, streamHeight) = resolveStreamFormat(device)
         streamFrameCount = 0L
         captureResultCount = 0L
+        detectedYuvFormat = YUV_FORMAT_UNKNOWN
 
         previewWidth = streamWidth
         previewHeight = streamHeight
         surfaceProducer.setSize(streamWidth, streamHeight)
+        rawSurfaceProducer.setSize(streamWidth, streamHeight)
         if (CambrianCameraConfig.verboseDiagnostics) {
             android.util.Log.d(
                 "CambrianCamera",
@@ -739,8 +825,8 @@ class CameraController(
             )
         }
 
-        // Streaming ImageReader — YUV_420_888 frames are drained to prevent overflow.
-        // Preview is served by Camera2 writing directly to the SurfaceProducer surface.
+        // Streaming ImageReader — YUV_420_888 frames are delivered to the C++ pipeline
+        // for post-processing; the pipeline writes processed RGBA frames to the ANativeWindow.
         val streamReader = ImageReader.newInstance(streamWidth, streamHeight, streamFormat, 2)
         imageReader = streamReader
 
@@ -748,11 +834,25 @@ class CameraController(
         val jpegReader = ImageReader.newInstance(streamWidth, streamHeight, ImageFormat.JPEG, 1)
         jpegImageReader = jpegReader
 
-        // Initialise native pipeline with the current SurfaceProducer surface.
+        // Initialise native pipeline with the processed-preview surface and stream dims.
         val previewSurface = surfaceProducer.getSurface()
-        nativePipelinePtr = nativeInit(previewSurface)
+        nativePipelinePtr = nativeInit(previewSurface, streamWidth, streamHeight)
+        if (nativePipelinePtr == 0L) {
+            android.util.Log.e("CambrianCamera", "startCaptureSession: nativeInit failed — aborting session startup")
+            imageReader = null
+            jpegImageReader = null
+            streamReader.close()
+            jpegReader.close()
+            return
+        }
 
-        // Drain YUV frames to prevent ImageReader overflow.
+        // Replay any previously set processing params so they survive pipeline recreation.
+        lastProcessingParams?.let { setProcessingParams(it) }
+
+        // Wire the raw (pre-processing) preview surface.
+        nativeSetRawPreviewWindow(nativePipelinePtr, rawSurfaceProducer.getSurface())
+
+        // Deliver YUV frames to the C++ pipeline for post-processing and preview output.
         streamReader.setOnImageAvailableListener({ reader ->
             val image = reader.acquireLatestImage() ?: return@setOnImageAvailableListener
             try {
@@ -763,17 +863,53 @@ class CameraController(
                         "stream frame#$streamFrameCount YUV ${image.width}x${image.height}",
                     )
                 }
+                // Copy YUV planes into the C++ input ring; image.close() below releases
+                // the camera buffer — the native side has already memcpy'd the data.
+                // pipelineLock serializes this JNI call with teardown's nativeRelease.
+                synchronized(pipelineLock) {
+                    val ptr = nativePipelinePtr
+                    if (ptr != 0L) {
+                        val yPlane = image.planes[0]
+                        val uPlane = image.planes[1]
+                        val vPlane = image.planes[2]
+
+                        // Detect YUV layout from plane strides on the first frame; cache it.
+                        // The layout is a hardware property of the device and never changes
+                        // mid-session, so we lock in the result and assert in debug builds.
+                        if (detectedYuvFormat == YUV_FORMAT_UNKNOWN) {
+                            detectedYuvFormat = detectYuvFormat(image)
+                            android.util.Log.d(
+                                "CambrianCamera",
+                                "Detected YUV format: ${yuvFormatName(detectedYuvFormat)}",
+                            )
+                        }
+
+                        nativeDeliverYuv(
+                            ptr,
+                            yPlane.buffer, yPlane.rowStride,
+                            uPlane.buffer, uPlane.rowStride, uPlane.pixelStride,
+                            vPlane.buffer,
+                            image.width, image.height,
+                            streamFrameCount,
+                            lastKnownIso ?: 0,
+                            lastKnownExposureTimeNs ?: 0L,
+                            image.timestamp,
+                            detectedYuvFormat,
+                        )
+                    }
+                }
             } finally {
                 image.close()
             }
         }, backgroundHandler)
 
-        // Session surfaces: streaming reader + JPEG reader + SurfaceProducer for preview.
-        val surfaces = listOf(streamReader.surface, jpegReader.surface, previewSurface)
+        // Session surfaces: streaming reader + JPEG reader only.
+        // The SurfaceProducer surface is intentionally excluded: Camera2 would call
+        // connect(NATIVE_WINDOW_API_CAMERA) on it, preventing the C++ pipeline from
+        // also writing to it via ANativeWindow_lock (only one producer allowed per queue).
+        val surfaces = listOf(streamReader.surface, jpegReader.surface)
 
-        // The repeating request targets the SurfaceProducer; Camera2 writes preview frames directly.
-        val previewTarget = previewSurface
-        repeatingTargetSurface = previewTarget
+        repeatingTargetSurface = streamReader.surface
 
         val outputs = surfaces.map { OutputConfiguration(it) }
         device.createCaptureSession(
@@ -788,15 +924,15 @@ class CameraController(
                             val settings = pendingSettings
                             val request =
                                 if (settings != null) {
-                                    buildCaptureRequest(device, previewTarget, settings)
+                                    buildCaptureRequest(device, previewSurface, settings)
                                 } else {
-                                    buildDefaultCaptureRequest(device, previewTarget)
+                                    buildDefaultCaptureRequest(device, previewSurface)
                                 }
                             repeatingRequest = request
                             if (CambrianCameraConfig.verboseDiagnostics) {
                                 android.util.Log.d(
                                     "CambrianCamera",
-                                    "setRepeatingRequest target=${describeTargetSurface(previewTarget)} " +
+                                    "setRepeatingRequest target=${describeTargetSurface(repeatingTargetSurface)} " +
                                         "initialIso=${settings?.isoMode ?: "default"}(${settings?.iso ?: "-"}) " +
                                         "initialExposure=${settings?.exposureMode ?: "default"}(${settings?.exposureTimeNs ?: "-"})",
                                 )
@@ -822,6 +958,32 @@ class CameraController(
                 },
             ),
         )
+    }
+
+    /**
+     * Detects the YUV interleaving layout by inspecting plane strides.
+     *
+     * Camera2 YUV_420_888 is device-agnostic and doesn't advertise its internal layout
+     * directly. We infer it from pixelStride and the relative sizes of the U and V buffers:
+     * - pixelStride == 1 → I420 (planar, separate U and V planes)
+     * - pixelStride == 2 and V buffer larger → NV21 (V starts 1 byte before U in memory)
+     * - pixelStride == 2 otherwise → NV12 (U starts 1 byte before V in memory)
+     */
+    private fun detectYuvFormat(image: android.media.Image): Int {
+        val uPlane = image.planes[1]
+        val vPlane = image.planes[2]
+        return when {
+            uPlane.pixelStride == 1 -> YUV_FORMAT_I420
+            vPlane.buffer.remaining() > uPlane.buffer.remaining() -> YUV_FORMAT_NV21
+            else -> YUV_FORMAT_NV12
+        }
+    }
+
+    private fun yuvFormatName(format: Int): String = when (format) {
+        YUV_FORMAT_NV21 -> "NV21"
+        YUV_FORMAT_NV12 -> "NV12"
+        YUV_FORMAT_I420 -> "I420"
+        else -> "UNKNOWN($format)"
     }
 
     /**
@@ -854,43 +1016,55 @@ class CameraController(
     /**
      * Creates a [CaptureRequest.Builder] for repeating preview requests.
      *
-     * Prefers [CameraDevice.TEMPLATE_ZERO_SHUTTER_LAG] for minimal capture latency.
-     * Falls back to [CameraDevice.TEMPLATE_PREVIEW] on devices that do not support ZSL
-     * (i.e. lack PRIVATE_REPROCESSING or YUV_REPROCESSING capabilities), where ZSL would
-     * throw [IllegalArgumentException].
+     * Uses [CameraDevice.TEMPLATE_PREVIEW] — the correct template for continuous streaming.
+     * (TEMPLATE_ZERO_SHUTTER_LAG is designed for still-capture pipelines, not preview.)
      *
-     * The returned builder already has [surface] and the YUV [imageReader] surface added as
-     * targets (so the streaming ImageReader receives frames) and [CaptureRequest.CONTROL_MODE_AUTO]
+     * Sets [CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE] to the highest available minimum
+     * frame rate (preferring [30, 30]).  Without this, Camera2's AE algorithm is free to
+     * ramp exposure time above 1/30 s, which physically caps delivery to well below 30 fps.
+     *
+     * The returned builder already has the YUV [imageReader] surface added as target
+     * (so the streaming ImageReader receives frames) and [CaptureRequest.CONTROL_MODE_AUTO]
      * applied. The JPEG [jpegImageReader] is intentionally excluded — it is targeted only by the
      * one-shot request in [takePicture].
      */
     private fun createRepeatingRequestBuilder(
         device: CameraDevice,
-        surface: Surface,
     ): CaptureRequest.Builder {
-        val builder = try {
-            device.createCaptureRequest(CameraDevice.TEMPLATE_ZERO_SHUTTER_LAG)
-        } catch (e: IllegalArgumentException) {
-            android.util.Log.w("CambrianCamera", "TEMPLATE_ZERO_SHUTTER_LAG not supported, falling back to TEMPLATE_PREVIEW")
-            device.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW)
-        }
-        builder.addTarget(surface)
-        // Also target the YUV streaming ImageReader so it receives every frame.
-        // Camera2 only delivers frames to surfaces listed as targets in the request;
-        // including it in the session outputs alone is not sufficient.
+        val builder = device.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW)
+
+        // Camera2 targets only the YUV ImageReader; the C++ pipeline writes processed
+        // frames to the SurfaceProducer via ANativeWindow.  A direct-to-preview mode
+        // would add `surface` as a target here instead.
         imageReader?.surface?.let { builder.addTarget(it) }
         builder.set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
+
+        // Lock in the highest available min-fps range so AE can't use long exposures
+        // that would cap delivery below 30 fps.  Without this, devices in low light
+        // routinely drop to 12–15 fps even though the sensor supports 30 fps at this size.
+        val chars = cameraManager.getCameraCharacteristics(device.id)
+        val fpsRanges = chars.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)
+        if (fpsRanges != null && fpsRanges.isNotEmpty()) {
+            // Prefer the range whose lower bound is highest (forces max sustained fps).
+            // Among ties, prefer a fixed range (upper == lower) to avoid jitter.
+            val best = fpsRanges.maxWithOrNull(
+                compareBy({ it.lower }, { if (it.lower == it.upper) 1 else 0 })
+            )!!
+            builder.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, best)
+            android.util.Log.d("CambrianCamera", "AE fps range: [${best.lower}, ${best.upper}]")
+        }
+
         return builder
     }
 
     /**
-     * Builds a default repeating [CaptureRequest] (auto-everything) targeting [surface].
+     * Builds a default repeating [CaptureRequest] (auto-everything).
      */
     private fun buildDefaultCaptureRequest(
         device: CameraDevice,
         surface: Surface,
     ): CaptureRequest =
-        createRepeatingRequestBuilder(device, surface)
+        createRepeatingRequestBuilder(device)
             .apply {
                 set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
             }.build()
@@ -911,7 +1085,7 @@ class CameraController(
         surface: Surface,
         settings: CamSettings,
     ): CaptureRequest =
-        createRepeatingRequestBuilder(device, surface)
+        createRepeatingRequestBuilder(device)
             .apply {
 
                 // CONTROL_AE_MODE must be OFF for SENSOR_SENSITIVITY and SENSOR_EXPOSURE_TIME
@@ -1040,72 +1214,6 @@ class CameraController(
         )
     }
 
-    /**
-     * Recreates the capture session when in YUV fallback and SurfaceProducer provides a new surface.
-     *
-     * In this mode Camera2 writes preview frames directly into SurfaceProducer's surface, so surface
-     * recreation requires capture-session target rebinding.
-     */
-    private fun rebindYuvPreviewSurface(previewSurface: Surface) {
-        val device = cameraDevice ?: return
-        val streamReader = imageReader ?: return
-        val jpegReader = jpegImageReader ?: return
-        val previousSession = captureSession
-
-        try {
-            previousSession?.stopRepeating()
-            previousSession?.abortCaptures()
-        } catch (_: Exception) {
-        }
-        try {
-            previousSession?.close()
-        } catch (_: Exception) {
-        }
-        captureSession = null
-
-        val surfaces = listOf(streamReader.surface, jpegReader.surface, previewSurface)
-        if (CambrianCameraConfig.verboseDiagnostics) {
-            android.util.Log.d("CambrianCamera", "Rebinding YUV preview surface via createCaptureSession")
-        }
-        val outputs = surfaces.map { OutputConfiguration(it) }
-        device.createCaptureSession(
-            SessionConfiguration(
-                SessionConfiguration.SESSION_REGULAR,
-                outputs,
-                { command -> backgroundHandler.post(command) },
-                object : CameraCaptureSession.StateCallback() {
-                    override fun onConfigured(session: CameraCaptureSession) {
-                        captureSession = session
-                        try {
-                            val settings = pendingSettings
-                            val request =
-                                if (settings != null) {
-                                    buildCaptureRequest(device, previewSurface, settings)
-                                } else {
-                                    buildDefaultCaptureRequest(device, previewSurface)
-                                }
-                            repeatingTargetSurface = previewSurface
-                            repeatingRequest = request
-                            session.setRepeatingRequest(request, repeatingCaptureCallback, backgroundHandler)
-                            if (CambrianCameraConfig.verboseDiagnostics) {
-                                android.util.Log.d(
-                                    "CambrianCamera",
-                                    "YUV preview rebind complete target=${describeTargetSurface(previewSurface)}",
-                                )
-                            }
-                        } catch (e: CameraAccessException) {
-                            handleNonFatalError(CamErrorCode.CAMERA_ACCESS_ERROR, e.message ?: "CameraAccessException")
-                        }
-                    }
-
-                    override fun onConfigureFailed(session: CameraCaptureSession) {
-                        handleNonFatalError(CamErrorCode.CONFIGURATION_FAILED, "CaptureSession rebind failed")
-                    }
-                },
-            ),
-        )
-    }
-
     // -------------------------------------------------------------------------
     // Internal: resource teardown
     // -------------------------------------------------------------------------
@@ -1143,14 +1251,18 @@ class CameraController(
         repeatingTargetSurface = null
         streamFrameCount = 0L
         captureResultCount = 0L
+        detectedYuvFormat = YUV_FORMAT_UNKNOWN
         lastKnownIso = null
         lastKnownExposureTimeNs = null
 
-        // Release native pipeline.
-        val ptr = nativePipelinePtr
-        if (ptr != 0L) {
-            nativeRelease(ptr)
-            nativePipelinePtr = 0L
+        // Release native pipeline; pipelineLock ensures no nativeDeliverYuv call is
+        // in-flight when nativeRelease runs (prevents use-after-free).
+        synchronized(pipelineLock) {
+            val ptr = nativePipelinePtr
+            if (ptr != 0L) {
+                nativePipelinePtr = 0L
+                nativeRelease(ptr)
+            }
         }
     }
 
