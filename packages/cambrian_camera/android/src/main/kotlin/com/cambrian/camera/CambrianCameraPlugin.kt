@@ -39,6 +39,9 @@ data class CameraSession(
  *
  * Delegates all [CameraHostApi] calls to [CameraController], which implements the
  * real Camera2 lifecycle and JNI bridge.
+ *
+ * Note: [VideoRecordingReceiver] tracks only the most recently opened camera.
+ * In multi-session scenarios, ADB recording broadcasts affect that camera only.
  */
 class CambrianCameraPlugin : FlutterPlugin, ActivityAware, CameraHostApi {
 
@@ -95,6 +98,7 @@ class CambrianCameraPlugin : FlutterPlugin, ActivityAware, CameraHostApi {
             try { session.rawSurfaceProducer?.release() } catch (_: Exception) {}
         }
         sessions.clear()
+        VideoRecordingReceiver.activeController = null
         flutterApi = null
         textureRegistry = null
         applicationContext = null
@@ -166,6 +170,10 @@ class CambrianCameraPlugin : FlutterPlugin, ActivityAware, CameraHostApi {
                 try { controller.release() } catch (_: Exception) {}
                 try { producer.release() } catch (_: Exception) {}
                 try { rawSurfaceProducer?.release() } catch (_: Exception) {}
+            } else {
+                // Last-opened camera owns activeController. In multi-session scenarios,
+                // ADB recording broadcasts target whichever camera was opened most recently.
+                VideoRecordingReceiver.activeController = controller
             }
             callback(result)
         }
@@ -256,6 +264,62 @@ class CambrianCameraPlugin : FlutterPlugin, ActivityAware, CameraHostApi {
     }
 
     /**
+     * Starts a video recording session for the camera identified by [handle].
+     *
+     * Delegates to [CameraController.startRecording]. On success, emits a
+     * "recording" state change via [CameraFlutterApi.onRecordingStateChanged].
+     * On failure, emits an "error" state change before forwarding the failure.
+     *
+     * @param handle   The camera handle returned by [open].
+     * @param callback Invoked with [Result.success] containing the output URI, or [Result.failure].
+     */
+    override fun startRecording(handle: Long, callback: (Result<String>) -> Unit) {
+        val session = sessions[handle] ?: run {
+            callback(Result.failure(FlutterError("invalid_handle", "No camera session for handle $handle", null)))
+            return
+        }
+        session.controller.startRecording { result ->
+            // Best-effort state notification. Channel errors are discarded — the Pigeon
+            // reply callback below is always invoked regardless, so no state is lost.
+            result.onSuccess {
+                flutterApi?.onRecordingStateChanged(handle, "recording") { }
+            }
+            result.onFailure {
+                flutterApi?.onRecordingStateChanged(handle, "error") { }
+            }
+            callback(result)
+        }
+    }
+
+    /**
+     * Stops the active video recording session for the camera identified by [handle].
+     *
+     * Delegates to [CameraController.stopRecording]. On success, emits an
+     * "idle" state change via [CameraFlutterApi.onRecordingStateChanged].
+     * On failure, emits an "error" state change before forwarding the failure.
+     *
+     * @param handle   The camera handle returned by [open].
+     * @param callback Invoked with [Result.success] containing the output URI, or [Result.failure].
+     */
+    override fun stopRecording(handle: Long, callback: (Result<String>) -> Unit) {
+        val session = sessions[handle] ?: run {
+            callback(Result.failure(FlutterError("invalid_handle", "No camera session for handle $handle", null)))
+            return
+        }
+        session.controller.stopRecording { result ->
+            // Best-effort state notification. Channel errors are discarded — the Pigeon
+            // reply callback below is always invoked regardless, so no state is lost.
+            result.onSuccess {
+                flutterApi?.onRecordingStateChanged(handle, "idle") { }
+            }
+            result.onFailure {
+                flutterApi?.onRecordingStateChanged(handle, "error") { }
+            }
+            callback(result)
+        }
+    }
+
+    /**
      * Closes the camera session identified by [handle].
      *
      * Delegates teardown to [CameraController.close], then releases the
@@ -270,6 +334,9 @@ class CambrianCameraPlugin : FlutterPlugin, ActivityAware, CameraHostApi {
         if (session == null) {
             callback(Result.failure(FlutterError("invalid_handle", "No session for handle $handle", null)))
             return
+        }
+        if (VideoRecordingReceiver.activeController === session.controller) {
+            VideoRecordingReceiver.activeController = null
         }
         session.controller.close { result ->
             session.producer.release()

@@ -9,4 +9,15 @@
     <uses-feature
         android:name="android.hardware.camera.autofocus"
         android:required="false" />
+    <application>
+        <!-- Debug/dev only: exported=true for ADB broadcasts, no permission guard. Remove or restrict for production. -->
+        <receiver
+            android:name="com.cambrian.camera.VideoRecordingReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.cambrian.camera.START_RECORDING" />
+                <action android:name="com.cambrian.camera.STOP_RECORDING" />
+            </intent-filter>
+        </receiver>
+    </application>
 </manifest>

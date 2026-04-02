@@ -180,6 +180,12 @@ class CameraController(
     /** Opaque pointer to the native pipeline, set after [nativeInit]. */
     @Volatile private var nativePipelinePtr: Long = 0L
 
+    /** Encoder-side recording state. Null until first startRecording() call. */
+    private var videoRecorder: VideoRecorder? = null
+
+    /** True when a recording is active; gates encoder surface inclusion in session. */
+    @Volatile private var isRecording = false
+
     /**
      * Guards [nativePipelinePtr] reads/writes and JNI calls that touch the native pipeline.
      * Ensures [nativeDeliverYuv] and [nativeRelease] never run concurrently for the same pointer.
@@ -768,6 +774,106 @@ class CameraController(
     }
 
     /**
+     * Starts a video recording session.
+     *
+     * Prepares the [VideoRecorder], adds the encoder surface to the Camera2 session via
+     * [reconfigureSession], then starts encoding. The callback is invoked on the main thread
+     * with the content URI of the output file on success, or a [FlutterError] on failure.
+     *
+     * @param callback Invoked with the content URI string on success, or a failure.
+     */
+    fun startRecording(callback: (Result<String>) -> Unit) {
+        backgroundHandler.post {
+            if (state != State.STREAMING || isRecording) {
+                mainHandler.post {
+                    callback(Result.failure(FlutterError("invalid_state", "Cannot start recording: camera not streaming or already recording", null)))
+                }
+                return@post
+            }
+
+            try {
+                if (videoRecorder == null) {
+                    videoRecorder = VideoRecorder(context)
+                }
+                videoRecorder!!.prepare(previewWidth, previewHeight)
+                isRecording = true
+
+                reconfigureSession { sessionResult ->
+                    sessionResult.onSuccess {
+                        try {
+                            val uri = videoRecorder!!.start()
+                            mainHandler.post { callback(Result.success(uri)) }
+                        } catch (e: Exception) {
+                            isRecording = false
+                            reconfigureSession { } // remove stale encoder surface; ignore inner result
+                            mainHandler.post {
+                                callback(Result.failure(FlutterError("recording_start_failed", e.message, null)))
+                            }
+                        }
+                    }
+                    sessionResult.onFailure { e ->
+                        isRecording = false
+                        mainHandler.post {
+                            callback(Result.failure(FlutterError("session_failed", e.message, null)))
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                isRecording = false
+                mainHandler.post {
+                    callback(Result.failure(FlutterError("recording_failed", e.message, null)))
+                }
+            }
+        }
+    }
+
+    /**
+     * Stops the active video recording and finalizes the output file.
+     *
+     * Signals end-of-stream to the encoder, waits for the drain thread to finish,
+     * then reconfigures the Camera2 session without the encoder surface. The callback
+     * is invoked on the main thread with the content URI of the finalized file.
+     *
+     * @param callback Invoked with the content URI string on success, or a failure.
+     */
+    fun stopRecording(callback: (Result<String>) -> Unit) {
+        backgroundHandler.post {
+            if (!isRecording) {
+                mainHandler.post {
+                    callback(Result.failure(FlutterError("invalid_state", "Cannot stop recording: no recording in progress", null)))
+                }
+                return@post
+            }
+            val recorder = videoRecorder ?: run {
+                mainHandler.post {
+                    callback(Result.failure(FlutterError("invalid_state", "VideoRecorder unexpectedly null", null)))
+                }
+                return@post
+            }
+            isRecording = false
+            val uri = try {
+                recorder.stop()
+            } catch (e: Exception) {
+                mainHandler.post {
+                    callback(Result.failure(FlutterError("recording_failed", e.message, null)))
+                }
+                return@post
+            }
+
+            reconfigureSession { sessionResult ->
+                sessionResult.onSuccess {
+                    mainHandler.post { callback(Result.success(uri)) }
+                }
+                sessionResult.onFailure { e ->
+                    mainHandler.post {
+                        callback(Result.failure(FlutterError("session_failed", e.message, null)))
+                    }
+                }
+            }
+        }
+    }
+
+    /**
      * Tears down all resources without emitting state events.
      *
      * Called by the plugin on engine detach. Use [close] for orderly user-initiated shutdown.
@@ -924,6 +1030,78 @@ class CameraController(
     }
 
     /**
+     * Closes the current [CaptureSession] and rebuilds it with the same ImageReaders.
+     *
+     * When [isRecording] is true, the encoder [VideoRecorder.persistentSurface] is included
+     * as an additional output so the encoder receives frames. When [isRecording] is false
+     * the encoder surface is omitted, which is the normal preview-only configuration.
+     *
+     * The [cameraDevice] and all [ImageReader] instances are left untouched.
+     *
+     * @param onConfigured Called on the background thread with the session result.
+     */
+    private fun reconfigureSession(onConfigured: (Result<Unit>) -> Unit) {
+        val device = cameraDevice ?: run {
+            onConfigured(Result.failure(FlutterError("no_device", "Camera device not available for reconfiguration", null)))
+            return
+        }
+        val currentImageReader = imageReader ?: run {
+            onConfigured(Result.failure(FlutterError("no_reader", "ImageReader lost", null)))
+            return
+        }
+        val currentJpegReader = jpegImageReader ?: run {
+            onConfigured(Result.failure(FlutterError("no_reader", "JPEG ImageReader lost", null)))
+            return
+        }
+
+        // Close only the session, not the device or readers.
+        try { captureSession?.close() } catch (_: Exception) {}
+        captureSession = null
+
+        // Build surface list: always include streaming + jpeg readers.
+        // If isRecording, also add the encoder surface.
+        val surfaces = mutableListOf(
+            currentImageReader.surface,
+            currentJpegReader.surface,
+        )
+        if (isRecording) {
+            videoRecorder?.persistentSurface?.let { surfaces.add(it) }
+        }
+
+        val outputs = surfaces.map { OutputConfiguration(it) }
+        device.createCaptureSession(
+            SessionConfiguration(
+                SessionConfiguration.SESSION_REGULAR,
+                outputs,
+                { cmd -> backgroundHandler.post(cmd) },
+                object : CameraCaptureSession.StateCallback() {
+                    override fun onConfigured(session: CameraCaptureSession) {
+                        captureSession = session
+                        repeatingTargetSurface = imageReader?.surface
+                        try {
+                            val settings = appliedSettings
+                            val request = if (settings != CamSettings()) {
+                                buildCaptureRequest(device, surfaceProducer.getSurface(), settings)
+                            } else {
+                                buildDefaultCaptureRequest(device, surfaceProducer.getSurface())
+                            }
+                            repeatingRequest = request
+                            session.setRepeatingRequest(request, repeatingCaptureCallback, backgroundHandler)
+                            onConfigured(Result.success(Unit))
+                        } catch (e: CameraAccessException) {
+                            onConfigured(Result.failure(e))
+                        }
+                    }
+
+                    override fun onConfigureFailed(session: CameraCaptureSession) {
+                        onConfigured(Result.failure(Exception("Session reconfiguration failed")))
+                    }
+                },
+            ),
+        )
+    }
+
+    /**
      * Detects the YUV interleaving layout by inspecting plane strides.
      *
      * Camera2 YUV_420_888 is device-agnostic and doesn't advertise its internal layout
@@ -981,9 +1159,10 @@ class CameraController(
     // -------------------------------------------------------------------------
 
     /**
-     * Creates a [CaptureRequest.Builder] for repeating preview requests.
+     * Creates a [CaptureRequest.Builder] for repeating preview or recording requests.
      *
-     * Uses [CameraDevice.TEMPLATE_PREVIEW] — the correct template for continuous streaming.
+     * Uses [CameraDevice.TEMPLATE_RECORD] when [isRecording] is true (correct template for
+     * video capture), otherwise [CameraDevice.TEMPLATE_PREVIEW] for continuous streaming.
      * (TEMPLATE_ZERO_SHUTTER_LAG is designed for still-capture pipelines, not preview.)
      *
      * Sets [CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE] to the highest available minimum
@@ -992,17 +1171,22 @@ class CameraController(
      *
      * The returned builder already has [gpuPipeline]?.cameraSurface added as target
      * (so the GPU OES SurfaceTexture receives camera frames) and [CaptureRequest.CONTROL_MODE_AUTO]
-     * applied. The JPEG [jpegImageReader] is intentionally excluded — it is targeted only by the
-     * one-shot request in [takePicture].
+     * applied. When recording, the encoder [VideoRecorder.persistentSurface] is also added
+     * as a target. The JPEG [jpegImageReader] is intentionally excluded — it is targeted only
+     * by the one-shot request in [takePicture].
      */
     private fun createRepeatingRequestBuilder(
         device: CameraDevice,
     ): CaptureRequest.Builder {
-        val builder = device.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW)
+        val template = if (isRecording) CameraDevice.TEMPLATE_RECORD else CameraDevice.TEMPLATE_PREVIEW
+        val builder = device.createCaptureRequest(template)
 
         // Camera2 targets the GpuPipeline's SurfaceTexture; the GL thread renders
         // each OES frame and delivers RGBA to pipeline sinks.
         gpuPipeline?.cameraSurface?.let { builder.addTarget(it) }
+        if (isRecording) {
+            videoRecorder?.persistentSurface?.let { builder.addTarget(it) }
+        }
         builder.set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
 
         // Lock in the highest available min-fps range so AE can't use long exposures
@@ -1188,6 +1372,14 @@ class CameraController(
      * Safe to call from any state. Does NOT emit state events (callers must do that).
      */
     private fun teardown() {
+        // Stop any active recording before tearing down the session.
+        if (isRecording) {
+            isRecording = false
+            try { videoRecorder?.stop() } catch (e: Exception) {
+                android.util.Log.w("CambrianCamera", "teardown: error stopping recording: ${e.message}")
+            }
+        }
+
         // Close capture session first to stop frame delivery before closing the device.
         try {
             captureSession?.close()
@@ -1234,6 +1426,9 @@ class CameraController(
                 nativeRelease(ptr)
             }
         }
+
+        videoRecorder?.release()
+        videoRecorder = null
     }
 
     // -------------------------------------------------------------------------

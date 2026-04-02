@@ -249,6 +249,12 @@ abstract class CameraHostApi {
   int? getNativePipelineHandle(int handle);
 
   @async
+  String startRecording(int handle);
+
+  @async
+  String stopRecording(int handle);
+
+  @async
   void close(int handle);
 
   /// Returns the current display rotation in degrees CW from portrait: 0, 90, 180, or 270.
@@ -268,4 +274,7 @@ abstract class CameraFlutterApi {
   void onStateChanged(int handle, CamStateUpdate state);
   void onError(int handle, CamError error);
   void onFrameResult(int handle, CamFrameResult result);
+  /// Called when the recording state changes.
+  /// [state] is one of: "recording", "idle", "error".
+  void onRecordingStateChanged(int handle, String state);
 }

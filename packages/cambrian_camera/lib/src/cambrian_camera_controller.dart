@@ -55,7 +55,8 @@ class CambrianCamera {
        _currentState = initialState,
        _stateController = StreamController<CameraState>.broadcast(),
        _errorController = StreamController<CameraError>.broadcast(),
-       _frameResultController = StreamController<FrameResult>.broadcast() {
+       _frameResultController = StreamController<FrameResult>.broadcast(),
+       _recordingStateController = StreamController<RecordingState>.broadcast() {
     // Register in the global instance map so FlutterApi callbacks can be
     // routed to the correct camera by handle.
     _instances[handle] = this;
@@ -111,6 +112,7 @@ class CambrianCamera {
   final StreamController<CameraState> _stateController;
   final StreamController<CameraError> _errorController;
   final StreamController<FrameResult> _frameResultController;
+  final StreamController<RecordingState> _recordingStateController;
   late final CameraSettingsSerializer _serializer;
 
   /// The most recent camera lifecycle state. Used as [StreamBuilder.initialData]
@@ -262,6 +264,13 @@ class CambrianCamera {
   /// distance, and white-balance gains in the UI.
   Stream<FrameResult> get frameResultStream => _frameResultController.stream;
 
+  /// Broadcasts recording state changes.
+  ///
+  /// Emits a typed [RecordingState] value derived from the wire string sent by
+  /// the platform. Unknown wire values default to [RecordingState.error].
+  Stream<RecordingState> get recordingStateStream =>
+      _recordingStateController.stream;
+
   /// Schedules an ISP-level settings update.
   ///
   /// Only include the fields you want to change — `null` fields are ignored
@@ -297,6 +306,18 @@ class CambrianCamera {
   /// to select the correct [RotatedBox.quarterTurns] for all four device orientations.
   static Future<int> getDisplayRotation() => CameraHostApi().getDisplayRotation();
 
+  /// Starts recording to an MP4 file. Returns the content URI of the output file.
+  ///
+  /// Recording state changes are delivered via [recordingStateStream].
+  /// Throws [PlatformException] if recording cannot be started.
+  Future<String> startRecording() => _hostApi.startRecording(_handle);
+
+  /// Stops recording and finalizes the MP4. Returns the content URI of the finalized file.
+  ///
+  /// Recording state changes are delivered via [recordingStateStream].
+  /// Throws [PlatformException] if no recording is in progress.
+  Future<String> stopRecording() => _hostApi.stopRecording(_handle);
+
   /// Returns the native `IImagePipeline*` pointer as an int64, or null if the
   /// pipeline is not yet initialized.
   ///
@@ -325,6 +346,7 @@ class CambrianCamera {
       await _stateController.close();
       await _errorController.close();
       await _frameResultController.close();
+      await _recordingStateController.close();
     }
   }
 
@@ -351,6 +373,10 @@ class CambrianCamera {
       wbGainB: result.wbGainB,
     ));
   }
+
+  void _onRecordingStateChanged(String state) {
+    _recordingStateController.add(RecordingState.fromString(state));
+  }
 }
 
 /// Routes Kotlin→Dart callbacks to the correct [CambrianCamera] instance.
@@ -374,6 +400,11 @@ class _FlutterApiDispatcher extends CameraFlutterApi {
   @override
   void onFrameResult(int handle, CamFrameResult result) {
     CambrianCamera._instances[handle]?._onFrameResult(result);
+  }
+
+  @override
+  void onRecordingStateChanged(int handle, String state) {
+    CambrianCamera._instances[handle]?._onRecordingStateChanged(state);
   }
 }
 
