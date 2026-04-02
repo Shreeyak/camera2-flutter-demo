@@ -1,15 +1,21 @@
-// JNI glue between Kotlin (CameraController) and the native ImagePipeline.
+// JNI glue between Kotlin (CameraController) and the native ImagePipeline
+// and GpuRenderer.
 //
-// Five entry points: nativeInit, nativeRelease, nativeSetPreviewWindow,
-// nativeDeliverYuv, and nativeSetProcessingParams.  Each is a thin wrapper
-// that validates inputs, converts JNI types to C++, and delegates to
-// ImagePipeline.  No image logic lives here.
+// CPU pipeline entry points: nativeInit, nativeRelease, nativeSetPreviewWindow,
+// nativeSetRawPreviewWindow, nativeDeliverYuv, nativeSetProcessingParams.
+// GPU pipeline entry points: nativeGpuInit, nativeGpuRelease,
+// nativeGpuSetAdjustments, nativeGpuDrawAndReadback.
+//
+// Each function is a thin wrapper that validates inputs, converts JNI types to
+// C++, and delegates to ImagePipeline or GpuRenderer.  No image logic lives here.
 //
 // JNI naming convention: each function name encodes the fully-qualified Kotlin
 // class path: Java_<package_underscored>_<ClassName>_<methodName>.
 
+#include "GpuRenderer.h"
 #include "ImagePipeline.h"
 
+#include <GLES3/gl3.h>
 #include <android/log.h>
 #include <android/native_window_jni.h> // ANativeWindow_fromSurface
 #include <jni.h>
@@ -23,6 +29,13 @@
 // ---------------------------------------------------------------------------
 static cam::ImagePipeline* pipelineFromHandle(jlong handle) {
     return reinterpret_cast<cam::ImagePipeline*>(static_cast<uintptr_t>(handle));
+}
+
+// ---------------------------------------------------------------------------
+// Helper to cast the opaque jlong handle back to a GpuRenderer pointer.
+// ---------------------------------------------------------------------------
+static cam::GpuRenderer* rendererFromHandle(jlong handle) {
+    return reinterpret_cast<cam::GpuRenderer*>(static_cast<uintptr_t>(handle));
 }
 
 extern "C" {
@@ -272,6 +285,180 @@ Java_com_cambrian_camera_CameraController_nativeSetProcessingParams(
     p.saturation      = static_cast<float>(saturation);
 
     pipelineFromHandle(pipelinePtr)->setParams(p);
+}
+
+// ---------------------------------------------------------------------------
+// nativeGpuInit
+//
+// Creates a GpuRenderer for the GPU pipeline and initializes its EGL context,
+// shaders, FBOs, and PBOs.  Must be called on the GL thread before any other
+// GPU JNI functions.
+//
+// @param previewSurface  Android Surface for preview output; may be null for
+//                        offscreen-only rendering.
+// @param width           Stream width in pixels.
+// @param height          Stream height in pixels.
+// @return  Non-zero GpuRenderer handle on success; 0 on failure.
+// ---------------------------------------------------------------------------
+JNIEXPORT jlong JNICALL
+Java_com_cambrian_camera_GpuPipeline_nativeGpuInit(
+        JNIEnv* env, jclass /*clazz*/,
+        jobject previewSurface,
+        jint width, jint height) {
+    auto* renderer = new cam::GpuRenderer(static_cast<int>(width),
+                                          static_cast<int>(height));
+
+    ANativeWindow* nativeWindow = nullptr;
+    if (previewSurface) {
+        nativeWindow = ANativeWindow_fromSurface(env, previewSurface);
+        if (!nativeWindow) {
+            LOGE("nativeGpuInit: ANativeWindow_fromSurface returned null");
+            delete renderer;
+            return 0;
+        }
+    }
+
+    const bool ok = renderer->init(nativeWindow);
+
+    // GpuRenderer acquires its own EGL reference; release the JNI-owned ref.
+    if (nativeWindow) {
+        ANativeWindow_release(nativeWindow);
+    }
+
+    if (!ok) {
+        LOGE("nativeGpuInit: GpuRenderer::init failed");
+        delete renderer;
+        return 0;
+    }
+
+    LOGD("nativeGpuInit: renderer created at %p dims=%dx%d", renderer,
+         static_cast<int>(width), static_cast<int>(height));
+    return static_cast<jlong>(reinterpret_cast<uintptr_t>(renderer));
+}
+
+// ---------------------------------------------------------------------------
+// nativeGpuRelease
+//
+// Releases all GL/EGL resources held by the GpuRenderer and deletes it.
+// Must be called on the GL thread.
+//
+// @param gpuHandle  Handle returned by nativeGpuInit.
+// ---------------------------------------------------------------------------
+JNIEXPORT void JNICALL
+Java_com_cambrian_camera_GpuPipeline_nativeGpuRelease(
+        JNIEnv* /*env*/, jclass /*clazz*/,
+        jlong gpuHandle) {
+    if (!gpuHandle) {
+        LOGE("nativeGpuRelease: null renderer handle — already released?");
+        return;
+    }
+
+    LOGD("nativeGpuRelease: deleting renderer at handle %lld",
+         static_cast<long long>(gpuHandle));
+    cam::GpuRenderer* renderer = rendererFromHandle(gpuHandle);
+    renderer->release();
+    delete renderer;
+}
+
+// ---------------------------------------------------------------------------
+// nativeGpuSetAdjustments
+//
+// Updates the shader uniform values used during rendering.  Thread-safe;
+// changes take effect on the next nativeGpuDrawAndReadback() call.
+//
+// @param gpuHandle   Handle returned by nativeGpuInit.
+// @param brightness  Additive brightness offset [-1, 1]; 0 = identity.
+// @param contrast    Contrast multiplier [0, ∞]; 1 = identity.
+// @param saturation  Saturation multiplier [0, 3]; 1 = identity.
+// @param blackR      Per-channel black-level subtraction for red [0, 0.5].
+// @param blackG      Per-channel black-level subtraction for green [0, 0.5].
+// @param blackB      Per-channel black-level subtraction for blue [0, 0.5].
+// ---------------------------------------------------------------------------
+JNIEXPORT void JNICALL
+Java_com_cambrian_camera_GpuPipeline_nativeGpuSetAdjustments(
+        JNIEnv* /*env*/, jclass /*clazz*/,
+        jlong gpuHandle,
+        jdouble brightness, jdouble contrast, jdouble saturation,
+        jdouble blackR, jdouble blackG, jdouble blackB) {
+    if (!gpuHandle) {
+        LOGE("nativeGpuSetAdjustments: null renderer handle");
+        return;
+    }
+
+    rendererFromHandle(gpuHandle)->setAdjustments(
+            static_cast<float>(brightness),
+            static_cast<float>(contrast),
+            static_cast<float>(saturation),
+            static_cast<float>(blackR),
+            static_cast<float>(blackG),
+            static_cast<float>(blackB));
+}
+
+// ---------------------------------------------------------------------------
+// nativeGpuDrawAndReadback
+//
+// Called every frame on the GL thread.  Renders one frame from the OES texture
+// through the shader, blits to the preview surface, and delivers RGBA readback
+// data to the ImagePipeline sinks (full-res and tracker).
+//
+// @param gpuHandle          Handle returned by nativeGpuInit.
+// @param pipelinePtr        Handle returned by nativeInit (ImagePipeline).
+// @param oesTexture         GL_TEXTURE_EXTERNAL_OES name from SurfaceTexture.
+// @param texMatrix          16-element float array from
+//                           SurfaceTexture.getTransformMatrix().
+// @param frameId            Monotonic frame counter.
+// @param sensorTimestampNs  Sensor capture timestamp in nanoseconds.
+// @param exposureTimeNs     Exposure duration in nanoseconds.
+// @param iso                Sensor sensitivity (ISO value).
+// ---------------------------------------------------------------------------
+JNIEXPORT void JNICALL
+Java_com_cambrian_camera_GpuPipeline_nativeGpuDrawAndReadback(
+        JNIEnv* env, jclass /*clazz*/,
+        jlong gpuHandle,
+        jlong pipelinePtr,
+        jint oesTexture,
+        jfloatArray texMatrix,
+        jlong frameId,
+        jlong sensorTimestampNs,
+        jlong exposureTimeNs,
+        jint iso) {
+    if (!gpuHandle) {
+        LOGE("nativeGpuDrawAndReadback: null renderer handle");
+        return;
+    }
+    if (!pipelinePtr) {
+        LOGE("nativeGpuDrawAndReadback: null pipeline handle");
+        return;
+    }
+    if (!texMatrix) {
+        LOGE("nativeGpuDrawAndReadback: texMatrix is null");
+        return;
+    }
+
+    cam::GpuRenderer*   renderer = rendererFromHandle(gpuHandle);
+    cam::ImagePipeline* pipeline = pipelineFromHandle(pipelinePtr);
+
+    cam::FrameMetadata meta;
+    meta.frameNumber       = static_cast<int64_t>(frameId);
+    meta.sensorTimestampNs = static_cast<int64_t>(sensorTimestampNs);
+    meta.exposureTimeNs    = static_cast<int64_t>(exposureTimeNs);
+    meta.iso               = static_cast<int32_t>(iso);
+
+    jfloat* texMatrixPtr = env->GetFloatArrayElements(texMatrix, nullptr);
+
+    renderer->drawAndReadback(
+            static_cast<GLuint>(oesTexture),
+            texMatrixPtr,
+            static_cast<uint64_t>(frameId),
+            meta,
+            [pipeline, &meta](const uint8_t* d, int w, int h, int s) {
+                pipeline->deliverFullResRgba(d, w, h, s, meta.frameNumber, meta);
+            },
+            [pipeline, &meta](const uint8_t* d, int w, int h, int s) {
+                pipeline->deliverTrackerRgba(d, w, h, s, meta.frameNumber, meta);
+            });
+
+    env->ReleaseFloatArrayElements(texMatrix, texMatrixPtr, JNI_ABORT);
 }
 
 } // extern "C"
