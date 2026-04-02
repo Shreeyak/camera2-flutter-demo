@@ -518,7 +518,7 @@ print('Resolutions: ${caps.supportedSizes}');
 
 ### Native Consumer API (C++)
 
-For apps that need direct access to processed frames in C++ (e.g., real-time computer vision, image stitching), the plugin provides a generic consumer sink model. Your app registers C++ callbacks that receive post-processed BGR frames — the same pixels shown in the preview. Each sink uses a 1-slot mailbox (latest-frame-wins) with its own dispatch thread, so slow consumers don't stall the preview.
+For apps that need direct access to processed frames in C++ (e.g., real-time computer vision, image stitching), the plugin provides a generic consumer sink model. Your app registers C++ callbacks (`SinkCallback`) that receive post-processed BGR `SinkFrame` objects — the same pixels shown in the preview. Each sink uses a 1-slot mailbox (latest-frame-wins) with its own dispatch thread, so slow consumers don't stall the preview. The `SinkFrame` pixel buffer is valid only for the duration of the callback; copy the data if you need it beyond that scope.
 
 #### Step 1: Get the pipeline handle from Dart
 

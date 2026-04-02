@@ -137,7 +137,9 @@ private:
 ```glsl
 // Input: gamma-encoded RGB in BT.709 color space.
 // The EGL driver converts YCbCr (BT.709) → RGB before the shader sees the texture.
-// All operations therefore run in gamma space — correct for interactive adjustments.
+// All operations run in gamma space — correct for interactive adjustments.
+// Operation order: black balance → brightness → contrast → saturation.
+// Black balance is subtractive (sensor floor removal), not additive lift.
 #version 300 es
 #extension GL_OES_EGL_image_external : require
 precision mediump float;
@@ -147,25 +149,27 @@ uniform mat4  uTexMatrix;    // SurfaceTexture.getTransformMatrix() — mandator
 uniform float uBrightness;   // [-1, 1],  0.0 = identity
 uniform float uContrast;     // [0.5, 2], 1.0 = identity
 uniform float uSaturation;   // [0, 2],   1.0 = identity
-uniform vec3  uBlackBalance; // [0, 0.2] per channel, vec3(0) = identity (additive lift)
+uniform vec3  uBlackBalance; // per-channel sensor floor; subtractive: max(rgb - bb, 0)
 uniform vec2  uCropScale;    // UV scale for crop remap, vec2(1) = no crop
 uniform vec2  uCropOffset;   // UV offset for crop remap, vec2(0) = no crop
 
 in  vec2 vTexCoord;
 out vec4 fragColor;
 
+const vec3 kLuma = vec3(0.2126, 0.7152, 0.0722);
+
 void main() {
     vec2 uv    = vTexCoord * uCropScale + uCropOffset;
     vec2 texUv = (uTexMatrix * vec4(uv, 0.0, 1.0)).xy;
-    vec3 c     = texture(uTexture, texUv).rgb;
+    vec3 rgb   = texture(uTexture, texUv).rgb;
 
-    c = (c - 0.5) * uContrast + 0.5;                  // contrast
-    c += uBrightness;                                   // brightness
-    float luma = dot(c, vec3(0.2126, 0.7152, 0.0722)); // BT.709 luma weights
-    c = mix(vec3(luma), c, uSaturation);               // saturation (luma-mix)
-    c += uBlackBalance;                                 // black balance (additive lift)
+    rgb = max(rgb - uBlackBalance, 0.0);        // 1. black balance (sensor floor removal)
+    rgb += uBrightness;                          // 2. brightness
+    rgb = (rgb - 0.5) * uContrast + 0.5;        // 3. contrast
+    float luma = dot(rgb, kLuma);
+    rgb = mix(vec3(luma), rgb, uSaturation);    // 4. saturation (luma from post-contrast)
 
-    fragColor = vec4(clamp(c, 0.0, 1.0), 1.0);
+    fragColor = vec4(clamp(rgb, 0.0, 1.0), 1.0);
 }
 ```
 

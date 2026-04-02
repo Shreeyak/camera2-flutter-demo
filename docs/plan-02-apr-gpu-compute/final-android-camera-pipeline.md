@@ -50,7 +50,9 @@ Flutter SurfaceProducer   pipeline->deliverProcessedRgba()
 
 ## OES Fragment Shader
 
-Single pass: contrast → brightness → saturation (BT.709 luma-mix) → black balance.
+Single pass. Operation order: black balance (subtractive sensor floor removal) → brightness → contrast → saturation.
+
+Saturation reads luma post-contrast so it reflects contrast-adjusted values. Black balance is subtractive (`max(rgb - uBlackBalance, 0)`) — removes the sensor black floor and establishes clean zeros before all other operations.
 
 ```glsl
 #version 300 es
@@ -58,22 +60,31 @@ Single pass: contrast → brightness → saturation (BT.709 luma-mix) → black 
 precision mediump float;
 
 uniform samplerExternalOES uTexture;
-uniform mat4  uTexMatrix;
-uniform float uBrightness;
-uniform float uContrast;
-uniform float uSaturation;
-uniform vec3  uBlackBalance;
+uniform mat4  uTexMatrix;    // SurfaceTexture.getTransformMatrix() — mandatory
+uniform float uBrightness;   // [-1, 1],  0.0 = identity
+uniform float uContrast;     // [0.5, 2], 1.0 = identity
+uniform float uSaturation;   // [0, 2],   1.0 = identity
+uniform vec3  uBlackBalance; // per-channel sensor floor; subtractive: max(rgb - bb, 0)
+uniform vec2  uCropScale;    // UV scale for crop remap, vec2(1) = no crop
+uniform vec2  uCropOffset;   // UV offset for crop remap, vec2(0) = no crop
+
 in  vec2 vTexCoord;
 out vec4 fragColor;
 
+const vec3 kLuma = vec3(0.2126, 0.7152, 0.0722);
+
 void main() {
-    vec3 c = texture(uTexture, (uTexMatrix * vec4(vTexCoord, 0.0, 1.0)).xy).rgb;
-    c = (c - 0.5) * uContrast + 0.5;
-    c += uBrightness;
-    float luma = dot(c, vec3(0.2126, 0.7152, 0.0722));
-    c = mix(vec3(luma), c, uSaturation);
-    c += uBlackBalance;
-    fragColor = vec4(clamp(c, 0.0, 1.0), 1.0);
+    vec2 uv    = vTexCoord * uCropScale + uCropOffset;
+    vec2 texUv = (uTexMatrix * vec4(uv, 0.0, 1.0)).xy;
+    vec3 rgb   = texture(uTexture, texUv).rgb;
+
+    rgb = max(rgb - uBlackBalance, 0.0);        // 1. black balance (sensor floor removal)
+    rgb += uBrightness;                          // 2. brightness
+    rgb = (rgb - 0.5) * uContrast + 0.5;        // 3. contrast
+    float luma = dot(rgb, kLuma);
+    rgb = mix(vec3(luma), rgb, uSaturation);    // 4. saturation (luma from post-contrast)
+
+    fragColor = vec4(clamp(rgb, 0.0, 1.0), 1.0);
 }
 ```
 
