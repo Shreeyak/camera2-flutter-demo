@@ -50,13 +50,18 @@ class CambrianCameraPreview extends StatelessWidget {
   Widget _buildTexture() {
     // FittedBox applies the [fit] to the Texture so aspect ratio is preserved
     // regardless of the widget's constraints.
+    //
+    // Use the largest supported JPEG size for natural aspect ratio.
+    // supportedSizes is sorted descending by area; first entry gives the
+    // correct camera stream aspect ratio for processed preview sizing.
+    final size = camera.capabilities.supportedSizes.isNotEmpty
+        ? camera.capabilities.supportedSizes.first
+        : const CameraSize(1280, 960);
     return FittedBox(
       fit: fit,
       child: SizedBox(
-        // Use the actual YUV stream dimensions for correct aspect ratio.
-        // These match exactly what the C++ pipeline receives and renders.
-        width: camera.capabilities.yuvStreamWidth.toDouble(),
-        height: camera.capabilities.yuvStreamHeight.toDouble(),
+        width: size.width.toDouble(),
+        height: size.height.toDouble(),
         child: Texture(textureId: camera.processedStreamTextureId),
       ),
     );
