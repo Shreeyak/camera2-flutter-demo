@@ -450,6 +450,15 @@ void ImagePipeline::publishToTrackerConsumers(SharedFrame frame) {
     }
 }
 
+void ImagePipeline::publishToRawConsumers(SharedFrame frame) {
+    std::lock_guard<std::mutex> lock(rawConsumersMu_);
+    for (auto& c : rawConsumers_) {
+        std::lock_guard<std::mutex> cl(c->mu);
+        c->pending = frame;
+        c->cv.notify_one();
+    }
+}
+
 // ---------------------------------------------------------------------------
 // GPU frame delivery (GL thread → consumer mailboxes)
 // ---------------------------------------------------------------------------
@@ -489,6 +498,27 @@ void ImagePipeline::deliverTrackerRgba(const uint8_t* rgba, int w, int h, int st
     publishToTrackerConsumers(std::move(frame));
 }
 
+void ImagePipeline::deliverRawRgba(const uint8_t* rgba, int w, int h, int stride,
+                                    uint64_t frameId, const FrameMetadata& meta) {
+    {
+        std::lock_guard<std::mutex> lock(rawConsumersMu_);
+        if (rawConsumers_.empty()) return;
+    }
+    auto frame    = std::make_shared<Frame>();
+    frame->id     = frameId;
+    frame->meta   = meta;
+    frame->bgr    = cv::Mat(h, w, CV_8UC4);
+    for (int row = 0; row < h; ++row) {
+        memcpy(frame->bgr.ptr(row), rgba + row * stride,
+               static_cast<size_t>(w) * 4);
+    }
+    frame->width  = w;
+    frame->height = h;
+    frame->stride = static_cast<int>(frame->bgr.step);
+    frame->format = PixelFormat::RGBA;
+    publishToRawConsumers(std::move(frame));
+}
+
 void ImagePipeline::addSink(const SinkConfig& config, SinkCallback callback) {
     auto consumer      = std::make_unique<Consumer>();
     consumer->name     = config.name;
@@ -499,6 +529,10 @@ void ImagePipeline::addSink(const SinkConfig& config, SinkCallback callback) {
         std::lock_guard<std::mutex> lock(trackerConsumersMu_);
         raw = consumer.get();
         trackerConsumers_.push_back(std::move(consumer));
+    } else if (config.role == SinkRole::RAW) {
+        std::lock_guard<std::mutex> lock(rawConsumersMu_);
+        raw = consumer.get();
+        rawConsumers_.push_back(std::move(consumer));
     } else {
         // SinkRole::FULL_RES (default) — GPU full-res path
         std::lock_guard<std::mutex> lock(fullResConsumersMu_);
@@ -507,8 +541,10 @@ void ImagePipeline::addSink(const SinkConfig& config, SinkCallback callback) {
     }
 
     startConsumerThread(raw);
-    LOGD("addSink: name=%s role=%s", config.name.c_str(),
-         config.role == SinkRole::TRACKER ? "TRACKER" : "FULL_RES");
+    const char* roleStr = config.role == SinkRole::TRACKER ? "TRACKER"
+                        : config.role == SinkRole::RAW     ? "RAW"
+                                                           : "FULL_RES";
+    LOGD("addSink: name=%s role=%s", config.name.c_str(), roleStr);
 }
 
 void ImagePipeline::removeSink(const std::string& name) {
@@ -541,6 +577,22 @@ void ImagePipeline::removeSink(const std::string& name) {
             lock.unlock();
             shutdownConsumer(consumer.get());
             LOGD("removeSink: '%s' removed from trackerConsumers", name.c_str());
+            return;
+        }
+    }
+    // Search raw GPU consumers.
+    {
+        std::unique_lock<std::mutex> lock(rawConsumersMu_);
+        auto it = std::find_if(rawConsumers_.begin(), rawConsumers_.end(),
+                               [&name](const std::unique_ptr<Consumer>& c) {
+                                   return c->name == name;
+                               });
+        if (it != rawConsumers_.end()) {
+            auto consumer = std::move(*it);
+            rawConsumers_.erase(it);
+            lock.unlock();
+            shutdownConsumer(consumer.get());
+            LOGD("removeSink: '%s' removed from rawConsumers", name.c_str());
             return;
         }
     }
@@ -580,6 +632,7 @@ void ImagePipeline::shutdownConsumers() {
     drainVector(consumersMu_, consumers_);
     drainVector(fullResConsumersMu_, fullResConsumers_);
     drainVector(trackerConsumersMu_, trackerConsumers_);
+    drainVector(rawConsumersMu_, rawConsumers_);
     LOGD("shutdownConsumers: all consumers removed");
 }
 

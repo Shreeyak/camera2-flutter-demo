@@ -96,3 +96,46 @@ TEST(SinkRoutingTest, BothSinksReceiveCorrectFramesIndependently) {
     EXPECT_EQ(fullResCalls.load(), 1);
     EXPECT_EQ(trackerCalls.load(), 1);
 }
+
+TEST(SinkRoutingTest, RawSinkReceivesRawFrames) {
+    cam::ImagePipeline pipeline(nullptr, 64, 64);
+
+    std::promise<void> called;
+    std::atomic<int> rawCalls{0};
+    pipeline.addSink({"rawSink", cam::SinkRole::RAW},
+                     [&](const cam::SinkFrame&) {
+                         rawCalls++;
+                         called.set_value();
+                     });
+
+    uint8_t fakePixels[4 * 4 * 4] = {};
+    pipeline.deliverRawRgba(fakePixels, 4, 4, 16, 1, {});
+    called.get_future().wait_for(std::chrono::seconds(2));
+    EXPECT_EQ(rawCalls.load(), 1);
+}
+
+TEST(SinkRoutingTest, RawSinkDoesNotReceiveFullResFrames) {
+    cam::ImagePipeline pipeline(nullptr, 64, 64);
+
+    std::atomic<int> rawCalls{0};
+    pipeline.addSink({"rawSink", cam::SinkRole::RAW},
+                     [&](const cam::SinkFrame&) { rawCalls++; });
+
+    uint8_t fakePixels[4 * 4 * 4] = {};
+    pipeline.deliverFullResRgba(fakePixels, 4, 4, 16, 1, {});
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    EXPECT_EQ(rawCalls.load(), 0);
+}
+
+TEST(SinkRoutingTest, FullResSinkDoesNotReceiveRawFrames) {
+    cam::ImagePipeline pipeline(nullptr, 64, 64);
+
+    std::atomic<int> fullResCalls{0};
+    pipeline.addSink({"stitcher", cam::SinkRole::FULL_RES},
+                     [&](const cam::SinkFrame&) { fullResCalls++; });
+
+    uint8_t fakePixels[4 * 4 * 4] = {};
+    pipeline.deliverRawRgba(fakePixels, 4, 4, 16, 1, {});
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    EXPECT_EQ(fullResCalls.load(), 0);
+}
