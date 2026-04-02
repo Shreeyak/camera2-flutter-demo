@@ -22,23 +22,36 @@ object GpuPipelineTestBridge {
     }
 
     /**
-     * Register a FULL_RES delivery-count sink named [sinkName] on the pipeline
-     * identified by [pipelineHandle].  Each frame delivered to the sink
-     * increments an internal counter readable via [nativeGetDeliveryCount].
+     * Register a delivery-count sink named [sinkName] with the given [role] on
+     * the pipeline identified by [pipelineHandle].  Each frame delivered to the
+     * sink increments an internal counter readable via [nativeGetDeliveryCount]
+     * and the pixel data is stored for retrieval via [nativeGetLastDeliveredRgba].
      *
      * @param pipelineHandle Handle returned by [CameraController.nativeInit].
      * @param sinkName       Unique name for this test sink.
+     * @param role           SinkRole integer value (0=FULL_RES, 1=TRACKER, 2=RAW).
      */
     @JvmStatic
-    external fun nativeAddDeliveryCountSink(pipelineHandle: Long, sinkName: String)
+    external fun nativeAddDeliveryCountSink(pipelineHandle: Long, sinkName: String, role: Int)
 
     /**
-     * Return the number of full-res frames delivered to the named sink, or -1
-     * if [nativeAddDeliveryCountSink] was never called with that name.
+     * Return the number of frames delivered to the named sink, or -1 if
+     * [nativeAddDeliveryCountSink] was never called with that name.
      *
      * @param pipelineHandle Handle returned by [CameraController.nativeInit].
      * @param sinkName       Name passed to [nativeAddDeliveryCountSink].
      */
     @JvmStatic
     external fun nativeGetDeliveryCount(pipelineHandle: Long, sinkName: String): Int
+
+    /**
+     * Return the RGBA pixel bytes from the last frame delivered to the named
+     * sink, or null if the sink was never registered or has not yet received
+     * a frame.
+     *
+     * @param pipelineHandle Handle returned by [CameraController.nativeInit].
+     * @param sinkName       Name passed to [nativeAddDeliveryCountSink].
+     */
+    @JvmStatic
+    external fun nativeGetLastDeliveredRgba(pipelineHandle: Long, sinkName: String): ByteArray?
 }

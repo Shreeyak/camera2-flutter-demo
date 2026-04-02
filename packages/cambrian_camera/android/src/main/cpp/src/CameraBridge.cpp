@@ -71,9 +71,16 @@ struct TestSinkKeyHash {
     }
 };
 
+struct TestSinkState {
+    std::shared_ptr<std::atomic<int>>     counter;
+    std::shared_ptr<std::vector<uint8_t>> lastPixels;
+    std::shared_ptr<int>                  lastW;
+    std::shared_ptr<int>                  lastH;
+};
+
 std::mutex                                                     gTestSinkMu;
 std::unordered_map<TestSinkKey,
-                   std::shared_ptr<std::atomic<int>>,
+                   TestSinkState,
                    TestSinkKeyHash>                            gTestSinkCounters;
 
 } // namespace
@@ -505,12 +512,13 @@ Java_com_cambrian_camera_GpuPipeline_nativeGpuDrawAndReadback(
 // ---------------------------------------------------------------------------
 // Test helper: delivery-count sink
 //
-// GpuPipelineTestBridge.nativeAddDeliveryCountSink / nativeGetDeliveryCount
+// GpuPipelineTestBridge.nativeAddDeliveryCountSink / nativeGetDeliveryCount /
+// nativeGetLastDeliveredRgba
 //
-// Registers a lightweight FULL_RES sink on an ImagePipeline that simply
-// increments a counter each time a frame is delivered.  The counter is stored
-// in a process-wide map keyed by (pipelinePtr, sinkName) so that the Kotlin
-// test can retrieve it after one or more drawAndReadback calls.
+// Registers a sink on an ImagePipeline that increments a counter and copies
+// the last delivered frame bytes each time a frame is delivered.  State is
+// stored in a process-wide map keyed by (pipelinePtr, sinkName) so that the
+// Kotlin test can retrieve it after one or more drawAndReadback calls.
 //
 // These helpers exist solely to support instrumented tests and add no
 // overhead to the production code paths.
@@ -518,15 +526,17 @@ Java_com_cambrian_camera_GpuPipeline_nativeGpuDrawAndReadback(
 
 // nativeAddDeliveryCountSink
 //
-// Registers a FULL_RES sink named `sinkName` on the pipeline at `pipelinePtr`.
-// Each frame delivery increments the counter retrievable by nativeGetDeliveryCount.
+// Registers a sink named `sinkName` with the given `role` on the pipeline at
+// `pipelinePtr`.  Each frame delivery copies the pixel data and increments the
+// counter retrievable by nativeGetDeliveryCount.
 //
 // @param pipelinePtr  Handle returned by nativeInit.
 // @param sinkName     Unique name for the test sink.
+// @param role         SinkRole integer value (0=FULL_RES, 1=TRACKER, 2=RAW).
 JNIEXPORT void JNICALL
 Java_com_cambrian_camera_GpuPipelineTestBridge_nativeAddDeliveryCountSink(
         JNIEnv* env, jclass /*clazz*/,
-        jlong pipelinePtr, jstring sinkName) {
+        jlong pipelinePtr, jstring sinkName, jint role) {
     if (!pipelinePtr) {
         LOGE("nativeAddDeliveryCountSink: null pipeline handle");
         return;
@@ -541,24 +551,35 @@ Java_com_cambrian_camera_GpuPipelineTestBridge_nativeAddDeliveryCountSink(
 
     cam::ImagePipeline* pipeline = pipelineFromHandle(pipelinePtr);
 
-    // Create the counter and store it in the global map.
-    auto counter = std::make_shared<std::atomic<int>>(0);
+    // Create state and store it in the global map.
+    auto state = TestSinkState{
+        std::make_shared<std::atomic<int>>(0),
+        std::make_shared<std::vector<uint8_t>>(),
+        std::make_shared<int>(0),
+        std::make_shared<int>(0)
+    };
     {
         std::lock_guard<std::mutex> lk(gTestSinkMu);
-        gTestSinkCounters[{pipeline, name}] = counter;
+        gTestSinkCounters[{pipeline, name}] = state;
     }
 
-    // Register sink — lambda captures the shared_ptr by value so the counter
-    // outlives the callback registration.
+    // Register sink — lambda captures state by value so it outlives the
+    // callback registration.  Counter is incremented last so that a reader
+    // observing counter > 0 is guaranteed to see consistent pixel data.
+    // (Test helper: delivery and read are ordered by the polling loop.)
     cam::SinkConfig cfg;
     cfg.name = name;
-    cfg.role = cam::SinkRole::FULL_RES;
-    pipeline->addSink(cfg, [counter](const cam::SinkFrame& /*frame*/) {
-        counter->fetch_add(1, std::memory_order_relaxed);
+    cfg.role = static_cast<cam::SinkRole>(role);
+    pipeline->addSink(cfg, [state](const cam::SinkFrame& f) {
+        const size_t bytes = static_cast<size_t>(f.width) * f.height * 4;
+        *state.lastPixels = std::vector<uint8_t>(f.data, f.data + bytes);
+        *state.lastW = f.width;
+        *state.lastH = f.height;
+        state.counter->fetch_add(1, std::memory_order_relaxed);
     });
 
-    LOGD("nativeAddDeliveryCountSink: registered sink '%s' on pipeline %p",
-         name.c_str(), pipeline);
+    LOGD("nativeAddDeliveryCountSink: registered sink '%s' role=%d on pipeline %p",
+         name.c_str(), static_cast<int>(role), pipeline);
 }
 
 // nativeGetDeliveryCount
@@ -593,7 +614,58 @@ Java_com_cambrian_camera_GpuPipelineTestBridge_nativeGetDeliveryCount(
              name.c_str(), pipeline);
         return -1;
     }
-    return static_cast<jint>(it->second->load(std::memory_order_relaxed));
+    return static_cast<jint>(it->second.counter->load(std::memory_order_relaxed));
+}
+
+// nativeGetLastDeliveredRgba
+//
+// Returns the RGBA pixel bytes from the last frame delivered to the named test
+// sink, or null if the sink was never registered or has not yet received a frame.
+//
+// @param pipelinePtr  Handle returned by nativeInit.
+// @param sinkName     Name passed to nativeAddDeliveryCountSink.
+JNIEXPORT jbyteArray JNICALL
+Java_com_cambrian_camera_GpuPipelineTestBridge_nativeGetLastDeliveredRgba(
+        JNIEnv* env, jclass /*clazz*/,
+        jlong pipelinePtr, jstring sinkName) {
+    if (!pipelinePtr) {
+        LOGE("nativeGetLastDeliveredRgba: null pipeline handle");
+        return nullptr;
+    }
+    const char* nameChars = env->GetStringUTFChars(sinkName, nullptr);
+    if (!nameChars) {
+        LOGE("nativeGetLastDeliveredRgba: failed to get sink name string");
+        return nullptr;
+    }
+    std::string name(nameChars);
+    env->ReleaseStringUTFChars(sinkName, nameChars);
+
+    cam::ImagePipeline* pipeline = pipelineFromHandle(pipelinePtr);
+
+    std::shared_ptr<std::vector<uint8_t>> pixels;
+    {
+        std::lock_guard<std::mutex> lk(gTestSinkMu);
+        auto it = gTestSinkCounters.find({pipeline, name});
+        if (it == gTestSinkCounters.end()) {
+            LOGE("nativeGetLastDeliveredRgba: no state for sink '%s' on pipeline %p",
+                 name.c_str(), pipeline);
+            return nullptr;
+        }
+        pixels = it->second.lastPixels;
+    }
+
+    if (!pixels || pixels->empty()) {
+        return nullptr;
+    }
+
+    jbyteArray result = env->NewByteArray(static_cast<jsize>(pixels->size()));
+    if (!result) {
+        LOGE("nativeGetLastDeliveredRgba: NewByteArray failed");
+        return nullptr;
+    }
+    env->SetByteArrayRegion(result, 0, static_cast<jsize>(pixels->size()),
+                            reinterpret_cast<const jbyte*>(pixels->data()));
+    return result;
 }
 
 } // extern "C"

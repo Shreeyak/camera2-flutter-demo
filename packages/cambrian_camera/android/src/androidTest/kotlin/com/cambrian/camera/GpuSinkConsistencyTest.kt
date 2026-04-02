@@ -1,7 +1,9 @@
 package com.cambrian.camera
 
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -60,8 +62,8 @@ class GpuSinkConsistencyTest {
         assertNotEquals("nativeGpuInit must return a non-zero GPU handle", 0L, gpuHandle)
 
         try {
-            // 3. Register a test FULL_RES sink that counts deliveries.
-            GpuPipelineTestBridge.nativeAddDeliveryCountSink(pipelineHandle, sinkName)
+            // 3. Register a test FULL_RES sink that counts deliveries (role = 0 = FULL_RES).
+            GpuPipelineTestBridge.nativeAddDeliveryCountSink(pipelineHandle, sinkName, 0)
 
             // 4a. First drawAndReadback: writes PBO[0], skips callback (firstFrame_ guard).
             //     OES texture name 0 samples as transparent black — valid for a smoke test.
@@ -107,6 +109,88 @@ class GpuSinkConsistencyTest {
                     "drawAndReadback calls, but delivery count was $deliveryCount " +
                     "(negative means the sink was never registered by nativeAddDeliveryCountSink)",
                 deliveryCount > 0
+            )
+
+            // 7. Byte-level assertion: last delivered frame has correct size and non-zero pixels.
+            val fullResBytes = GpuPipelineTestBridge.nativeGetLastDeliveredRgba(pipelineHandle, sinkName)
+            assertNotNull("nativeGetLastDeliveredRgba must return non-null after delivery", fullResBytes)
+            assertEquals("full-res frame must have correct byte count", width * height * 4, fullResBytes!!.size)
+            assertTrue(
+                "full-res frame must contain at least one non-zero byte",
+                fullResBytes.any { it != 0.toByte() }
+            )
+        } finally {
+            // Always release both handles to avoid leaking GL/EGL resources.
+            if (gpuHandle != 0L) GpuPipeline.nativeGpuRelease(gpuHandle)
+            CameraController.nativeRelease(pipelineHandle)
+        }
+    }
+
+    /**
+     * Verifies that calling nativeGpuDrawAndReadback twice results in at least
+     * one frame being delivered to a registered RAW sink, and that the delivered
+     * frame has the correct raw stream dimensions.
+     *
+     * The raw path uses a separate FBO/PBO pair sized to (rawW x rawH).  The
+     * same double-buffer guard applies, so two drawAndReadback calls are required.
+     */
+    @Test
+    fun rawSinkReceivesFrameAfterDrawAndReadback() {
+        val width  = 640
+        val height = 480
+        val rawW   = 320
+        val rawH   = 240
+
+        val identityMatrix = floatArrayOf(
+            1f, 0f, 0f, 0f,
+            0f, 1f, 0f, 0f,
+            0f, 0f, 1f, 0f,
+            0f, 0f, 0f, 1f,
+        )
+        val sinkName = "test-sink-raw"
+
+        // 1. Create a native ImagePipeline (null preview surface = headless).
+        val pipelineHandle = CameraController.nativeInit(null, width, height)
+        assertNotEquals("nativeInit must return a non-zero pipeline handle", 0L, pipelineHandle)
+
+        // 2. Create an offscreen GpuRenderer with raw stream enabled (rawW=320, rawH=240).
+        val gpuHandle = GpuPipeline.nativeGpuInit(null, width, height, null, rawW, rawH)
+        assertNotEquals("nativeGpuInit must return a non-zero GPU handle", 0L, gpuHandle)
+
+        try {
+            // 3. Register a RAW sink (role = 2 = RAW).
+            GpuPipelineTestBridge.nativeAddDeliveryCountSink(pipelineHandle, sinkName, 2)
+
+            // 4. Two drawAndReadback calls needed for PBO double-buffer.
+            repeat(2) { i ->
+                GpuPipeline.nativeGpuDrawAndReadback(
+                    gpuHandle, pipelineHandle,
+                    /* oesTexture = */ 0,
+                    identityMatrix,
+                    (i + 1).toLong(),
+                    /* sensorTimestampNs = */ (i + 1).toLong(),
+                    /* exposureTimeNs = */ 0L,
+                    /* iso = */ 0
+                )
+            }
+
+            // 5. Poll for delivery with a bounded timeout.
+            val deadlineMs = System.currentTimeMillis() + 500L
+            var count = 0
+            while (System.currentTimeMillis() < deadlineMs) {
+                count = GpuPipelineTestBridge.nativeGetDeliveryCount(pipelineHandle, sinkName)
+                if (count > 0) break
+                Thread.sleep(10L)
+            }
+            assertTrue("RAW sink must receive at least 1 frame", count > 0)
+
+            // 6. Byte-level assertion: raw frame has correct dimensions and non-zero pixels.
+            val rawBytes = GpuPipelineTestBridge.nativeGetLastDeliveredRgba(pipelineHandle, sinkName)
+            assertNotNull("nativeGetLastDeliveredRgba must return non-null for RAW sink", rawBytes)
+            assertEquals("raw frame must have correct byte count", rawW * rawH * 4, rawBytes!!.size)
+            assertTrue(
+                "raw frame must contain at least one non-zero byte",
+                rawBytes.any { it != 0.toByte() }
             )
         } finally {
             // Always release both handles to avoid leaking GL/EGL resources.
