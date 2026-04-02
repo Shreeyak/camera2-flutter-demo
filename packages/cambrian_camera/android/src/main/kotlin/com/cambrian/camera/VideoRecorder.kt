@@ -3,7 +3,6 @@ package com.cambrian.camera
 
 import android.content.ContentValues
 import android.content.Context
-import android.media.Image
 import android.media.MediaCodec
 import android.media.MediaCodecInfo
 import android.media.MediaCodecList
@@ -15,20 +14,20 @@ import android.os.HandlerThread
 import android.os.ParcelFileDescriptor
 import android.provider.MediaStore
 import android.util.Log
+import android.view.Surface
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
 /**
  * Manages video encoding and muxing for a single recording session.
  *
- * Encapsulates a [MediaCodec] encoder operating in buffer-input mode
- * ([MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Flexible]), a [MediaMuxer]
+ * Encapsulates a [MediaCodec] encoder operating in surface-input mode, a [MediaMuxer]
  * writing to a [MediaStore] pending entry, and the drain thread that shuttles
  * encoded buffers from the codec to the muxer.
  *
- * Frames are fed via [encodeFrame] from the camera's [android.media.ImageReader]
- * callback. No Camera2 session reconfiguration is required — the same single
- * YUV_420_888 stream used for preview is also used for encoding.
+ * In surface mode the encoder exposes [inputSurface], which is added as a Camera2
+ * capture session output so the camera HAL writes frames directly into the encoder
+ * via the hardware path — no CPU YUV copying required.
  *
  * State machine: IDLE -> PREPARING -> RECORDING -> STOPPING -> IDLE (or ERROR)
  *
@@ -54,6 +53,14 @@ class VideoRecorder(private val context: Context) {
 
     /** The MediaCodec encoder instance, created fresh in each [prepare] call. */
     private var codec: MediaCodec? = null
+
+    /**
+     * The encoder's input [Surface] in surface mode.
+     * Valid after [prepare]; Camera2 writes frames into this surface directly.
+     * Becomes null after [release].
+     */
+    var inputSurface: Surface? = null
+        private set
 
     /** The MediaMuxer writing to the current output file, valid between [start] and [stop]. */
     private var muxer: MediaMuxer? = null
@@ -110,10 +117,7 @@ class VideoRecorder(private val context: Context) {
             val format = MediaFormat.createVideoFormat(selectedMime, width, height).apply {
                 setInteger(MediaFormat.KEY_BIT_RATE, bitrate)
                 setInteger(MediaFormat.KEY_FRAME_RATE, fps)
-                setInteger(
-                    MediaFormat.KEY_COLOR_FORMAT,
-                    MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Flexible,
-                )
+                // KEY_COLOR_FORMAT is not set: surface mode uses COLOR_FormatSurface implicitly.
                 setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
                 setInteger(
                     MediaFormat.KEY_BITRATE_MODE,
@@ -128,6 +132,7 @@ class VideoRecorder(private val context: Context) {
             val newCodec = MediaCodec.createEncoderByType(selectedMime)
             try {
                 newCodec.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+                inputSurface = newCodec.createInputSurface()
             } catch (e: Exception) {
                 newCodec.release()
                 throw e
@@ -249,13 +254,10 @@ class VideoRecorder(private val context: Context) {
         val currentCodec = codec
             ?: throw IllegalStateException("VideoRecorder: codec is null at stop()")
 
-        Log.d(TAG, "stop: signalling EOS")
-        val eosIndex = currentCodec.dequeueInputBuffer(10_000L)  // 10 ms
-        if (eosIndex >= 0) {
-            currentCodec.queueInputBuffer(eosIndex, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
-        } else {
-            Log.w(TAG, "stop: could not dequeue input buffer for EOS (index=$eosIndex)")
-        }
+        // In surface mode, EOS is signalled via signalEndOfInputStream() rather than
+        // queuing a buffer — the codec propagates EOS from the surface to the output.
+        Log.d(TAG, "stop: signalling EOS via surface")
+        currentCodec.signalEndOfInputStream()
 
         val latch = eosLatch
         if (latch != null) {
@@ -314,35 +316,6 @@ class VideoRecorder(private val context: Context) {
     }
 
     /**
-     * Feeds one YUV camera frame into the encoder.
-     *
-     * Called on the camera background thread for every frame while [state] is RECORDING.
-     * Non-blocking: drops the frame silently if no codec input buffer is immediately available.
-     *
-     * @param cameraImage        The camera [Image] with YUV_420_888 planes. Must NOT be closed yet.
-     * @param presentationTimeUs Presentation timestamp in microseconds
-     *                           (convert from [android.media.Image.getTimestamp] by dividing by 1000).
-     */
-    fun encodeFrame(cameraImage: Image, presentationTimeUs: Long) {
-        if (state != State.RECORDING) return
-        val localCodec = codec ?: return
-
-        val index = localCodec.dequeueInputBuffer(0)  // non-blocking
-        if (index < 0) {
-            Log.d(TAG, "encodeFrame: no input buffer available — dropping frame")
-            return
-        }
-
-        val encoderImage = localCodec.getInputImage(index)
-        if (encoderImage != null) {
-            copyYuvPlanes(cameraImage, encoderImage)
-        } else {
-            Log.w(TAG, "encodeFrame: getInputImage returned null for index=$index")
-        }
-        localCodec.queueInputBuffer(index, 0, 0, presentationTimeUs, 0)
-    }
-
-    /**
      * Releases the codec.
      *
      * After this call the object is unusable. Should be called when the owning
@@ -359,6 +332,7 @@ class VideoRecorder(private val context: Context) {
         }
         codec?.release()
         codec = null
+        inputSurface = null
     }
 
     // -------------------------------------------------------------------------
@@ -384,51 +358,6 @@ class VideoRecorder(private val context: Context) {
         } else {
             Log.d(TAG, "selectEncoderMime: no HEVC encoder, falling back to AVC")
             MIME_AVC
-        }
-    }
-
-    /**
-     * Copies YUV planes from a camera [Image] into an encoder [Image].
-     *
-     * Uses a fast path when both planes have pixelStride == 1 and the same row stride
-     * (I420 planar layout): copies row-by-row. Falls back to pixel-by-pixel copy for
-     * interleaved formats (NV12, NV21) or mismatched strides.
-     */
-    private fun copyYuvPlanes(src: Image, dst: Image) {
-        for (i in 0..2) {
-            val srcPlane = src.planes[i]
-            val dstPlane = dst.planes[i]
-            val srcBuf = srcPlane.buffer.also { it.rewind() }
-            val dstBuf = dstPlane.buffer.also { it.rewind() }
-            val srcRowStride   = srcPlane.rowStride
-            val dstRowStride   = dstPlane.rowStride
-            val srcPixelStride = srcPlane.pixelStride
-            val dstPixelStride = dstPlane.pixelStride
-            val planeWidth  = if (i == 0) src.width       else src.width  / 2
-            val planeHeight = if (i == 0) src.height      else src.height / 2
-
-            if (srcPixelStride == 1 && dstPixelStride == 1 && srcRowStride == dstRowStride) {
-                // Fast path: identical I420 layout — row-at-a-time bulk copy.
-                for (row in 0 until planeHeight) {
-                    srcBuf.position(row * srcRowStride)
-                    srcBuf.limit(srcBuf.position() + planeWidth)
-                    dstBuf.position(row * dstRowStride)
-                    dstBuf.put(srcBuf)
-                }
-            } else {
-                // Slow path: pixel-by-pixel, handles NV12/NV21 ↔ I420 conversion.
-                for (row in 0 until planeHeight) {
-                    srcBuf.position(row * srcRowStride)
-                    dstBuf.position(row * dstRowStride)
-                    for (col in 0 until planeWidth) {
-                        dstBuf.put(srcBuf.get())
-                        if (col < planeWidth - 1) {
-                            srcBuf.position(srcBuf.position() + srcPixelStride - 1)
-                            dstBuf.position(dstBuf.position() + dstPixelStride - 1)
-                        }
-                    }
-                }
-            }
         }
     }
 
