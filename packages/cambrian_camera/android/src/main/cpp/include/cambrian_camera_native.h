@@ -40,9 +40,17 @@ struct SinkFrame {
     FrameMetadata meta;     ///< Per-frame sensor metadata
 };
 
+/// Routing role for a registered sink.
+/// Controls which frame stream the sink receives.
+enum class SinkRole {
+    FULL_RES,  ///< receives full-resolution RGBA (stitcher, any full-res sink)
+    TRACKER,   ///< receives 480p-height downscaled RGBA
+};
+
 /// Configuration for registering a consumer sink on the pipeline.
 struct SinkConfig {
-    std::string name;  ///< Unique identifier; passed to removeSink() to deregister
+    std::string name;                    ///< Unique identifier; passed to removeSink() to deregister
+    SinkRole    role = SinkRole::FULL_RES;  ///< Routing role; default FULL_RES is backward compatible
 };
 
 /// Callback type invoked for each frame delivered to a sink.
@@ -57,8 +65,12 @@ class IImagePipeline {
 public:
     virtual ~IImagePipeline() = default;
 
-    /// Register a consumer sink that receives processed BGR frames.
+    /// Register a consumer sink on the pipeline.
     /// The sink is identified by config.name; use that name with removeSink().
+    ///
+    /// Routing is determined by config.role:
+    ///   - SinkRole::FULL_RES — receives full-resolution RGBA via deliverFullResRgba().
+    ///   - SinkRole::TRACKER  — receives 480p-height downscaled RGBA via deliverTrackerRgba().
     virtual void addSink(const SinkConfig& config, SinkCallback callback) = 0;
 
     /// Remove a previously registered sink by name. Blocks until its dispatch thread exits.

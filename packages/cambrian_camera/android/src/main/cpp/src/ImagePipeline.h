@@ -4,9 +4,12 @@
 // shared BGR frames to registered consumer sinks via per-consumer mailboxes.
 //
 // Thread safety — lock ordering (always acquire in this order):
-//   1. windowMu_    — ANativeWindow access (setPreviewWindow, blitToWindow)
-//   2. consumersMu_ — consumers_ vector (addSink, removeSink, publishToConsumers)
-//   3. Consumer::mu — per-consumer mailbox (publishToConsumers, dispatch thread)
+//   1. windowMu_           — ANativeWindow access (setPreviewWindow, blitToWindow)
+//   2. consumersMu_        — CPU path consumers_ vector (addSink ctor path, removeSink, publishToConsumers)
+//      fullResConsumersMu_ — GPU full-res consumers vector (addSink FULL_RES, removeSink, publishToFullResConsumers)
+//      trackerConsumersMu_ — GPU tracker consumers vector (addSink TRACKER, removeSink, publishToTrackerConsumers)
+//      (consumersMu_, fullResConsumersMu_, trackerConsumersMu_ are independent of each other)
+//   3. Consumer::mu        — per-consumer mailbox (publish*, dispatch thread)
 //   paramsMu_ is independent: only held momentarily for a snapshot copy.
 //   rawConsumer_ is managed like consumers_ entries but outside the vector so
 //   it receives pre-saturation frames independent of publishToConsumers.
@@ -86,6 +89,16 @@ public:
     /// Atomically update processing parameters. Takes effect on the next frame.
     void setParams(const ProcessingParams& p);
 
+    /// GPU entry point: called from GL thread after mapping fullResPbo[readIdx].
+    /// Copies RGBA data into a SharedFrame and dispatches to fullResConsumers_.
+    void deliverFullResRgba(const uint8_t* rgba, int w, int h, int stride,
+                            uint64_t frameId, const FrameMetadata& meta);
+
+    /// GPU entry point: called from GL thread after mapping trackerPbo[readIdx].
+    /// Copies RGBA data into a SharedFrame and dispatches to trackerConsumers_.
+    void deliverTrackerRgba(const uint8_t* rgba, int w, int h, int stride,
+                            uint64_t frameId, const FrameMetadata& meta);
+
     // -- IImagePipeline ----------------------------------------------------------
     void addSink(const SinkConfig& config, SinkCallback callback) override;
     void removeSink(const std::string& name) override;
@@ -123,14 +136,25 @@ private:
         std::atomic<bool> running{true};
     };
 
+    // -- CPU-path consumer mailboxes (built-in __preview, publishToConsumers) ----
     std::mutex consumersMu_;
     std::vector<std::unique_ptr<Consumer>> consumers_;
 
     /// Dedicated consumer for raw (pre-saturation) preview; not in consumers_.
     std::unique_ptr<Consumer> rawConsumer_;
 
+    // -- Full-res consumer mailboxes (SinkRole::FULL_RES) ------------------------
+    std::mutex fullResConsumersMu_;
+    std::vector<std::unique_ptr<Consumer>> fullResConsumers_;
+
+    // -- Tracker consumer mailboxes (SinkRole::TRACKER) --------------------------
+    std::mutex trackerConsumersMu_;
+    std::vector<std::unique_ptr<Consumer>> trackerConsumers_;
+
     void publishToConsumers(SharedFrame frame);
     void publishToRawConsumer(SharedFrame frame);
+    void publishToFullResConsumers(SharedFrame frame);
+    void publishToTrackerConsumers(SharedFrame frame);
     void startConsumerThread(Consumer* c);
     void shutdownConsumer(Consumer* c);
     void shutdownConsumers();
