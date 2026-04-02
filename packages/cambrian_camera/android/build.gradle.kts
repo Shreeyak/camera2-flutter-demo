@@ -23,7 +23,13 @@ android {
         // Targets OPD2403 hardware running API 33+. Single-device target for now.
         minSdk = 33
         ndk {
-            // OpenCV prebuilt static libs are arm64-v8a only.
+            // OpenCV prebuilt static libs are arm64-v8a only, so this module
+            // currently packages native code for arm64-v8a devices only.
+            //
+            // This intentionally excludes x86/x86_64 (including emulators) and
+            // other 32-bit ABIs from the NDK build and final AAR/APK packaging.
+            // To add broader device/emulator support, matching OpenCV and pipeline
+            // prebuilts would be needed for each additional ABI.
             abiFilters += "arm64-v8a"
         }
         externalNativeBuild {

@@ -1003,7 +1003,6 @@ class CameraController(
      */
     private fun createRepeatingRequestBuilder(
         device: CameraDevice,
-        @Suppress("UNUSED_PARAMETER") surface: Surface,
     ): CaptureRequest.Builder {
         val builder = device.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW)
 
@@ -1038,7 +1037,7 @@ class CameraController(
         device: CameraDevice,
         surface: Surface,
     ): CaptureRequest =
-        createRepeatingRequestBuilder(device, surface)
+        createRepeatingRequestBuilder(device)
             .apply {
                 set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
             }.build()
@@ -1059,7 +1058,7 @@ class CameraController(
         surface: Surface,
         settings: CamSettings,
     ): CaptureRequest =
-        createRepeatingRequestBuilder(device, surface)
+        createRepeatingRequestBuilder(device)
             .apply {
 
                 // CONTROL_AE_MODE must be OFF for SENSOR_SENSITIVITY and SENSOR_EXPOSURE_TIME

@@ -393,7 +393,13 @@ void ImagePipeline::shutdownConsumer(Consumer* c) {
     c->running = false;
     c->cv.notify_all();
     if (c->dispatchThread.joinable()) {
-        c->dispatchThread.join();
+        if (c->dispatchThread.get_id() == std::this_thread::get_id()) {
+            // Called from within the consumer's own callback — joining would deadlock.
+            // Detach so the thread can exit on its own after the callback returns.
+            c->dispatchThread.detach();
+        } else {
+            c->dispatchThread.join();
+        }
     }
 }
 

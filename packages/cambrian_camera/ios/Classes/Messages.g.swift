@@ -685,7 +685,7 @@ class CameraFlutterApi: CameraFlutterApiProtocol {
       if listResponse.count > 1 {
         let code: String = listResponse[0] as! String
         let message: String? = nilOrValue(listResponse[1])
-        let details: String? = nilOrValue(listResponse[2])
+        let details: Any? = listResponse[2]
         completion(.failure(PigeonError(code: code, message: message, details: details)))
       } else {
         completion(.success(Void()))
@@ -703,7 +703,7 @@ class CameraFlutterApi: CameraFlutterApiProtocol {
       if listResponse.count > 1 {
         let code: String = listResponse[0] as! String
         let message: String? = nilOrValue(listResponse[1])
-        let details: String? = nilOrValue(listResponse[2])
+        let details: Any? = listResponse[2]
         completion(.failure(PigeonError(code: code, message: message, details: details)))
       } else {
         completion(.success(Void()))
@@ -721,7 +721,7 @@ class CameraFlutterApi: CameraFlutterApiProtocol {
       if listResponse.count > 1 {
         let code: String = listResponse[0] as! String
         let message: String? = nilOrValue(listResponse[1])
-        let details: String? = nilOrValue(listResponse[2])
+        let details: Any? = listResponse[2]
         completion(.failure(PigeonError(code: code, message: message, details: details)))
       } else {
         completion(.success(Void()))

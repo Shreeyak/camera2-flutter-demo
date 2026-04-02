@@ -511,13 +511,14 @@ print('Resolutions: ${caps.supportedSizes}');
 | `evCompMin` / `evCompMax` | `int` | EV compensation range (in steps) |
 | `evCompensationStep` | `double` | Size of one EV step |
 | `streamWidth` / `streamHeight` | `int` | YUV stream dimensions delivered to the C++ pipeline (pixels). Used by the preview widget for correct aspect ratio. |
+| `rawTextureId` | `int` | Flutter texture ID for the raw (pre-processing) preview stream. Pass to `Texture(textureId: caps.rawTextureId)` to render the unprocessed preview pane. |
 | `estimatedMemoryBytes` | `int` | Estimated native memory usage |
 
 ---
 
 ### Native Consumer API (C++)
 
-For apps that need direct access to processed frames in C++ (e.g., real-time computer vision, image stitching), the plugin provides a generic consumer sink model. Your app registers C++ callbacks that receive post-processed RGBA frames — the same pixels shown in the preview. Each sink has its own ring buffer and dispatch thread, so slow consumers don't stall the preview.
+For apps that need direct access to processed frames in C++ (e.g., real-time computer vision, image stitching), the plugin provides a generic consumer sink model. Your app registers C++ callbacks that receive post-processed BGR frames — the same pixels shown in the preview. Each sink uses a 1-slot mailbox (latest-frame-wins) with its own dispatch thread, so slow consumers don't stall the preview.
 
 #### Step 1: Get the pipeline handle from Dart
 
@@ -649,7 +650,7 @@ extern "C" void unregisterConsumers(int64_t pipelinePtr) {
 | `exposureTimeNs` | `int64_t` | Actual exposure duration in nanoseconds |
 | `iso` | `int32_t` | Sensor sensitivity (ISO equivalent) |
 
-> **Note:** Metadata plumbing from Camera2 capture results to `SinkFrame.meta` is not yet wired. The fields will be zero until this is implemented.
+> **Note:** The fields listed above (`frameNumber`, `sensorTimestampNs`, `exposureTimeNs`, `iso`) are already populated by `nativeDeliverYuv` from JNI parameters. Additional `FrameMetadata` fields that may be added in the future are not yet wired from Camera2 capture results and will remain zero until that plumbing is implemented.
 
 #### Lifetime and threading rules
 
