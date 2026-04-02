@@ -241,12 +241,15 @@ data class CamCapabilities (
   val evCompMax: Long,
   val evCompensationStep: Double,
   val estimatedMemoryBytes: Long,
-  /** Width of the YUV stream used by the C++ pipeline (pixels). */
-  val yuvStreamWidth: Long,
-  /** Height of the YUV stream used by the C++ pipeline (pixels). */
-  val yuvStreamHeight: Long,
-  /** Flutter texture ID for the raw (pre-processing) preview. */
-  val rawStreamTextureId: Long
+  /**
+   * Flutter texture ID for the GPU raw stream (passthrough, no color adjustments).
+   * 0 if raw stream is disabled.
+   */
+  val rawStreamTextureId: Long,
+  /** Actual computed width of the GPU raw stream (pixels). 0 if raw stream is disabled. */
+  val rawStreamWidth: Long,
+  /** Requested height of the GPU raw stream (pixels). 0 if raw stream is disabled. */
+  val rawStreamHeight: Long
 )
  {
   companion object {
@@ -264,10 +267,10 @@ data class CamCapabilities (
       val evCompMax = pigeonVar_list[10] as Long
       val evCompensationStep = pigeonVar_list[11] as Double
       val estimatedMemoryBytes = pigeonVar_list[12] as Long
-      val yuvStreamWidth = pigeonVar_list[13] as Long
-      val yuvStreamHeight = pigeonVar_list[14] as Long
-      val rawStreamTextureId = pigeonVar_list[15] as Long
-      return CamCapabilities(supportedSizes, isoMin, isoMax, exposureTimeMinNs, exposureTimeMaxNs, focusMin, focusMax, zoomMin, zoomMax, evCompMin, evCompMax, evCompensationStep, estimatedMemoryBytes, yuvStreamWidth, yuvStreamHeight, rawStreamTextureId)
+      val rawStreamTextureId = pigeonVar_list[13] as Long
+      val rawStreamWidth = pigeonVar_list[14] as Long
+      val rawStreamHeight = pigeonVar_list[15] as Long
+      return CamCapabilities(supportedSizes, isoMin, isoMax, exposureTimeMinNs, exposureTimeMaxNs, focusMin, focusMax, zoomMin, zoomMax, evCompMin, evCompMax, evCompensationStep, estimatedMemoryBytes, rawStreamTextureId, rawStreamWidth, rawStreamHeight)
     }
   }
   fun toList(): List<Any?> {
@@ -285,9 +288,9 @@ data class CamCapabilities (
       evCompMax,
       evCompensationStep,
       estimatedMemoryBytes,
-      yuvStreamWidth,
-      yuvStreamHeight,
       rawStreamTextureId,
+      rawStreamWidth,
+      rawStreamHeight,
     )
   }
 }
@@ -468,7 +471,7 @@ private open class MessagesPigeonCodec : StandardMessageCodec() {
 
 /** Generated interface from Pigeon that represents a handler of messages from Flutter. */
 interface CameraHostApi {
-  fun open(cameraId: String?, settings: CamSettings?, callback: (Result<Long>) -> Unit)
+  fun open(cameraId: String?, settings: CamSettings?, enableRawStream: Boolean, rawStreamHeight: Long, callback: (Result<Long>) -> Unit)
   fun getCapabilities(handle: Long, callback: (Result<CamCapabilities>) -> Unit)
   fun updateSettings(handle: Long, settings: CamSettings)
   fun setProcessingParams(handle: Long, params: CamProcessingParams)
@@ -492,7 +495,9 @@ interface CameraHostApi {
             val args = message as List<Any?>
             val cameraIdArg = args[0] as String?
             val settingsArg = args[1] as CamSettings?
-            api.open(cameraIdArg, settingsArg) { result: Result<Long> ->
+            val enableRawStreamArg = args[2] as Boolean
+            val rawStreamHeightArg = args[3] as Long
+            api.open(cameraIdArg, settingsArg, enableRawStreamArg, rawStreamHeightArg) { result: Result<Long> ->
               val error = result.exceptionOrNull()
               if (error != null) {
                 reply.reply(wrapError(error))

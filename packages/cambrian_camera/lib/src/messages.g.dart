@@ -266,9 +266,9 @@ class CamCapabilities {
     required this.evCompMax,
     required this.evCompensationStep,
     required this.estimatedMemoryBytes,
-    required this.yuvStreamWidth,
-    required this.yuvStreamHeight,
     required this.rawStreamTextureId,
+    required this.rawStreamWidth,
+    required this.rawStreamHeight,
   });
 
   List<CamSize> supportedSizes;
@@ -297,14 +297,15 @@ class CamCapabilities {
 
   int estimatedMemoryBytes;
 
-  /// Width of the YUV stream used by the C++ pipeline (pixels).
-  int yuvStreamWidth;
-
-  /// Height of the YUV stream used by the C++ pipeline (pixels).
-  int yuvStreamHeight;
-
-  /// Flutter texture ID for the raw (pre-processing) preview.
+  /// Flutter texture ID for the GPU raw stream (passthrough, no color adjustments).
+  /// 0 if raw stream is disabled.
   int rawStreamTextureId;
+
+  /// Actual computed width of the GPU raw stream (pixels). 0 if raw stream is disabled.
+  int rawStreamWidth;
+
+  /// Requested height of the GPU raw stream (pixels). 0 if raw stream is disabled.
+  int rawStreamHeight;
 
   Object encode() {
     return <Object?>[
@@ -321,9 +322,9 @@ class CamCapabilities {
       evCompMax,
       evCompensationStep,
       estimatedMemoryBytes,
-      yuvStreamWidth,
-      yuvStreamHeight,
       rawStreamTextureId,
+      rawStreamWidth,
+      rawStreamHeight,
     ];
   }
 
@@ -343,9 +344,9 @@ class CamCapabilities {
       evCompMax: result[10]! as int,
       evCompensationStep: result[11]! as double,
       estimatedMemoryBytes: result[12]! as int,
-      yuvStreamWidth: result[13]! as int,
-      yuvStreamHeight: result[14]! as int,
-      rawStreamTextureId: result[15]! as int,
+      rawStreamTextureId: result[13]! as int,
+      rawStreamWidth: result[14]! as int,
+      rawStreamHeight: result[15]! as int,
     );
   }
 }
@@ -535,7 +536,7 @@ class CameraHostApi {
 
   final String pigeonVar_messageChannelSuffix;
 
-  Future<int> open(String? cameraId, CamSettings? settings) async {
+  Future<int> open(String? cameraId, CamSettings? settings, bool enableRawStream, int rawStreamHeight) async {
     final String pigeonVar_channelName = 'dev.flutter.pigeon.cambrian_camera.CameraHostApi.open$pigeonVar_messageChannelSuffix';
     final BasicMessageChannel<Object?> pigeonVar_channel = BasicMessageChannel<Object?>(
       pigeonVar_channelName,
@@ -543,7 +544,7 @@ class CameraHostApi {
       binaryMessenger: pigeonVar_binaryMessenger,
     );
     final List<Object?>? pigeonVar_replyList =
-        await pigeonVar_channel.send(<Object?>[cameraId, settings]) as List<Object?>?;
+        await pigeonVar_channel.send(<Object?>[cameraId, settings, enableRawStream, rawStreamHeight]) as List<Object?>?;
     if (pigeonVar_replyList == null) {
       throw _createConnectionError(pigeonVar_channelName);
     } else if (pigeonVar_replyList.length > 1) {

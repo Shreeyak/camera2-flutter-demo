@@ -130,9 +130,9 @@ class CamCapabilities {
     required this.evCompMax,
     required this.evCompensationStep,
     required this.estimatedMemoryBytes,
-    required this.yuvStreamWidth,
-    required this.yuvStreamHeight,
     required this.rawStreamTextureId,
+    required this.rawStreamWidth,
+    required this.rawStreamHeight,
   });
 
   List<CamSize> supportedSizes;
@@ -148,12 +148,13 @@ class CamCapabilities {
   int evCompMax;
   double evCompensationStep;
   int estimatedMemoryBytes;
-  /// Width of the YUV stream used by the C++ pipeline (pixels).
-  int yuvStreamWidth;
-  /// Height of the YUV stream used by the C++ pipeline (pixels).
-  int yuvStreamHeight;
-  /// Flutter texture ID for the raw (pre-processing) preview.
+  /// Flutter texture ID for the GPU raw stream (passthrough, no color adjustments).
+  /// 0 if raw stream is disabled.
   int rawStreamTextureId;
+  /// Actual computed width of the GPU raw stream (pixels). 0 if raw stream is disabled.
+  int rawStreamWidth;
+  /// Requested height of the GPU raw stream (pixels). 0 if raw stream is disabled.
+  int rawStreamHeight;
 }
 
 class CamStateUpdate {
@@ -231,7 +232,7 @@ class CamFrameResult {
 @HostApi()
 abstract class CameraHostApi {
   @async
-  int open(String? cameraId, CamSettings? settings);
+  int open(String? cameraId, CamSettings? settings, bool enableRawStream, int rawStreamHeight);
 
   @async
   CamCapabilities getCapabilities(int handle);

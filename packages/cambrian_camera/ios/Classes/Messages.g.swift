@@ -281,12 +281,13 @@ struct CamCapabilities {
   var evCompMax: Int64
   var evCompensationStep: Double
   var estimatedMemoryBytes: Int64
-  /// Width of the YUV stream used by the C++ pipeline (pixels).
-  var yuvStreamWidth: Int64
-  /// Height of the YUV stream used by the C++ pipeline (pixels).
-  var yuvStreamHeight: Int64
-  /// Flutter texture ID for the raw (pre-processing) preview.
+  /// Flutter texture ID for the GPU raw stream (passthrough, no color adjustments).
+  /// 0 if raw stream is disabled.
   var rawStreamTextureId: Int64
+  /// Actual computed width of the GPU raw stream (pixels). 0 if raw stream is disabled.
+  var rawStreamWidth: Int64
+  /// Requested height of the GPU raw stream (pixels). 0 if raw stream is disabled.
+  var rawStreamHeight: Int64
 
 
   // swift-format-ignore: AlwaysUseLowerCamelCase
@@ -304,9 +305,9 @@ struct CamCapabilities {
     let evCompMax = pigeonVar_list[10] as! Int64
     let evCompensationStep = pigeonVar_list[11] as! Double
     let estimatedMemoryBytes = pigeonVar_list[12] as! Int64
-    let yuvStreamWidth = pigeonVar_list[13] as! Int64
-    let yuvStreamHeight = pigeonVar_list[14] as! Int64
-    let rawStreamTextureId = pigeonVar_list[15] as! Int64
+    let rawStreamTextureId = pigeonVar_list[13] as! Int64
+    let rawStreamWidth = pigeonVar_list[14] as! Int64
+    let rawStreamHeight = pigeonVar_list[15] as! Int64
 
     return CamCapabilities(
       supportedSizes: supportedSizes,
@@ -322,9 +323,9 @@ struct CamCapabilities {
       evCompMax: evCompMax,
       evCompensationStep: evCompensationStep,
       estimatedMemoryBytes: estimatedMemoryBytes,
-      yuvStreamWidth: yuvStreamWidth,
-      yuvStreamHeight: yuvStreamHeight,
-      rawStreamTextureId: rawStreamTextureId
+      rawStreamTextureId: rawStreamTextureId,
+      rawStreamWidth: rawStreamWidth,
+      rawStreamHeight: rawStreamHeight
     )
   }
   func toList() -> [Any?] {
@@ -342,9 +343,9 @@ struct CamCapabilities {
       evCompMax,
       evCompensationStep,
       estimatedMemoryBytes,
-      yuvStreamWidth,
-      yuvStreamHeight,
       rawStreamTextureId,
+      rawStreamWidth,
+      rawStreamHeight,
     ]
   }
 }
@@ -527,7 +528,7 @@ class MessagesPigeonCodec: FlutterStandardMessageCodec, @unchecked Sendable {
 
 /// Generated protocol from Pigeon that represents a handler of messages from Flutter.
 protocol CameraHostApi {
-  func open(cameraId: String?, settings: CamSettings?, completion: @escaping (Result<Int64, Error>) -> Void)
+  func open(cameraId: String?, settings: CamSettings?, enableRawStream: Bool, rawStreamHeight: Int64, completion: @escaping (Result<Int64, Error>) -> Void)
   func getCapabilities(handle: Int64, completion: @escaping (Result<CamCapabilities, Error>) -> Void)
   func updateSettings(handle: Int64, settings: CamSettings) throws
   func setProcessingParams(handle: Int64, params: CamProcessingParams) throws
@@ -548,7 +549,9 @@ class CameraHostApiSetup {
         let args = message as! [Any?]
         let cameraIdArg: String? = nilOrValue(args[0])
         let settingsArg: CamSettings? = nilOrValue(args[1])
-        api.open(cameraId: cameraIdArg, settings: settingsArg) { result in
+        let enableRawStreamArg = args[2] as! Bool
+        let rawStreamHeightArg = args[3] as! Int64
+        api.open(cameraId: cameraIdArg, settings: settingsArg, enableRawStream: enableRawStreamArg, rawStreamHeight: rawStreamHeightArg) { result in
           switch result {
           case .success(let res):
             reply(wrapResult(res))
