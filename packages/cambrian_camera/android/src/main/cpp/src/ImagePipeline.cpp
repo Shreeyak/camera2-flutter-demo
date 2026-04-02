@@ -7,6 +7,7 @@
 #include <android/log.h>
 #include <android/native_window.h>
 #include <algorithm>  // std::min
+#include <chrono>     // profiling
 #include <cmath>      // std::abs
 #include <cstring>    // memcpy
 
@@ -184,25 +185,33 @@ void ImagePipeline::deliverYuv(
 // Processing helpers
 // ---------------------------------------------------------------------------
 
-/// Luminance-preserving saturation: gray + sat * (channel - gray).
-/// Reads from `src`, writes to pre-allocated `dst`. Uses parallel_for_ to
-/// spread rows across available cores.  Equivalent to Photoshop/Lightroom
-/// saturation — no BGR↔HSV round-trip needed.
+/// Luminance-preserving saturation: dst = gray + sat * (src - gray).
+/// BT.601 weights.  Splits work across kThreads to saturate big cores.
 static void applySaturation(const cv::Mat& src, cv::Mat& dst, float sat) {
     dst.create(src.size(), src.type());
-    cv::parallel_for_(cv::Range(0, src.rows), [&](const cv::Range& range) {
-        for (int r = range.start; r < range.end; ++r) {
-            const auto* s = src.ptr<uint8_t>(r);
-            auto*       d = dst.ptr<uint8_t>(r);
-            for (int c = 0, n = src.cols * 3; c < n; c += 3) {
-                float B = s[c], G = s[c + 1], R = s[c + 2];
-                float gray = 0.114f * B + 0.587f * G + 0.299f * R;
-                d[c]     = cv::saturate_cast<uint8_t>(gray + sat * (B - gray));
-                d[c + 1] = cv::saturate_cast<uint8_t>(gray + sat * (G - gray));
-                d[c + 2] = cv::saturate_cast<uint8_t>(gray + sat * (R - gray));
+
+    constexpr int kThreads = 4;
+    std::thread workers[kThreads];
+    const int rowsPer = src.rows / kThreads;
+
+    for (int t = 0; t < kThreads; ++t) {
+        const int r0 = t * rowsPer;
+        const int r1 = (t == kThreads - 1) ? src.rows : r0 + rowsPer;
+        workers[t] = std::thread([&src, &dst, sat, r0, r1]() {
+            for (int r = r0; r < r1; ++r) {
+                const auto* s = src.ptr<uint8_t>(r);
+                auto*       d = dst.ptr<uint8_t>(r);
+                for (int c = 0, n = src.cols * 3; c < n; c += 3) {
+                    float B = s[c], G = s[c + 1], R = s[c + 2];
+                    float gray = 0.114f * B + 0.587f * G + 0.299f * R;
+                    d[c]     = cv::saturate_cast<uint8_t>(gray + sat * (B - gray));
+                    d[c + 1] = cv::saturate_cast<uint8_t>(gray + sat * (G - gray));
+                    d[c + 2] = cv::saturate_cast<uint8_t>(gray + sat * (R - gray));
+                }
             }
-        }
-    });
+        });
+    }
+    for (auto& w : workers) w.join();
 }
 
 // ---------------------------------------------------------------------------
@@ -211,10 +220,24 @@ static void applySaturation(const cv::Mat& src, cv::Mat& dst, float sat) {
 
 void ImagePipeline::processingLoop() {
     LOGD("processingLoop: started");
+    using Clock = std::chrono::steady_clock;
+
+    // Rolling averages (microseconds), reported every kLogInterval frames.
+    constexpr int kLogInterval = 60;
+    int64_t frameCount   = 0;
+    double  accumPop     = 0;   // time blocked in inputRing_.pop()
+    double  accumYuv     = 0;   // YUV → BGR conversion
+    double  accumSat     = 0;   // saturation (+ future processing steps)
+    double  accumPublish = 0;   // consumer dispatch
+    double  accumTotal   = 0;   // wall-clock including pop wait
+    auto    intervalStart = Clock::now();
+
     YuvSlot slot;
 
     while (true) {
+        const auto tPop0 = Clock::now();
         if (!inputRing_.pop(slot)) break;  // shutdown signaled
+        const auto tPop1 = Clock::now();
 
         // Snapshot params so the inner loop does not hold paramsMu_.
         ProcessingParams p;
@@ -223,7 +246,7 @@ void ImagePipeline::processingLoop() {
             p = params_;
         }
 
-        // YUV → BGR via OpenCV.
+        // -- YUV → BGR via OpenCV --------------------------------------------
         cv::Mat y_mat(slot.height, slot.width, CV_8UC1, slot.yData.data());
         cv::Mat bgr;
 
@@ -240,7 +263,7 @@ void ImagePipeline::processingLoop() {
             cv::cvtColor(i420, bgr, cv::COLOR_YUV2BGR_I420);
         } else {
             // NV21 / NV12: two-plane conversion — wraps existing buffers, no extra copy.
-            // uv_mat shape: (height/2) rows × (width/2) cols × CV_8UC2 (each element = VU or UV pair).
+            // uv_mat: (height/2) rows × (width/2) cols × CV_8UC2 (VU or UV pair per element).
             cv::Mat uv_mat(slot.height / 2, slot.width / 2, CV_8UC2,
                            slot.uvData.data());
             const int code = (slot.yuvFormat == YUV_FORMAT_NV21)
@@ -248,6 +271,7 @@ void ImagePipeline::processingLoop() {
                              : cv::COLOR_YUV2BGR_NV12;
             cv::cvtColorTwoPlane(y_mat, uv_mat, bgr, code);
         }
+        const auto tYuv = Clock::now();
 
         // -- Build raw frame (zero-copy move of the YUV→BGR output) -----------
         auto rawFrame    = std::make_shared<Frame>();
@@ -274,8 +298,10 @@ void ImagePipeline::processingLoop() {
         // Future steps: black level, gamma, brightness, auto-stretch.
         // Each would check `modified` and operate on `processed` in-place,
         // or copy from rawFrame->bgr on first use.
+        const auto tSat = Clock::now();
 
         // -- Dispatch to consumers -------------------------------------------
+        // Raw consumer gets the pre-processing BGR frame (non-blocking mailbox).
         {
             bool hasRawWindow;
             {
@@ -287,6 +313,8 @@ void ImagePipeline::processingLoop() {
             }
         }
 
+        // Processed consumers get the post-processing frame, or alias the raw
+        // frame when all processing steps are identity (zero-copy).
         if (modified) {
             auto pFrame    = std::make_shared<Frame>();
             pFrame->id     = slot.frameId;
@@ -299,6 +327,33 @@ void ImagePipeline::processingLoop() {
             publishToConsumers(std::move(pFrame));
         } else {
             publishToConsumers(rawFrame);
+        }
+        const auto tEnd = Clock::now();
+
+        // -- Profiling -------------------------------------------------------
+        auto us = [](auto a, auto b) {
+            return std::chrono::duration<double, std::micro>(b - a).count();
+        };
+        accumPop     += us(tPop0, tPop1);
+        accumYuv     += us(tPop1, tYuv);
+        accumSat     += us(tYuv, tSat);
+        accumPublish += us(tSat, tEnd);
+        accumTotal   += us(tPop0, tEnd);
+
+        if (++frameCount % kLogInterval == 0) {
+            double wallMs = std::chrono::duration<double, std::milli>(
+                    tEnd - intervalStart).count();
+            double fps = kLogInterval / (wallMs / 1000.0);
+            LOGD("perf [%lld] fps=%.1f  total=%.1fms  pop=%.1fms  yuv=%.1fms  sat=%.1fms  pub=%.1fms",
+                 static_cast<long long>(frameCount),
+                 fps,
+                 accumTotal   / kLogInterval / 1000.0,
+                 accumPop     / kLogInterval / 1000.0,
+                 accumYuv     / kLogInterval / 1000.0,
+                 accumSat     / kLogInterval / 1000.0,
+                 accumPublish / kLogInterval / 1000.0);
+            accumTotal = accumPop = accumYuv = accumSat = accumPublish = 0;
+            intervalStart = tEnd;
         }
     }
     LOGD("processingLoop: exiting");

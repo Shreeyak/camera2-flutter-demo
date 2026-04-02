@@ -15,12 +15,14 @@ add_library(cambrian_camera SHARED
     src/InputRing.cpp
 )
 
-# Aggressive optimization for pixel-processing hot loops (NEON auto-vectorization,
-# fused multiply-add).  -ffast-math is safe here: all values are uint8 [0,255]
-# or float intermediates — no NaN/denormal edge cases.
+# Pixel-processing code needs optimization even in Debug — without it, our
+# per-pixel loops run ~20x slower than OpenCV's pre-compiled (always -O2) functions.
+# -O2 baseline for all configs; -O3 + -ffast-math for Release.
+# -ffast-math enables NEON FMA; safe for uint8 [0,255] pixel math.
 target_compile_options(cambrian_camera PRIVATE
-    $<$<CONFIG:Release>:-O3 -ffast-math -ftree-vectorize>
-    $<$<CONFIG:RelWithDebInfo>:-O2 -ffast-math -ftree-vectorize>
+    -O2 -ftree-vectorize
+    $<$<CONFIG:Release>:-O3 -ffast-math>
+    $<$<CONFIG:RelWithDebInfo>:-ffast-math>
 )
 
 target_include_directories(cambrian_camera PRIVATE include)

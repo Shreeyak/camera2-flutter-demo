@@ -989,10 +989,12 @@ class CameraController(
     /**
      * Creates a [CaptureRequest.Builder] for repeating preview requests.
      *
-     * Prefers [CameraDevice.TEMPLATE_ZERO_SHUTTER_LAG] for minimal capture latency.
-     * Falls back to [CameraDevice.TEMPLATE_PREVIEW] on devices that do not support ZSL
-     * (i.e. lack PRIVATE_REPROCESSING or YUV_REPROCESSING capabilities), where ZSL would
-     * throw [IllegalArgumentException].
+     * Uses [CameraDevice.TEMPLATE_PREVIEW] — the correct template for continuous streaming.
+     * (TEMPLATE_ZERO_SHUTTER_LAG is designed for still-capture pipelines, not preview.)
+     *
+     * Sets [CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE] to the highest available minimum
+     * frame rate (preferring [30, 30]).  Without this, Camera2's AE algorithm is free to
+     * ramp exposure time above 1/30 s, which physically caps delivery to well below 30 fps.
      *
      * The returned builder already has the YUV [imageReader] surface added as target
      * (so the streaming ImageReader receives frames) and [CaptureRequest.CONTROL_MODE_AUTO]
@@ -1003,17 +1005,29 @@ class CameraController(
         device: CameraDevice,
         @Suppress("UNUSED_PARAMETER") surface: Surface,
     ): CaptureRequest.Builder {
-        val builder = try {
-            device.createCaptureRequest(CameraDevice.TEMPLATE_ZERO_SHUTTER_LAG)
-        } catch (e: IllegalArgumentException) {
-            android.util.Log.w("CambrianCamera", "TEMPLATE_ZERO_SHUTTER_LAG not supported, falling back to TEMPLATE_PREVIEW")
-            device.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW)
-        }
+        val builder = device.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW)
+
         // Camera2 targets only the YUV ImageReader; the C++ pipeline writes processed
         // frames to the SurfaceProducer via ANativeWindow.  A direct-to-preview mode
         // would add `surface` as a target here instead.
         imageReader?.surface?.let { builder.addTarget(it) }
         builder.set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
+
+        // Lock in the highest available min-fps range so AE can't use long exposures
+        // that would cap delivery below 30 fps.  Without this, devices in low light
+        // routinely drop to 12–15 fps even though the sensor supports 30 fps at this size.
+        val chars = cameraManager.getCameraCharacteristics(device.id)
+        val fpsRanges = chars.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)
+        if (fpsRanges != null && fpsRanges.isNotEmpty()) {
+            // Prefer the range whose lower bound is highest (forces max sustained fps).
+            // Among ties, prefer a fixed range (upper == lower) to avoid jitter.
+            val best = fpsRanges.maxWithOrNull(
+                compareBy({ it.lower }, { if (it.lower == it.upper) 1 else 0 })
+            )!!
+            builder.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, best)
+            android.util.Log.d("CambrianCamera", "AE fps range: [${best.lower}, ${best.upper}]")
+        }
+
         return builder
     }
 
