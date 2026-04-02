@@ -8,6 +8,7 @@
 //   5. Async PBO readback for full-res and tracker (writeIdx)
 //   6. Map previous frame PBOs (readIdx) and invoke callbacks
 //   7. Advance pboIndex_
+//   8. Raw stream path: copy mapped full-res PBO bytes to raw output buffer
 
 #include "GpuRenderer.h"
 
@@ -15,6 +16,7 @@
 #include <cstring>
 
 #define LOG_TAG "GpuRenderer"
+#define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, __VA_ARGS__)
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  LOG_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 
@@ -657,7 +659,7 @@ bool GpuRenderer::initGl() {
                 glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
                 checkGlError("raw PBOs");
 
-                LOGI("GpuRenderer: raw stream enabled %dx%d", rawW_, rawH_);
+                LOGD("GpuRenderer: raw stream enabled %dx%d", rawW_, rawH_);
             }
 
             // If any step above disabled raw, clean up partially-allocated resources
