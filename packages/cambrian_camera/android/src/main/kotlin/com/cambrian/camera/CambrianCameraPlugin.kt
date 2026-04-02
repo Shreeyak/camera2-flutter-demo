@@ -15,11 +15,13 @@ import io.flutter.view.TextureRegistry
  * is used as the camera handle returned to Dart, and the [CameraController] that manages
  * the Camera2 lifecycle for this session.
  *
- * @property producer  Flutter texture entry backing the camera preview.
+ * @property producer             Flutter texture entry backing the processed preview.
+ * @property rawSurfaceProducer  Flutter texture entry backing the raw (pre-processing) preview.
  * @property controller  Camera2 lifecycle manager for this session.
  */
 data class CameraSession(
     val producer: TextureRegistry.SurfaceProducer,
+    val rawSurfaceProducer: TextureRegistry.SurfaceProducer,
     val controller: CameraController,
 )
 
@@ -34,7 +36,7 @@ data class CameraSession(
  * - [onAttachedToActivity] / [onDetachedFromActivity] — keeps an [Activity] reference for
  *   camera permission checks and context.
  *
- * Phase 3: delegates all [CameraHostApi] calls to [CameraController], which implements the
+ * Delegates all [CameraHostApi] calls to [CameraController], which implements the
  * real Camera2 lifecycle and JNI bridge.
  */
 class CambrianCameraPlugin : FlutterPlugin, ActivityAware, CameraHostApi {
@@ -89,6 +91,7 @@ class CambrianCameraPlugin : FlutterPlugin, ActivityAware, CameraHostApi {
         sessions.values.forEach { session ->
             try { session.controller.release() } catch (_: Exception) {}
             try { session.producer.release() } catch (_: Exception) {}
+            try { session.rawSurfaceProducer.release() } catch (_: Exception) {}
         }
         sessions.clear()
         flutterApi = null
@@ -147,17 +150,19 @@ class CambrianCameraPlugin : FlutterPlugin, ActivityAware, CameraHostApi {
         }
 
         val producer = registry.createSurfaceProducer()
+        val rawSurfaceProducer = registry.createSurfaceProducer()
         val handle = producer.id()
-        val controller = CameraController(ctx, producer, api, handle)
+        val controller = CameraController(ctx, producer, rawSurfaceProducer, api, handle)
 
         // Register the session immediately so that close() can tear it down even if open()
         // hasn't returned yet.  On failure, remove the session and release resources.
-        sessions[handle] = CameraSession(producer, controller)
+        sessions[handle] = CameraSession(producer, rawSurfaceProducer, controller)
         controller.open(cameraId, settings) { result ->
             if (result.isFailure) {
                 sessions.remove(handle)
                 try { controller.release() } catch (_: Exception) {}
                 try { producer.release() } catch (_: Exception) {}
+                try { rawSurfaceProducer.release() } catch (_: Exception) {}
             }
             callback(result)
         }
@@ -191,8 +196,7 @@ class CambrianCameraPlugin : FlutterPlugin, ActivityAware, CameraHostApi {
     /**
      * Updates C++ pipeline processing parameters.
      *
-     * Phase 3 stub — no-op in [CameraController.setProcessingParams].
-     * Phase 4 will forward these to the C++ image pipeline via JNI.
+     * Forwards parameters to the C++ image pipeline via JNI.
      *
      * @param handle The camera handle.
      * @param params The processing parameters to apply.
@@ -249,6 +253,7 @@ class CambrianCameraPlugin : FlutterPlugin, ActivityAware, CameraHostApi {
         }
         session.controller.close { result ->
             session.producer.release()
+            session.rawSurfaceProducer.release()
             callback(result)
         }
     }
