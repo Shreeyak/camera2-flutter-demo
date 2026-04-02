@@ -1,14 +1,5 @@
 // ignore_for_file: one_member_abstracts
-import 'package:pigeon/pigeon.dart'
-    show
-        ConfigurePigeon,
-        PigeonOptions,
-        DartOptions,
-        KotlinOptions,
-        SwiftOptions,
-        HostApi,
-        FlutterApi,
-        async;
+import 'package:pigeon/pigeon.dart';
 
 @ConfigurePigeon(PigeonOptions(
   dartOut: 'lib/src/messages.g.dart',
@@ -128,9 +119,8 @@ class CamCapabilities {
     required this.evCompMax,
     required this.evCompensationStep,
     required this.estimatedMemoryBytes,
-    required this.yuvStreamWidth,
-    required this.yuvStreamHeight,
-    required this.rawStreamTextureId,
+    required this.streamWidth,
+    required this.streamHeight,
   });
 
   List<CamSize> supportedSizes;
@@ -147,11 +137,9 @@ class CamCapabilities {
   double evCompensationStep;
   int estimatedMemoryBytes;
   /// Width of the YUV stream used by the C++ pipeline (pixels).
-  int yuvStreamWidth;
+  int streamWidth;
   /// Height of the YUV stream used by the C++ pipeline (pixels).
-  int yuvStreamHeight;
-  /// Flutter texture ID for the raw (pre-processing) preview.
-  int rawStreamTextureId;
+  int streamHeight;
 }
 
 class CamStateUpdate {

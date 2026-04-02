@@ -1,4 +1,0 @@
-kompute
-numpy
-Pillow
-PyQt6

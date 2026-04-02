@@ -7,8 +7,8 @@ android {
     namespace = "com.cambrian.camera"
     // API 35 for latest Camera2 features; minSdk 33 targets Android 13+.
     compileSdk = 35
-    // NDK version matching the OpenCV prebuilt used by the C++ pipeline.
-    ndkVersion = "27.0.12077973"
+    // NDK version matching the OpenCV prebuilt used in Phase 4.
+    ndkVersion = "25.1.8937393"
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
@@ -22,26 +22,9 @@ android {
     defaultConfig {
         // Targets OPD2403 hardware running API 33+. Single-device target for now.
         minSdk = 33
-        ndk {
-            // OpenCV prebuilt static libs are arm64-v8a only, so this module
-            // currently packages native code for arm64-v8a devices only.
-            //
-            // This intentionally excludes x86/x86_64 (including emulators) and
-            // other 32-bit ABIs from the NDK build and final AAR/APK packaging.
-            // To add broader device/emulator support, matching OpenCV and pipeline
-            // prebuilts would be needed for each additional ABI.
-            abiFilters += "arm64-v8a"
-        }
-        externalNativeBuild {
-            cmake {
-                // c++_shared: makes AGP package libc++_shared.so in the APK
-                // so the dynamic linker can resolve it at runtime.
-                arguments += "-DANDROID_STL=c++_shared"
-            }
-        }
     }
 
-    // C++ JNI bridge and image pipeline.
+    // C++ JNI bridge and image pipeline (Phase 3+).
     externalNativeBuild {
         cmake {
             path = file("src/main/cpp/CMakeLists.txt")

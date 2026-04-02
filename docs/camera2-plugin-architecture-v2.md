@@ -61,7 +61,7 @@ Raw MethodChannel with string-based method names and `Map<String, dynamic>` payl
 
 ### YUV_420_888 for streaming
 
-`YUV_420_888` is the streaming format. At session setup `resolveStreamFormat()` queries `StreamConfigurationMap.getOutputSizes(YUV_420_888)`, selects the largest 4:3 size (matching the sensor's native aspect ratio for highest quality), and falls back to 1280×960 if no 4:3 size is advertised. The chosen resolution is reported in `CameraCapabilities.yuvStreamWidth` / `yuvStreamHeight`.
+`YUV_420_888` is the streaming format. At session setup `resolveStreamFormat()` queries `StreamConfigurationMap.getOutputSizes(YUV_420_888)`, selects the largest 4:3 size (matching the sensor's native aspect ratio for highest quality), and falls back to 1280×960 if no 4:3 size is advertised. The chosen resolution is reported in `CameraCapabilities.streamWidth` / `streamHeight`.
 
 ### Per-request ISP settings
 
@@ -208,7 +208,7 @@ class CameraCapabilities {
   final double zoomMin, zoomMax;
   final int evCompMin, evCompMax;
   final double evCompensationStep;
-  final int yuvStreamWidth, yuvStreamHeight;  // resolution chosen by resolveStreamFormat()
+  final int streamWidth, streamHeight;  // resolution chosen by resolveStreamFormat()
   final int estimatedMemoryBytes;       // current native memory usage
 }
 ```

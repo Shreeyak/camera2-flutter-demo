@@ -1,145 +1,67 @@
 #pragma once
-// Image pipeline: receives YUV frames into an input ring buffer, converts them
-// to BGR asynchronously via OpenCV, applies post-processing, and distributes
-// shared BGR frames to registered consumer sinks via per-consumer mailboxes.
-//
-// Thread safety — lock ordering (always acquire in this order):
-//   1. windowMu_    — ANativeWindow access (setPreviewWindow, blitToWindow)
-//   2. consumersMu_ — consumers_ vector (addSink, removeSink, publishToConsumers)
-//   3. Consumer::mu — per-consumer mailbox (publishToConsumers, dispatch thread)
-//   paramsMu_ is independent: only held momentarily for a snapshot copy.
-//   rawConsumer_ is managed like consumers_ entries but outside the vector so
-//   it receives pre-saturation frames independent of publishToConsumers.
-
-#include "cambrian_camera_native.h"
-#include "InputRing.h"
+// Internal header for the Phase 3 identity image pipeline.
+// Not part of the public consumer API (see cambrian_camera_native.h).
 
 #include <android/native_window.h>
-#include <atomic>
-#include <condition_variable>
 #include <cstdint>
-#include <memory>
 #include <mutex>
-#include <thread>
-#include <vector>
-
-#include <opencv2/core.hpp>
 
 namespace cam {
 
-/// User-adjustable processing parameters. All fields have identity defaults.
-/// setParams() is thread-safe; the processing loop reads a snapshot under paramsMu_.
-/// Currently only saturation is applied; remaining fields are stored and will be
-/// wired incrementally.
-struct ProcessingParams {
-    float blackR = 0.f, blackG = 0.f, blackB = 0.f;  ///< [0, 0.5] per-channel black level
-    float gamma           = 1.f;                       ///< [0.1, 4.0]; 1.0 = identity
-    float histBlackPoint  = 0.f;                       ///< [0, 1]
-    float histWhitePoint  = 1.f;                       ///< [0, 1]
-    bool  autoStretch     = false;
-    float autoStretchLow  = 0.01f;
-    float autoStretchHigh = 0.99f;
-    float brightness      = 0.f;                       ///< [-1, 1]; 0.0 = identity
-    float saturation      = 1.f;                       ///< [0, 3]; 1.0 = identity
-};
-
-/// Internal shared frame distributed to all consumers. cv::Mat is kept out of
-/// the public API; SinkFrame exposes raw pointers into this struct's bgr data.
-struct Frame {
-    uint64_t id        = 0;
-    FrameMetadata meta = {};
-    cv::Mat bgr;           ///< CV_8UC3, BGR — internal only, not in public header
-    int width  = 0;
-    int height = 0;
-    int stride = 0;        ///< bytes per row (bgr.step)
-    PixelFormat format = PixelFormat::BGR;
-};
-using SharedFrame = std::shared_ptr<Frame>;
-
-class ImagePipeline : public IImagePipeline {
+/// Phase 3 identity pipeline: receives raw RGBA frames from Kotlin (via a
+/// direct ByteBuffer backed by ImageReader) and copies them pixel-row by
+/// pixel-row into an ANativeWindow for display.
+///
+/// Thread safety: setPreviewWindow() may be called from the UI thread while
+/// processFrame() runs on the camera background thread. Both methods hold
+/// mutex_ for the duration of their access to previewWindow_.
+///
+/// Phase 4 will extend this class to:
+///   - Apply black balance, white balance, LUT, and saturation corrections
+///   - Dispatch processed frames to registered IImagePipeline sinks
+class ImagePipeline {
 public:
-    /// Construct with a preview window and stream dimensions for InputRing pre-allocation.
-    ImagePipeline(ANativeWindow* window, int width, int height);
+    /// Construct the pipeline with an optional preview window.
+    /// @param window  ANativeWindow obtained from ANativeWindow_fromSurface(),
+    ///                or nullptr to start with no preview (same as calling
+    ///                setPreviewWindow(nullptr) after construction).  When
+    ///                non-null the pipeline calls ANativeWindow_acquire()
+    ///                internally, so the caller may release their reference.
+    explicit ImagePipeline(ANativeWindow* window);
 
-    /// Shuts down processing thread and all consumer threads, releases the window.
-    ~ImagePipeline() override;
+    /// Releases the ANativeWindow reference held by this pipeline.
+    ~ImagePipeline();
 
-    // Non-copyable, non-movable.
+    // Non-copyable, non-movable — owns a raw pointer resource.
     ImagePipeline(const ImagePipeline&) = delete;
     ImagePipeline& operator=(const ImagePipeline&) = delete;
 
-    /// Replace the processed-preview surface (e.g. after Flutter surface recreation).
+    /// Replace the preview surface, e.g. when the Flutter PlatformView is
+    /// recreated after an app resume.  The old ANativeWindow reference is
+    /// released before the new one is stored.
+    /// @param window  New ANativeWindow, or nullptr to pause rendering.
     void setPreviewWindow(ANativeWindow* window);
 
-    /// Replace the raw-preview surface — receives BGR frames before any processing.
-    void setRawPreviewWindow(ANativeWindow* window);
-
-    /// Push a YUV frame into the input ring. Returns immediately — the caller may
-    /// close the camera Image right after this call returns.
-    void deliverYuv(const uint8_t* y,  int yRowStride,
-                    const uint8_t* u,  const uint8_t* v,
-                    int uvRowStride,
-                    int width, int height,
-                    int yuvFormat,
-                    uint64_t frameId, const FrameMetadata& meta);
-
-    /// Atomically update processing parameters. Takes effect on the next frame.
-    void setParams(const ProcessingParams& p);
-
-    // -- IImagePipeline ----------------------------------------------------------
-    void addSink(const SinkConfig& config, SinkCallback callback) override;
-    void removeSink(const std::string& name) override;
+    /// Copy one RGBA frame into the preview ANativeWindow (identity pipeline).
+    ///
+    /// @param data    Pointer to the first byte of the frame (top-left pixel).
+    ///                Obtained via JNIEnv::GetDirectBufferAddress().
+    /// @param width   Frame width in pixels.
+    /// @param height  Frame height in pixels.
+    /// @param stride  Source row stride in **bytes**  (>= width * 4).
+    ///                May differ from width * 4 due to ImageReader alignment.
+    ///
+    /// The destination stride is taken from ANativeWindow_Buffer::stride which
+    /// is expressed in **pixels**; we multiply by 4 to get bytes per row.
+    void processFrame(const uint8_t* data, int width, int height, int stride);
 
 private:
-    // -- Preview windows ---------------------------------------------------------
-    std::mutex windowMu_;
-    ANativeWindow* previewWindow_    = nullptr;  ///< processed output (post-saturation)
-    ANativeWindow* rawPreviewWindow_ = nullptr;  ///< raw output (pre-processing)
-    int lastWidth_     = 0;
-    int lastHeight_    = 0;
-    int rawLastWidth_  = 0;
-    int rawLastHeight_ = 0;
-    cv::Mat previewRgba_;     ///< RGBA scratch buffer for processed preview; reused each frame
-    cv::Mat rawPreviewRgba_;  ///< RGBA scratch buffer for raw preview; reused each frame
-
-    // -- Processing params -------------------------------------------------------
-    std::mutex paramsMu_;
-    ProcessingParams params_;
-
-    // -- Input ring + processing thread ------------------------------------------
-    InputRing inputRing_;
-    std::thread processingThread_;
-    void processingLoop();
-
-    // -- Consumer mailboxes ------------------------------------------------------
-    struct Consumer {
-        std::string name;
-        SinkCallback callback;
-
-        SharedFrame pending;         ///< 1-slot mailbox; null when empty
-        std::mutex mu;
-        std::condition_variable cv;
-        std::thread dispatchThread;
-        std::atomic<bool> running{true};
-    };
-
-    std::mutex consumersMu_;
-    std::vector<std::unique_ptr<Consumer>> consumers_;
-
-    /// Dedicated consumer for raw (pre-saturation) preview; not in consumers_.
-    std::unique_ptr<Consumer> rawConsumer_;
-
-    void publishToConsumers(SharedFrame frame);
-    void publishToRawConsumer(SharedFrame frame);
-    void startConsumerThread(Consumer* c);
-    void shutdownConsumer(Consumer* c);
-    void shutdownConsumers();
-
-    // -- Helpers -----------------------------------------------------------------
-    /// Blit an RGBA mat to an ANativeWindow. Acquires windowMu_ internally;
-    /// must NOT be called with windowMu_ already held (deadlock).
-    /// window/lastW/lastH are the pipeline members for that window slot.
-    void blitToWindow(ANativeWindow*& window, int& lastW, int& lastH, const cv::Mat& rgba);
+    std::mutex mutex_;
+    ANativeWindow* previewWindow_ = nullptr;
+    /// Cached frame dimensions — ANativeWindow_setBuffersGeometry is only
+    /// called when these change, keeping it out of the per-frame hot path.
+    int lastWidth_  = 0;
+    int lastHeight_ = 0;
 };
 
 } // namespace cam

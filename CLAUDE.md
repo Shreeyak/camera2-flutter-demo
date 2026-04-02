@@ -47,15 +47,6 @@ dart format lib/            # Format code to match Flutter conventions
 - **`pubspec.yaml`** — Flutter dependencies and project metadata
 - **`analysis_options.yaml`** — Linting rules (extends `package:flutter_lints`)
 
-## Reference Documentation
-  Camera2 API reference is at:
-  ~/work/cambrian/eva-ref/camera2-docs-scrape/output/
-
-  - API classes: output/api-reference/camera2/ClassName.md
-  - Params: output/api-reference/camera2-params/ClassName.md
-  - Architecture guides: output/guides/camera/
-  - Search index: output/MANIFEST.json
-
 ## Important Notes
 
 - This is a Flutter demo project for the camera2 library
@@ -65,19 +56,6 @@ dart format lib/            # Format code to match Flutter conventions
   - **Dart:** use `show`/`hide` (e.g. `import 'package:foo/bar.dart' show MyClass;`)
   - **Kotlin/Java:** no wildcard imports (e.g. avoid `import x.y.*`)
 - Use `flutter pub get` after modifying `pubspec.yaml`
-
-## OpenCV (Android)
-
-The native pipeline uses OpenCV. The SDK is **not** checked in; it is symlinked from a host build:
-
-```bash
-ln -s <OPENCV_ANDROID_SDK_PATH> \
-      packages/cambrian_camera/android/opencv
-```
-
-Replace `<OPENCV_ANDROID_SDK_PATH>` with the absolute path to your OpenCV Android SDK (e.g. `$HOME/software/opencv-build-android/opencv-android-sdk`).
-
-Run this once per worktree clone. The symlink is git-ignored. Without it, the NDK build will fail with a missing `OpenCV_DIR` error.
 
 ## Useful Flutter Commands
 

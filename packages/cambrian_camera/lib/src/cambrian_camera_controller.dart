@@ -149,10 +149,11 @@ class CambrianCamera {
   // Public API
   // ---------------------------------------------------------------------------
 
-  /// Flutter texture ID for the processed (post-pipeline) preview stream.
+  /// Unique identifier for this camera instance.
   ///
+  /// Also used as the Flutter [Texture] widget's texture ID internally.
   /// Prefer [buildPreview] over constructing a [Texture] widget manually.
-  int get processedStreamTextureId => _handle;
+  int get id => _handle;
 
   /// Device capabilities (resolution list, ISO/exposure ranges, etc.).
   CameraCapabilities get capabilities => _capabilities;

@@ -89,9 +89,8 @@ class CameraCapabilities {
     required this.evCompMax,
     required this.evCompensationStep,
     required this.estimatedMemoryBytes,
-    required this.yuvStreamWidth,
-    required this.yuvStreamHeight,
-    required this.rawStreamTextureId,
+    required this.streamWidth,
+    required this.streamHeight,
   });
 
   /// Empty placeholder used during the open() factory before getCapabilities completes.
@@ -109,9 +108,8 @@ class CameraCapabilities {
         evCompMax: 0,
         evCompensationStep: 0,
         estimatedMemoryBytes: 0,
-        yuvStreamWidth: 0,
-        yuvStreamHeight: 0,
-        rawStreamTextureId: 0,
+        streamWidth: 0,
+        streamHeight: 0,
       );
 
   factory CameraCapabilities.fromPigeon(CamCapabilities c) =>
@@ -131,9 +129,8 @@ class CameraCapabilities {
         evCompMax: c.evCompMax,
         evCompensationStep: c.evCompensationStep,
         estimatedMemoryBytes: c.estimatedMemoryBytes,
-        yuvStreamWidth: c.yuvStreamWidth,
-        yuvStreamHeight: c.yuvStreamHeight,
-        rawStreamTextureId: c.rawStreamTextureId,
+        streamWidth: c.streamWidth,
+        streamHeight: c.streamHeight,
       );
 
   final List<CameraSize> supportedSizes;
@@ -154,11 +151,8 @@ class CameraCapabilities {
   final int estimatedMemoryBytes;
 
   /// Width of the YUV stream delivered to the C++ pipeline (pixels).
-  final int yuvStreamWidth;
+  final int streamWidth;
 
   /// Height of the YUV stream delivered to the C++ pipeline (pixels).
-  final int yuvStreamHeight;
-
-  /// Flutter texture ID for the raw (pre-processing) preview.
-  final int rawStreamTextureId;
+  final int streamHeight;
 }

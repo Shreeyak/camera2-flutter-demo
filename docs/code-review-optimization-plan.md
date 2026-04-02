@@ -27,11 +27,11 @@ Line 702-703 returns hardcoded `Triple(ImageFormat.YUV_420_888, 4160, 3120)`. Re
 ### 1C. Propagate stream resolution to Dart for correct preview aspect ratio
 
 **Files:**
-- `packages/cambrian_camera/pigeons/camera_api.dart` — add `yuvStreamWidth`, `yuvStreamHeight` to `CamCapabilities`
+- `packages/cambrian_camera/pigeons/camera_api.dart` — add `streamWidth`, `streamHeight` to `CamCapabilities`
 - Regenerate Pigeon (`dart run pigeon --input pigeons/camera_api.dart`)
 - `packages/cambrian_camera/android/.../CameraController.kt` — populate from resolved stream format
 - `packages/cambrian_camera/lib/src/camera_state.dart` — add fields to `CameraCapabilities`
-- `packages/cambrian_camera/lib/src/cambrian_camera_preview.dart` — use `yuvStreamWidth`/`yuvStreamHeight` instead of `supportedSizes.first`
+- `packages/cambrian_camera/lib/src/cambrian_camera_preview.dart` — use `streamWidth`/`streamHeight` instead of `supportedSizes.first`
 
 **Why:** Preview currently uses JPEG sizes for aspect ratio (line 58-63 of preview widget), but actual stream may differ.
 

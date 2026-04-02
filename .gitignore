@@ -7,8 +7,6 @@ tmp_files/*
 **/android/.gradle
 **/android/app/bin
 **/android/.cxx
-**/android/opencv
-**/.venv
 
 # Miscellaneous
 pubspec.lock
