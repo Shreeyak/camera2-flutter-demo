@@ -3,32 +3,32 @@ package com.cambrian.camera
 
 import android.content.ContentValues
 import android.content.Context
-import android.net.Uri
+import android.media.Image
 import android.media.MediaCodec
 import android.media.MediaCodecInfo
 import android.media.MediaCodecList
 import android.media.MediaFormat
 import android.media.MediaMuxer
+import android.net.Uri
 import android.os.Handler
 import android.os.HandlerThread
 import android.os.ParcelFileDescriptor
 import android.provider.MediaStore
 import android.util.Log
-import android.view.Surface
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
 /**
  * Manages video encoding and muxing for a single recording session.
  *
- * Encapsulates a [MediaCodec] encoder backed by a persistent input [Surface],
- * a [MediaMuxer] writing to a [MediaStore] pending entry, and the drain
- * thread that shuttles encoded buffers from the codec to the muxer.
+ * Encapsulates a [MediaCodec] encoder operating in buffer-input mode
+ * ([MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Flexible]), a [MediaMuxer]
+ * writing to a [MediaStore] pending entry, and the drain thread that shuttles
+ * encoded buffers from the codec to the muxer.
  *
- * The [persistentSurface] is created once in the constructor and remains valid
- * across multiple record/stop cycles. The caller (CameraController) is
- * responsible for adding this surface to the Camera2 CaptureSession as an
- * output target.
+ * Frames are fed via [encodeFrame] from the camera's [android.media.ImageReader]
+ * callback. No Camera2 session reconfiguration is required — the same single
+ * YUV_420_888 stream used for preview is also used for encoding.
  *
  * State machine: IDLE -> PREPARING -> RECORDING -> STOPPING -> IDLE (or ERROR)
  *
@@ -48,12 +48,6 @@ class VideoRecorder(private val context: Context) {
     // -------------------------------------------------------------------------
     // Codec / muxer resources
     // -------------------------------------------------------------------------
-
-    /**
-     * Persistent input surface created once from [MediaCodec.createPersistentInputSurface].
-     * Stays valid across multiple record/stop cycles; released only in [release].
-     */
-    val persistentSurface: Surface = MediaCodec.createPersistentInputSurface()
 
     /** The selected MIME type (HEVC or AVC), resolved in [prepare]. */
     private var selectedMime: String = MIME_HEVC
@@ -118,7 +112,7 @@ class VideoRecorder(private val context: Context) {
                 setInteger(MediaFormat.KEY_FRAME_RATE, fps)
                 setInteger(
                     MediaFormat.KEY_COLOR_FORMAT,
-                    MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface,
+                    MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Flexible,
                 )
                 setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
                 setInteger(
@@ -134,9 +128,7 @@ class VideoRecorder(private val context: Context) {
             val newCodec = MediaCodec.createEncoderByType(selectedMime)
             try {
                 newCodec.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
-                newCodec.setInputSurface(persistentSurface)
             } catch (e: Exception) {
-                // Release newCodec before it is assigned to the codec field to avoid a leak.
                 newCodec.release()
                 throw e
             }
@@ -240,9 +232,10 @@ class VideoRecorder(private val context: Context) {
     /**
      * Stops the current recording and finalizes the output file.
      *
-     * Signals end-of-stream to the encoder, waits for the drain thread to finish
-     * (up to 5 seconds), then stops the muxer, closes the file descriptor, and
-     * marks the MediaStore entry as not-pending so the file is visible in the gallery.
+     * Signals end-of-stream to the encoder by queuing an EOS input buffer,
+     * waits for the drain thread to finish (up to 5 seconds), then stops the
+     * muxer, closes the file descriptor, and marks the MediaStore entry as
+     * not-pending so the file is visible in the gallery.
      *
      * @return Content URI string of the finalized file.
      */
@@ -257,7 +250,12 @@ class VideoRecorder(private val context: Context) {
             ?: throw IllegalStateException("VideoRecorder: codec is null at stop()")
 
         Log.d(TAG, "stop: signalling EOS")
-        currentCodec.signalEndOfInputStream()
+        val eosIndex = currentCodec.dequeueInputBuffer(10_000L)  // 10 ms
+        if (eosIndex >= 0) {
+            currentCodec.queueInputBuffer(eosIndex, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+        } else {
+            Log.w(TAG, "stop: could not dequeue input buffer for EOS (index=$eosIndex)")
+        }
 
         val latch = eosLatch
         if (latch != null) {
@@ -299,8 +297,7 @@ class VideoRecorder(private val context: Context) {
         outputFd?.close()
         outputFd = null
 
-        // Stop the codec but do NOT release it — persistentSurface stays valid.
-        // Do this before making the file visible in the gallery.
+        // Stop the codec — the instance is reused on the next prepare() call.
         currentCodec.stop()
 
         // Mark the MediaStore entry as finalized only when muxer.stop() succeeded.
@@ -317,10 +314,39 @@ class VideoRecorder(private val context: Context) {
     }
 
     /**
-     * Releases the codec and persistent surface.
+     * Feeds one YUV camera frame into the encoder.
      *
-     * After this call the object is unusable and [persistentSurface] is invalid.
-     * Should be called when the owning component is torn down.
+     * Called on the camera background thread for every frame while [state] is RECORDING.
+     * Non-blocking: drops the frame silently if no codec input buffer is immediately available.
+     *
+     * @param cameraImage        The camera [Image] with YUV_420_888 planes. Must NOT be closed yet.
+     * @param presentationTimeUs Presentation timestamp in microseconds
+     *                           (convert from [android.media.Image.getTimestamp] by dividing by 1000).
+     */
+    fun encodeFrame(cameraImage: Image, presentationTimeUs: Long) {
+        if (state != State.RECORDING) return
+        val localCodec = codec ?: return
+
+        val index = localCodec.dequeueInputBuffer(0)  // non-blocking
+        if (index < 0) {
+            Log.d(TAG, "encodeFrame: no input buffer available — dropping frame")
+            return
+        }
+
+        val encoderImage = localCodec.getInputImage(index)
+        if (encoderImage != null) {
+            copyYuvPlanes(cameraImage, encoderImage)
+        } else {
+            Log.w(TAG, "encodeFrame: getInputImage returned null for index=$index")
+        }
+        localCodec.queueInputBuffer(index, 0, 0, presentationTimeUs, 0)
+    }
+
+    /**
+     * Releases the codec.
+     *
+     * After this call the object is unusable. Should be called when the owning
+     * component is torn down.
      */
     fun release() {
         Log.d(TAG, "release")
@@ -333,7 +359,6 @@ class VideoRecorder(private val context: Context) {
         }
         codec?.release()
         codec = null
-        persistentSurface.release()
     }
 
     // -------------------------------------------------------------------------
@@ -359,6 +384,51 @@ class VideoRecorder(private val context: Context) {
         } else {
             Log.d(TAG, "selectEncoderMime: no HEVC encoder, falling back to AVC")
             MIME_AVC
+        }
+    }
+
+    /**
+     * Copies YUV planes from a camera [Image] into an encoder [Image].
+     *
+     * Uses a fast path when both planes have pixelStride == 1 and the same row stride
+     * (I420 planar layout): copies row-by-row. Falls back to pixel-by-pixel copy for
+     * interleaved formats (NV12, NV21) or mismatched strides.
+     */
+    private fun copyYuvPlanes(src: Image, dst: Image) {
+        for (i in 0..2) {
+            val srcPlane = src.planes[i]
+            val dstPlane = dst.planes[i]
+            val srcBuf = srcPlane.buffer.also { it.rewind() }
+            val dstBuf = dstPlane.buffer.also { it.rewind() }
+            val srcRowStride   = srcPlane.rowStride
+            val dstRowStride   = dstPlane.rowStride
+            val srcPixelStride = srcPlane.pixelStride
+            val dstPixelStride = dstPlane.pixelStride
+            val planeWidth  = if (i == 0) src.width       else src.width  / 2
+            val planeHeight = if (i == 0) src.height      else src.height / 2
+
+            if (srcPixelStride == 1 && dstPixelStride == 1 && srcRowStride == dstRowStride) {
+                // Fast path: identical I420 layout — row-at-a-time bulk copy.
+                for (row in 0 until planeHeight) {
+                    srcBuf.position(row * srcRowStride)
+                    srcBuf.limit(srcBuf.position() + planeWidth)
+                    dstBuf.position(row * dstRowStride)
+                    dstBuf.put(srcBuf)
+                }
+            } else {
+                // Slow path: pixel-by-pixel, handles NV12/NV21 ↔ I420 conversion.
+                for (row in 0 until planeHeight) {
+                    srcBuf.position(row * srcRowStride)
+                    dstBuf.position(row * dstRowStride)
+                    for (col in 0 until planeWidth) {
+                        dstBuf.put(srcBuf.get())
+                        if (col < planeWidth - 1) {
+                            srcBuf.position(srcBuf.position() + srcPixelStride - 1)
+                            dstBuf.position(dstBuf.position() + dstPixelStride - 1)
+                        }
+                    }
+                }
+            }
         }
     }
 
