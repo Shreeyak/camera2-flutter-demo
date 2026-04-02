@@ -12,7 +12,7 @@ class GpuRendererSmokeTest {
     /** Tracker width/height are pure Kotlin math — no GL context needed. */
     @Test
     fun trackerDimensionsAreCorrect() {
-        val pipeline = GpuPipeline(3840, 2160, null, 0L)
+        val pipeline = GpuPipeline(3840, 2160, null, null, 0, 0, 0L)
         assertEquals(854, pipeline.trackerWidth)
         assertEquals(480, pipeline.trackerHeight)
     }
@@ -20,7 +20,7 @@ class GpuRendererSmokeTest {
     /** Same check for a 4:3 sensor resolution. */
     @Test
     fun trackerDimensionsFor4x3CameraAreCorrect() {
-        val pipeline = GpuPipeline(4160, 3120, null, 0L)
+        val pipeline = GpuPipeline(4160, 3120, null, null, 0, 0, 0L)
         assertEquals(640, pipeline.trackerWidth)
         assertEquals(480, pipeline.trackerHeight)
     }
@@ -28,7 +28,7 @@ class GpuRendererSmokeTest {
     /** nativeGpuInit with a null preview surface must return a non-zero handle. */
     @Test
     fun gpuInitWithNullPreviewSucceeds() {
-        val handle = GpuPipeline.nativeGpuInit(null, 640, 480)
+        val handle = GpuPipeline.nativeGpuInit(null, 640, 480, null, 0, 0)
         assertNotEquals("nativeGpuInit should return non-zero handle", 0L, handle)
         if (handle != 0L) GpuPipeline.nativeGpuRelease(handle)
     }
@@ -36,8 +36,8 @@ class GpuRendererSmokeTest {
     /** Init twice, release twice — must not crash. */
     @Test
     fun gpuInitAndReleaseIsIdempotent() {
-        val handle1 = GpuPipeline.nativeGpuInit(null, 640, 480)
-        val handle2 = GpuPipeline.nativeGpuInit(null, 640, 480)
+        val handle1 = GpuPipeline.nativeGpuInit(null, 640, 480, null, 0, 0)
+        val handle2 = GpuPipeline.nativeGpuInit(null, 640, 480, null, 0, 0)
         if (handle1 != 0L) GpuPipeline.nativeGpuRelease(handle1)
         if (handle2 != 0L) GpuPipeline.nativeGpuRelease(handle2)
     }
@@ -45,7 +45,7 @@ class GpuRendererSmokeTest {
     /** Setting adjustments on a valid handle must not throw. */
     @Test
     fun setAdjustmentsDoesNotCrash() {
-        val handle = GpuPipeline.nativeGpuInit(null, 640, 480)
+        val handle = GpuPipeline.nativeGpuInit(null, 640, 480, null, 0, 0)
         if (handle != 0L) {
             GpuPipeline.nativeGpuSetAdjustments(handle, 0.1, 1.2, 0.8, 0.0, 0.0, 0.0)
             GpuPipeline.nativeGpuRelease(handle)

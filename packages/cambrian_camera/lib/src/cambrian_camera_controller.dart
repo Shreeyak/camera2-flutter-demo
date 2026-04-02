@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/material.dart' show Colors;
 import 'package:flutter/widgets.dart';
 
 import 'camera_settings.dart';
@@ -39,10 +40,12 @@ class CambrianCamera {
     required int handle,
     required CameraHostApi hostApi,
     required CameraCapabilities capabilities,
+    required bool enableRawStream,
     CameraState initialState = CameraState.closed,
   }) : _handle = handle,
        _hostApi = hostApi,
        _capabilities = capabilities,
+       _enableRawStream = enableRawStream,
        _currentState = initialState,
        _stateController = StreamController<CameraState>.broadcast(),
        _errorController = StreamController<CameraError>.broadcast(),
@@ -91,6 +94,10 @@ class CambrianCamera {
   /// Opaque handle identifying this camera in platform channel calls.
   /// Also serves as the Flutter [Texture] widget's texture ID.
   final int _handle;
+
+  /// Whether the raw (pre-processing) GPU stream was requested via [open].
+  final bool _enableRawStream;
+
   final CameraHostApi _hostApi;
   // Non-final: set to CameraCapabilities.empty() at construction, then updated
   // with real values from getCapabilities() before open() resolves.
@@ -112,19 +119,28 @@ class CambrianCamera {
   ///
   /// [cameraId] selects a specific device; pass null to use the default camera.
   /// [settings] apply initial ISP settings before streaming starts.
+  /// [enableRawStream] enables the GPU raw (passthrough) preview stream.
+  /// [rawStreamHeight] controls the height of the raw stream; 0 uses a default.
   ///
   /// Throws [PlatformException] if the camera cannot be opened (e.g. permission
   /// denied). After opening, errors are delivered via [errorStream].
   static Future<CambrianCamera> open({
     String? cameraId,
     CameraSettings? settings,
+    bool enableRawStream = false,
+    int rawStreamHeight = 0,
   }) async {
     final api = CameraHostApi();
     // Ensure Flutter→Dart callbacks are wired before we open.
     _ensureFlutterApiSetup();
 
     // The handle returned by the platform is also used as the texture ID.
-    final handle = await api.open(cameraId, settings?.toCam());
+    final handle = await api.open(
+      cameraId,
+      settings?.toCam(),
+      enableRawStream,
+      rawStreamHeight,
+    );
 
     // Register the instance immediately after open() so that any state/error
     // callbacks fired during the getCapabilities round-trip are not dropped.
@@ -132,6 +148,7 @@ class CambrianCamera {
       handle: handle,
       hostApi: api,
       capabilities: CameraCapabilities.empty(), // replaced below
+      enableRawStream: enableRawStream,
       initialState: CameraState.streaming,
     );
 
@@ -224,6 +241,36 @@ class CambrianCamera {
   /// the camera is not yet streaming (e.g. during opening or recovery).
   Widget buildPreview({BoxFit fit = BoxFit.contain, Widget? placeholder}) =>
       CambrianCameraPreview(camera: this, fit: fit, placeholder: placeholder);
+
+  /// Returns a widget that displays the raw (pre-processing) GPU preview stream.
+  ///
+  /// The raw stream shows the camera output before any color adjustments or
+  /// post-processing are applied. It is only available when [open] was called
+  /// with [enableRawStream] set to true.
+  ///
+  /// Throws [StateError] if the camera was opened without [enableRawStream: true].
+  ///
+  /// Shows [placeholder] (defaults to a black box) while the texture ID is not
+  /// yet available (i.e. [CameraCapabilities.rawStreamTextureId] == 0).
+  Widget buildRawPreview({BoxFit fit = BoxFit.contain, Widget? placeholder}) {
+    if (!_enableRawStream) {
+      throw StateError(
+        'Raw stream not enabled. Pass enableRawStream: true to open().',
+      );
+    }
+    final texId = _capabilities.rawStreamTextureId;
+    if (texId == 0) {
+      return placeholder ?? const ColoredBox(color: Colors.black);
+    }
+    return FittedBox(
+      fit: fit,
+      child: SizedBox(
+        width: _capabilities.rawStreamWidth.toDouble(),
+        height: _capabilities.rawStreamHeight.toDouble(),
+        child: Texture(textureId: texId),
+      ),
+    );
+  }
 
   /// Closes the camera and releases all native resources.
   ///

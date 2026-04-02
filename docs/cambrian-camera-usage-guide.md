@@ -80,6 +80,8 @@ await camera.close();
 static Future<CambrianCamera> open({
   String? cameraId,
   CameraSettings? settings,
+  bool enableRawStream = false,
+  int rawStreamHeight = 0,
 })
 ```
 
@@ -87,8 +89,12 @@ Opens the camera and returns once it is actively streaming. This is the only way
 
 - `cameraId` — optional Camera2 device ID. Pass `null` to auto-select the default back-facing camera.
 - `settings` — optional initial ISP settings applied before the first frame.
+- `enableRawStream` — if `true`, allocates a second GPU render path (passthrough shader → rawFBO) that delivers unprocessed RGBA frames. Off by default; incurs additional GPU memory for rawFBO + rawPBOs.
+- `rawStreamHeight` — height of the raw stream in pixels. The width is auto-computed from the camera's aspect ratio. Ignored when `enableRawStream` is `false`.
 
 Throws `PlatformException` on failure (e.g., permission denied, no camera found). After opening, errors are delivered via `errorStream`.
+
+If `enableRawStream` is `true` but raw initialization fails (e.g., insufficient GPU resources), the failure is logged, raw is silently disabled, and the processed pipeline continues normally. Check `capabilities.rawStreamWidth > 0` after `open()` to confirm raw is active.
 
 ```dart
 try {
@@ -136,6 +142,27 @@ The preview automatically:
 - Shows the placeholder during `opening`, `recovering`, and `error` states
 - Switches to the live `Texture` when `streaming`
 - Preserves the correct aspect ratio via `FittedBox`
+
+#### `camera.buildRawPreview()`
+
+```dart
+Widget buildRawPreview({BoxFit fit = BoxFit.contain, Widget? placeholder})
+```
+
+Returns a widget displaying the raw (passthrough) camera preview — no color processing is applied. The output is bit-exact RGBA from the sensor.
+
+Throws `StateError` if `enableRawStream` was `false` at `open()` time.
+
+```dart
+// Raw preview (passthrough, no color processing)
+camera.buildRawPreview(
+  fit: BoxFit.cover,
+  placeholder: const ColoredBox(color: Colors.black),
+)
+// Throws StateError if enableRawStream was false at open() time.
+```
+
+Use alongside `buildPreview()` to show both processed and unprocessed views simultaneously (e.g., a side-by-side comparison pane).
 
 ---
 
@@ -511,7 +538,8 @@ print('Resolutions: ${caps.supportedSizes}');
 | `evCompMin` / `evCompMax` | `int` | EV compensation range (in steps) |
 | `evCompensationStep` | `double` | Size of one EV step |
 | `yuvStreamWidth` / `yuvStreamHeight` | `int` | YUV stream dimensions delivered to the C++ pipeline (pixels). Used by the preview widget for correct aspect ratio. |
-| `rawStreamTextureId` | `int` | Flutter texture ID for the raw (pre-processing) preview stream. Pass to `Texture(textureId: caps.rawStreamTextureId)` to render the unprocessed preview pane. |
+| `rawStreamTextureId` | `int` | Flutter texture ID for the raw (passthrough) preview stream. `0` when raw is disabled. Pass to `Texture(textureId: caps.rawStreamTextureId)` to render a manual raw pane; prefer `buildRawPreview()` instead. |
+| `rawStreamWidth` / `rawStreamHeight` | `int` | Raw stream dimensions in pixels. Both are `0` when raw is disabled (either `enableRawStream` was `false`, or raw init failed). Width is auto-computed from aspect ratio; height matches the `rawStreamHeight` passed to `open()`. |
 | `estimatedMemoryBytes` | `int` | Estimated native memory usage |
 
 ---
@@ -623,11 +651,36 @@ extern "C" void unregisterConsumers(int64_t pipelinePtr) {
 }
 ```
 
+#### `SinkRole` reference
+
+Sinks are routed by role, controlling which frame path they receive. Pass `role` in `SinkConfig`:
+
+| Role | Default? | Frame source | Pixel format | Description |
+|------|----------|-------------|--------------|-------------|
+| `SinkRole::FULL_RES` | yes | processedFBO | RGBA | Full-resolution color-processed frames (default for all sinks) |
+| `SinkRole::TRACKER` | — | processedFBO | RGBA | Same processed frames, typically registered at lower resolution |
+| `SinkRole::RAW` | — | rawFBO | RGBA | Passthrough frames — no color math, bit-exact sensor output. Only available when `enableRawStream: true`. |
+
+`SinkRole::RAW` sinks receive frames from the raw render path at `rawStreamHeight` resolution. Register a `RAW` sink only when the raw stream is enabled; frames will not be delivered if raw was disabled at `open()` time.
+
+```cpp
+cam::SinkConfig rawCfg;
+rawCfg.name = "raw_consumer";
+rawCfg.role = cam::SinkRole::RAW;  // receives passthrough RGBA from rawFBO
+
+pipeline->addSink(rawCfg, [](const cam::SinkFrame& frame) {
+    // frame.data  → bit-exact RGBA, no processing applied
+    // frame.width / frame.height → rawStreamWidth / rawStreamHeight
+    saveRawFrame(frame.data, frame.width, frame.height, frame.stride);
+});
+```
+
 #### `SinkConfig` reference
 
 | Field | Type | Description |
 |-------|------|-------------|
 | `name` | `std::string` | Unique identifier for this sink. Used as the key for `removeSink()`. |
+| `role` | `SinkRole` | Which frame path this sink receives. Default: `SinkRole::FULL_RES`. Use `SinkRole::RAW` for passthrough frames. |
 
 #### `SinkFrame` reference
 
@@ -806,14 +859,23 @@ Kotlin: CameraController
   |  The SurfaceProducer is NOT a Camera2 session output — the
   |  C++ pipeline is the sole producer for the Flutter Texture.
   |
-  |  (JNI: nativeDeliverYuv)
-C++: ImagePipeline
-  |  (InputRing → processing thread → YUV→BGR, saturation → SharedFrame fan-out)
-  +-> ANativeWindow (Flutter preview — BGR→RGBA, written via ANativeWindow_lock)
-  +-> Registered sinks (per-sink mailbox + dispatch thread, BGR frames)
+  |  (JNI: nativeDeliverYuv → OES texture upload)
+C++: GpuRenderer / ImagePipeline
+  |
+  |  Camera2 → SurfaceTexture → OES texture
+  |    ├── [color shader]       → processedFBO → preview surface + FULL_RES/TRACKER sinks
+  |    └── [passthrough shader] → rawFBO(rawH) → raw preview surface + RAW sinks
+  |         (only when enableRawStream: true)
+  |
+  +-> ANativeWindow (Flutter processed preview)
+  +-> ANativeWindow (Flutter raw preview, when raw enabled)
+  +-> FULL_RES / TRACKER sinks (per-sink mailbox + dispatch thread, processed RGBA)
+  +-> RAW sinks (passthrough RGBA at rawStreamHeight resolution)
 ```
 
-**Frame path:** Camera2 → YUV ImageReader → `nativeDeliverYuv` (JNI) → InputRing → processing thread → BGR `SharedFrame` → preview sink + registered sinks
+**Processed frame path:** Camera2 → OES texture → color shader → processedFBO → preview surface + FULL_RES/TRACKER sinks
+
+**Raw frame path (optional):** OES texture → passthrough shader → rawFBO → raw preview surface + RAW sinks
 
 **Surface ownership invariant:** A BufferQueue surface can only have one producer. Camera2 session outputs claim surfaces via `connect(NATIVE_WINDOW_API_CAMERA)`. `ANativeWindow_lock` claims via `connect(NATIVE_WINDOW_API_CPU)`. The preview surface must be in one or the other — never both. In the current architecture, the C++ pipeline owns it.
 

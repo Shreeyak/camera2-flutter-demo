@@ -24,6 +24,9 @@ open class GpuPipeline(
     private val width: Int,
     private val height: Int,
     private val previewSurface: Surface?,
+    private val rawPreviewSurface: Surface?,
+    private val rawW: Int,
+    private val rawH: Int,
     private val pipelineHandle: Long   // ImagePipeline* handle from nativeInit
 ) {
     private val glThread = HandlerThread("GpuPipeline-GL").also { it.start() }
@@ -52,7 +55,7 @@ open class GpuPipeline(
         val latch = CountDownLatch(1)
         glHandler.post {
             // 1. Initialize GpuRenderer (creates EGL context, FBOs, PBOs, shader).
-            gpuHandle = nativeGpuInit(previewSurface, width, height)
+            gpuHandle = nativeGpuInit(previewSurface, width, height, rawPreviewSurface, rawW, rawH)
             if (gpuHandle == 0L) {
                 Log.e(TAG, "nativeGpuInit failed")
                 latch.countDown()
@@ -159,7 +162,10 @@ open class GpuPipeline(
         }
 
         @JvmStatic
-        external fun nativeGpuInit(previewSurface: Surface?, width: Int, height: Int): Long
+        external fun nativeGpuInit(
+            previewSurface: Surface?, width: Int, height: Int,
+            rawPreviewSurface: Surface?, rawW: Int, rawH: Int
+        ): Long
 
         @JvmStatic
         external fun nativeGpuRelease(gpuHandle: Long)

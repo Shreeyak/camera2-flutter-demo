@@ -89,9 +89,9 @@ class CameraCapabilities {
     required this.evCompMax,
     required this.evCompensationStep,
     required this.estimatedMemoryBytes,
-    required this.yuvStreamWidth,
-    required this.yuvStreamHeight,
     required this.rawStreamTextureId,
+    required this.rawStreamWidth,
+    required this.rawStreamHeight,
   });
 
   /// Empty placeholder used during the open() factory before getCapabilities completes.
@@ -109,9 +109,9 @@ class CameraCapabilities {
         evCompMax: 0,
         evCompensationStep: 0,
         estimatedMemoryBytes: 0,
-        yuvStreamWidth: 0,
-        yuvStreamHeight: 0,
         rawStreamTextureId: 0,
+        rawStreamWidth: 0,
+        rawStreamHeight: 0,
       );
 
   factory CameraCapabilities.fromPigeon(CamCapabilities c) =>
@@ -131,9 +131,9 @@ class CameraCapabilities {
         evCompMax: c.evCompMax,
         evCompensationStep: c.evCompensationStep,
         estimatedMemoryBytes: c.estimatedMemoryBytes,
-        yuvStreamWidth: c.yuvStreamWidth,
-        yuvStreamHeight: c.yuvStreamHeight,
         rawStreamTextureId: c.rawStreamTextureId,
+        rawStreamWidth: c.rawStreamWidth,
+        rawStreamHeight: c.rawStreamHeight,
       );
 
   final List<CameraSize> supportedSizes;
@@ -153,12 +153,13 @@ class CameraCapabilities {
   /// Increases as consumers are registered via the C++ API.
   final int estimatedMemoryBytes;
 
-  /// Width of the YUV stream delivered to the C++ pipeline (pixels).
-  final int yuvStreamWidth;
-
-  /// Height of the YUV stream delivered to the C++ pipeline (pixels).
-  final int yuvStreamHeight;
-
-  /// Flutter texture ID for the raw (pre-processing) preview.
+  /// Flutter texture ID for the GPU raw stream (passthrough, no color adjustments).
+  /// 0 if raw stream is disabled.
   final int rawStreamTextureId;
+
+  /// Actual computed width of the GPU raw stream (pixels). 0 if raw stream is disabled.
+  final int rawStreamWidth;
+
+  /// Requested height of the GPU raw stream (pixels). 0 if raw stream is disabled.
+  final int rawStreamHeight;
 }

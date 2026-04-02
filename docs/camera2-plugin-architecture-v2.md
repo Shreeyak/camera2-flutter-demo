@@ -103,14 +103,20 @@ class CambrianCamera {
   static Future<CambrianCamera> open({
     String? cameraId,
     CameraSettings? settings,
+    bool enableRawStream = false,
+    int rawStreamHeight = 0,
   });
 
   /// Closes camera and releases all resources.
   Future<void> close();
 
-  /// Returns a Widget displaying the camera preview.
+  /// Returns a Widget displaying the camera preview (color-processed).
   /// Handles Texture lifecycle, aspect ratio, and placeholder internally.
   Widget buildPreview({BoxFit fit = BoxFit.contain});
+
+  /// Returns a Widget displaying the raw (passthrough) preview.
+  /// Throws StateError if enableRawStream was false at open() time.
+  Widget buildRawPreview({BoxFit fit = BoxFit.contain});
 
   /// Camera state transitions (ready, streaming, recovering, error).
   Stream<CameraState> get stateStream;
@@ -209,6 +215,10 @@ class CameraCapabilities {
   final int evCompMin, evCompMax;
   final double evCompensationStep;
   final int yuvStreamWidth, yuvStreamHeight;  // resolution chosen by resolveStreamFormat()
+  // Raw stream fields — all 0 when raw is disabled (enableRawStream: false or raw init failed)
+  final int rawStreamTextureId;   // Flutter texture ID for raw preview; 0 when disabled
+  final int rawStreamWidth;       // auto-computed from aspect ratio; 0 when disabled
+  final int rawStreamHeight;      // matches rawStreamHeight passed to open(); 0 when disabled
   final int estimatedMemoryBytes;       // current native memory usage
 }
 ```
@@ -304,8 +314,16 @@ struct SinkFrame {
     std::function<void()> release;  // MUST be called when done with frame data
 };
 
+enum class SinkRole {
+    FULL_RES,   // processed frames (color shader output) — default
+    TRACKER,    // processed frames, typically at lower resolution
+    RAW,        // passthrough frames (no color math, bit-exact RGBA from rawFBO)
+                // only delivers frames when enableRawStream: true was passed to open()
+};
+
 struct SinkConfig {
     std::string name;               // application-defined label (for logging)
+    SinkRole role = SinkRole::FULL_RES; // which render path this sink receives
     int width  = 0;                 // 0 = match source (full resolution)
     int height = 0;                 // 0 = match source
     int channels = 4;              // 4=RGBA, 1=single channel
@@ -369,6 +387,7 @@ void registerConsumers() {
     // 480p green channel for tracking
     cam::SinkConfig trackCfg;
     trackCfg.name = "tracker";
+    trackCfg.role = cam::SinkRole::TRACKER;
     trackCfg.width = 960;
     trackCfg.height = 540;
     trackCfg.channels = 1;
@@ -377,6 +396,18 @@ void registerConsumers() {
     trackCfg.dropOnFull = true;    // tracker only needs latest
     g_trackSinkId = pipeline->addSink(trackCfg, [](cam::SinkFrame& frame) {
         // Process frame for tracking...
+        frame.release();
+    });
+
+    // Raw passthrough sink (only when enableRawStream: true was passed to open())
+    cam::SinkConfig rawCfg;
+    rawCfg.name = "raw_writer";
+    rawCfg.role = cam::SinkRole::RAW;  // bit-exact RGBA, no color processing
+    rawCfg.ringSize = 2;
+    rawCfg.dropOnFull = true;
+    g_rawSinkId = pipeline->addSink(rawCfg, [](cam::SinkFrame& frame) {
+        // frame.width/height = rawStreamWidth/rawStreamHeight
+        // frame.data = passthrough RGBA from rawFBO
         frame.release();
     });
 }
@@ -602,7 +633,33 @@ void setProcessingParams(ProcessingParams params) {
 
 ## C++ Pipeline Internals
 
-### Processing stages (applied to every frame)
+### Dual-path GPU rendering
+
+The GPU renderer runs two shader passes per frame when `enableRawStream` is active:
+
+```
+Camera2 → SurfaceTexture → OES texture
+  ├── [color shader]       → processedFBO → preview surface + FULL_RES/TRACKER sinks
+  └── [passthrough shader] → rawFBO(rawH) → raw preview surface + RAW sinks
+```
+
+**Processed path** (always active): The color shader applies all `ProcessingParams` (black balance, white balance, gamma, histogram stretch, brightness, saturation) and renders into `processedFBO`. The preview surface and all `FULL_RES`/`TRACKER` sinks receive this output.
+
+**Raw path** (optional, enabled by `rawW_ > 0`): The passthrough shader performs no color math — output is a bit-exact copy of the OES texture in RGBA. Rendered into `rawFBO` at `rawStreamHeight` resolution. The raw preview surface and all `RAW` sinks receive this output.
+
+**Failure handling:** If raw initialization fails (EGL surface creation, FBO setup, shader compilation), the failure is logged, `rawW_` is set to `0`, and the processed pipeline continues normally. Callers can confirm raw is active by checking `capabilities.rawStreamWidth > 0` after `open()`.
+
+**Resource budget (raw path):** All raw resources are allocated only when `rawW_ > 0`:
+
+| Resource | Description |
+|----------|-------------|
+| `rawFBO` | Framebuffer object at `rawW_ × rawH_` RGBA |
+| `rawPBOs[2]` | Two pixel buffer objects for async readback (double-buffered) |
+| `rawEGLSurface` | Optional EGL surface for raw preview rendering |
+
+Raw resources are released when the pipeline is torn down or when raw init fails.
+
+### Processing stages (applied to every frame on the processed path)
 
 1. **Black balance** — per-channel level subtraction: `pixel[ch] = max(0, pixel[ch] - blackLevel[ch])`
 2. **White balance gains** — per-channel multiply: `pixel[R,G,B] *= wbGains[R,G,B]`
@@ -712,7 +769,15 @@ Example budget for the WSI scanner app (4K = 3840×2160):
 | ANativeWindow (preview) | 3840×2160 | 4 (RGBA) | 2 | 66 MB |
 | "stitcher" consumer | 3840×2160 | 4 (RGBA) | 4 | 133 MB |
 | "tracker" consumer | 960×540 | 1 (green) | 8 | 4 MB |
-| **Total** | | | | **~336 MB** |
+| **Total (processed only)** | | | | **~336 MB** |
+
+When the raw stream is enabled, additional GPU memory is allocated for the raw path (not counted in `estimatedMemoryBytes`):
+
+| Resource | Resolution | Memory |
+|----------|-----------|--------|
+| rawFBO | rawW × rawH RGBA | e.g., ~8 MB at 1920×1080 |
+| rawPBOs[2] (double-buffered) | rawW × rawH RGBA | e.g., ~16 MB at 1920×1080 |
+| rawEGLSurface (optional) | rawW × rawH | ~8 MB at 1920×1080 |
 
 The library reports `estimatedMemoryBytes` in `CameraCapabilities` (includes input ring + preview). Each `addSink()` call increases memory. Applications can query total memory before/after registering sinks.
 

@@ -45,6 +45,7 @@ struct SinkFrame {
 enum class SinkRole {
     FULL_RES,  ///< receives full-resolution RGBA (stitcher, any full-res sink)
     TRACKER,   ///< receives 480p-height downscaled RGBA
+    RAW,       ///< receives passthrough (pre-color-processing) RGBA at rawStreamHeight
 };
 
 /// Configuration for registering a consumer sink on the pipeline.
@@ -71,6 +72,7 @@ public:
     /// Routing is determined by config.role:
     ///   - SinkRole::FULL_RES — receives full-resolution RGBA via deliverFullResRgba().
     ///   - SinkRole::TRACKER  — receives 480p-height downscaled RGBA via deliverTrackerRgba().
+    ///   - SinkRole::RAW      — receives passthrough RGBA at rawStreamHeight via deliverRawRgba().
     virtual void addSink(const SinkConfig& config, SinkCallback callback) = 0;
 
     /// Remove a previously registered sink by name. Blocks until its dispatch thread exits.

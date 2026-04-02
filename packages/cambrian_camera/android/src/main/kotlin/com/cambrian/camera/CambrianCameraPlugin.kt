@@ -21,7 +21,7 @@ import io.flutter.view.TextureRegistry
  */
 data class CameraSession(
     val producer: TextureRegistry.SurfaceProducer,
-    val rawSurfaceProducer: TextureRegistry.SurfaceProducer,
+    val rawSurfaceProducer: TextureRegistry.SurfaceProducer?,
     val controller: CameraController,
 )
 
@@ -91,7 +91,7 @@ class CambrianCameraPlugin : FlutterPlugin, ActivityAware, CameraHostApi {
         sessions.values.forEach { session ->
             try { session.controller.release() } catch (_: Exception) {}
             try { session.producer.release() } catch (_: Exception) {}
-            try { session.rawSurfaceProducer.release() } catch (_: Exception) {}
+            try { session.rawSurfaceProducer?.release() } catch (_: Exception) {}
         }
         sessions.clear()
         flutterApi = null
@@ -138,7 +138,7 @@ class CambrianCameraPlugin : FlutterPlugin, ActivityAware, CameraHostApi {
      * @param settings Optional initial capture settings.
      * @param callback Invoked with [Result.success] containing the handle, or [Result.failure].
      */
-    override fun open(cameraId: String?, settings: CamSettings?, callback: (Result<Long>) -> Unit) {
+    override fun open(cameraId: String?, settings: CamSettings?, enableRawStream: Boolean, rawStreamHeight: Long, callback: (Result<Long>) -> Unit) {
         val registry = textureRegistry
         val api = flutterApi
         // Prefer the activity context for permission checks; fall back to application context.
@@ -150,9 +150,9 @@ class CambrianCameraPlugin : FlutterPlugin, ActivityAware, CameraHostApi {
         }
 
         val producer = registry.createSurfaceProducer()
-        val rawSurfaceProducer = registry.createSurfaceProducer()
+        val rawSurfaceProducer = if (enableRawStream) registry.createSurfaceProducer() else null
         val handle = producer.id()
-        val controller = CameraController(ctx, producer, rawSurfaceProducer, api, handle)
+        val controller = CameraController(ctx, producer, rawSurfaceProducer, enableRawStream, rawStreamHeight.toInt(), api, handle)
 
         // Register the session immediately so that close() can tear it down even if open()
         // hasn't returned yet.  On failure, remove the session and release resources.
@@ -162,7 +162,7 @@ class CambrianCameraPlugin : FlutterPlugin, ActivityAware, CameraHostApi {
                 sessions.remove(handle)
                 try { controller.release() } catch (_: Exception) {}
                 try { producer.release() } catch (_: Exception) {}
-                try { rawSurfaceProducer.release() } catch (_: Exception) {}
+                try { rawSurfaceProducer?.release() } catch (_: Exception) {}
             }
             callback(result)
         }
@@ -253,7 +253,7 @@ class CambrianCameraPlugin : FlutterPlugin, ActivityAware, CameraHostApi {
         }
         session.controller.close { result ->
             session.producer.release()
-            session.rawSurfaceProducer.release()
+            session.rawSurfaceProducer?.release()
             callback(result)
         }
     }

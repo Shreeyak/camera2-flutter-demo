@@ -8,7 +8,8 @@
 //   2. consumersMu_        — CPU path consumers_ vector (addSink ctor path, removeSink, publishToConsumers)
 //      fullResConsumersMu_ — GPU full-res consumers vector (addSink FULL_RES, removeSink, publishToFullResConsumers)
 //      trackerConsumersMu_ — GPU tracker consumers vector (addSink TRACKER, removeSink, publishToTrackerConsumers)
-//      (consumersMu_, fullResConsumersMu_, trackerConsumersMu_ are independent of each other)
+//      rawConsumersMu_     — GPU raw consumers vector (addSink RAW, removeSink, publishToRawConsumers)
+//      (consumersMu_, fullResConsumersMu_, trackerConsumersMu_, rawConsumersMu_ are independent of each other)
 //   3. Consumer::mu        — per-consumer mailbox (publish*, dispatch thread)
 //   paramsMu_ is independent: only held momentarily for a snapshot copy.
 //   rawConsumer_ is managed like consumers_ entries but outside the vector so
@@ -99,6 +100,11 @@ public:
     void deliverTrackerRgba(const uint8_t* rgba, int w, int h, int stride,
                             uint64_t frameId, const FrameMetadata& meta);
 
+    /// GPU entry point: called from GL thread after mapping rawPbo[readIdx].
+    /// Copies RGBA data into a SharedFrame and dispatches to rawConsumers_.
+    void deliverRawRgba(const uint8_t* rgba, int w, int h, int stride,
+                        uint64_t frameId, const FrameMetadata& meta);
+
     // -- IImagePipeline ----------------------------------------------------------
     void addSink(const SinkConfig& config, SinkCallback callback) override;
     void removeSink(const std::string& name) override;
@@ -151,10 +157,15 @@ private:
     std::mutex trackerConsumersMu_;
     std::vector<std::unique_ptr<Consumer>> trackerConsumers_;
 
+    // -- Raw consumer mailboxes (SinkRole::RAW) ----------------------------------
+    std::mutex rawConsumersMu_;
+    std::vector<std::unique_ptr<Consumer>> rawConsumers_;
+
     void publishToConsumers(SharedFrame frame);
     void publishToRawConsumer(SharedFrame frame);
     void publishToFullResConsumers(SharedFrame frame);
     void publishToTrackerConsumers(SharedFrame frame);
+    void publishToRawConsumers(SharedFrame frame);
     void startConsumerThread(Consumer* c);
     void shutdownConsumer(Consumer* c);
     void shutdownConsumers();

@@ -106,7 +106,11 @@ class _CameraScreenState extends State<CameraScreen> {
       return;
     }
     try {
-      final camera = await CambrianCamera.open(settings: _kInitialSettings);
+      final camera = await CambrianCamera.open(
+        settings: _kInitialSettings,
+        enableRawStream: true,
+        rawStreamHeight: 720,
+      );
       // High saturation so the processed pane is visually distinct from the raw pane.
       final initialParams = ProcessingParams(saturation: 3.0);
       await camera.setProcessingParams(initialParams);
@@ -473,17 +477,9 @@ class _CameraScreenState extends State<CameraScreen> {
     if (camera == null) {
       return const ColoredBox(color: Colors.black);
     }
-    final caps = camera.capabilities;
-    if (caps.rawStreamTextureId == 0) {
-      return const ColoredBox(color: Colors.black);
-    }
-    return FittedBox(
+    return camera.buildRawPreview(
       fit: BoxFit.cover,
-      child: SizedBox(
-        width: caps.yuvStreamWidth.toDouble(),
-        height: caps.yuvStreamHeight.toDouble(),
-        child: Texture(textureId: caps.rawStreamTextureId),
-      ),
+      placeholder: const ColoredBox(color: Colors.black),
     );
   }
 }
