@@ -451,11 +451,13 @@ Java_com_cambrian_camera_GpuPipeline_nativeGpuDrawAndReadback(
             texMatrixPtr,
             static_cast<uint64_t>(frameId),
             meta,
-            [pipeline, &meta](const uint8_t* d, int w, int h, int s) {
-                pipeline->deliverFullResRgba(d, w, h, s, meta.frameNumber, meta);
+            [pipeline](const uint8_t* d, int w, int h, int s,
+                       uint64_t fId, const cam::FrameMetadata& m) {
+                pipeline->deliverFullResRgba(d, w, h, s, fId, m);
             },
-            [pipeline, &meta](const uint8_t* d, int w, int h, int s) {
-                pipeline->deliverTrackerRgba(d, w, h, s, meta.frameNumber, meta);
+            [pipeline](const uint8_t* d, int w, int h, int s,
+                       uint64_t fId, const cam::FrameMetadata& m) {
+                pipeline->deliverTrackerRgba(d, w, h, s, fId, m);
             });
 
     env->ReleaseFloatArrayElements(texMatrix, texMatrixPtr, JNI_ABORT);

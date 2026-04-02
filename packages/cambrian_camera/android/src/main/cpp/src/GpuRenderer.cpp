@@ -1,0 +1,595 @@
+// GpuRenderer.cpp — OpenGL ES 3.0 render + PBO readback for the GPU camera pipeline.
+//
+// Frame sequence (per drawAndReadback call):
+//   1. Snapshot uniforms
+//   2. Render OES texture → full-res FBO
+//   3. Blit full-res → tracker FBO (480p, bilinear)
+//   4. Blit full-res → EGL window surface (preview) + eglSwapBuffers
+//   5. Async PBO readback for full-res and tracker (writeIdx)
+//   6. Map previous frame PBOs (readIdx) and invoke callbacks
+//   7. Advance pboIndex_
+
+#include "GpuRenderer.h"
+
+#include <android/log.h>
+#include <cstring>
+
+#define LOG_TAG "GpuRenderer"
+#define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  LOG_TAG, __VA_ARGS__)
+#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
+
+namespace {
+
+// ---------------------------------------------------------------------------
+// Shader sources
+// ---------------------------------------------------------------------------
+
+static const char* kVertSrc = R"glsl(
+#version 300 es
+in  vec2 aPos;
+out vec2 vTexCoord;
+void main() {
+    vTexCoord   = aPos * 0.5 + 0.5;   // [-1,1] -> [0,1]
+    gl_Position = vec4(aPos, 0.0, 1.0);
+}
+)glsl";
+
+static const char* kFragSrc = R"glsl(
+#version 300 es
+#extension GL_OES_EGL_image_external_essl3 : require
+precision mediump float;
+
+uniform samplerExternalOES uTexture;
+uniform mat4  uTexMatrix;
+uniform float uBrightness;
+uniform float uContrast;
+uniform float uSaturation;
+uniform vec3  uBlackBalance;
+uniform vec2  uCropScale;
+uniform vec2  uCropOffset;
+
+in  vec2 vTexCoord;
+out vec4 fragColor;
+
+const vec3 kLuma = vec3(0.2126, 0.7152, 0.0722);
+
+void main() {
+    vec2 uv    = vTexCoord * uCropScale + uCropOffset;
+    vec2 texUv = (uTexMatrix * vec4(uv, 0.0, 1.0)).xy;
+    vec3 rgb   = texture(uTexture, texUv).rgb;
+
+    rgb = max(rgb - uBlackBalance, 0.0);
+    rgb += uBrightness;
+    rgb = (rgb - 0.5) * uContrast + 0.5;
+    float luma = dot(rgb, kLuma);
+    rgb = mix(vec3(luma), rgb, uSaturation);
+
+    fragColor = vec4(clamp(rgb, 0.0, 1.0), 1.0);
+}
+)glsl";
+
+// ---------------------------------------------------------------------------
+// Fullscreen quad: 2 triangles covering NDC [-1,1]x[-1,1]
+// ---------------------------------------------------------------------------
+
+static const float kQuad[] = {
+    -1.f, -1.f,   1.f, -1.f,   -1.f,  1.f,
+     1.f, -1.f,   1.f,  1.f,   -1.f,  1.f,
+};
+
+// ---------------------------------------------------------------------------
+// GL error helper
+// ---------------------------------------------------------------------------
+
+static void checkGlError(const char* tag) {
+    GLenum err;
+    while ((err = glGetError()) != GL_NO_ERROR) {
+        LOGE("%s: GL error 0x%x", tag, err);
+    }
+}
+
+} // anonymous namespace
+
+// ---------------------------------------------------------------------------
+// cam::GpuRenderer
+// ---------------------------------------------------------------------------
+
+namespace cam {
+
+GpuRenderer::GpuRenderer(int width, int height)
+    : width_(width), height_(height)
+{
+    // Compute 480p tracker size, rounded to nearest even width to keep chroma alignment.
+    trackerHeight_ = 480;
+    trackerWidth_  = ((width_ * 480 / height_) + 1) & ~1;
+    LOGI("GpuRenderer: stream %dx%d, tracker %dx%d",
+         width_, height_, trackerWidth_, trackerHeight_);
+}
+
+GpuRenderer::~GpuRenderer() {
+    // release() is idempotent; call it to be safe if the caller forgot.
+    release();
+}
+
+// ---------------------------------------------------------------------------
+// Public: init / release
+// ---------------------------------------------------------------------------
+
+bool GpuRenderer::init(EGLNativeWindowType windowSurface) {
+    if (!initEgl(windowSurface)) {
+        LOGE("init: EGL setup failed");
+        return false;
+    }
+    if (!initGl()) {
+        LOGE("init: GL setup failed");
+        releaseEgl();
+        return false;
+    }
+    LOGI("init: OK");
+    return true;
+}
+
+void GpuRenderer::release() {
+    releaseGl();
+    releaseEgl();
+}
+
+// ---------------------------------------------------------------------------
+// Public: per-frame render + readback
+// ---------------------------------------------------------------------------
+
+void GpuRenderer::drawAndReadback(
+    GLuint oesTexture,
+    const float texMatrix[16],
+    uint64_t frameId,
+    const cam::FrameMetadata& meta,
+    std::function<void(const uint8_t*, int w, int h, int stride,
+                       uint64_t frameId, const cam::FrameMetadata&)> fullResCb,
+    std::function<void(const uint8_t*, int w, int h, int stride,
+                       uint64_t frameId, const cam::FrameMetadata&)> trackerCb)
+{
+    // -----------------------------------------------------------------------
+    // 1. Snapshot uniforms under the lock so the GL thread gets a consistent copy.
+    // -----------------------------------------------------------------------
+    float brightness, contrast, saturation, blackBalance[3];
+    {
+        std::lock_guard<std::mutex> lk(uniformMu_);
+        brightness       = brightness_;
+        contrast         = contrast_;
+        saturation       = saturation_;
+        blackBalance[0]  = blackBalance_[0];
+        blackBalance[1]  = blackBalance_[1];
+        blackBalance[2]  = blackBalance_[2];
+    }
+
+    const int writeIdx = pboIndex_;
+    const int readIdx  = 1 - pboIndex_;
+
+    // -----------------------------------------------------------------------
+    // 2. Render OES texture → full-res FBO
+    // -----------------------------------------------------------------------
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo_);
+    glViewport(0, 0, width_, height_);
+
+    glUseProgram(program_);
+
+    // Upload per-frame uniforms
+    glUniformMatrix4fv(uTexMatrix_, 1, GL_FALSE, texMatrix);
+    glUniform1f(uBrightness_,   brightness);
+    glUniform1f(uContrast_,     contrast);
+    glUniform1f(uSaturation_,   saturation);
+    glUniform3f(uBlackBalance_, blackBalance[0], blackBalance[1], blackBalance[2]);
+    // Default crop = identity (full sensor field of view)
+    glUniform2f(uCropScale_,  1.f, 1.f);
+    glUniform2f(uCropOffset_, 0.f, 0.f);
+
+    // Bind the external OES texture to texture unit 0
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_EXTERNAL_OES, oesTexture);
+    glUniform1i(uTexture_, 0);
+
+    // Draw fullscreen quad
+    glBindBuffer(GL_ARRAY_BUFFER, vbo_);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, nullptr);
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+    glDisableVertexAttribArray(0);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+
+    checkGlError("draw to full-res FBO");
+
+    // -----------------------------------------------------------------------
+    // 3. Downscale: blit full-res FBO → tracker FBO (bilinear)
+    // -----------------------------------------------------------------------
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo_);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, trackerFbo_);
+    glBlitFramebuffer(
+        0, 0, width_,        height_,
+        0, 0, trackerWidth_, trackerHeight_,
+        GL_COLOR_BUFFER_BIT, GL_LINEAR);
+    checkGlError("blit to tracker FBO");
+
+    // -----------------------------------------------------------------------
+    // 4. Blit full-res FBO → EGL window surface (preview) + swap
+    // -----------------------------------------------------------------------
+    if (eglWindowSurface_ != EGL_NO_SURFACE) {
+        // Switch rendering surface to the window
+        eglMakeCurrent(eglDisplay_, eglWindowSurface_, eglWindowSurface_, eglContext_);
+
+        // Blit full-res FBO into the default framebuffer (= window surface)
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo_);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+        glBlitFramebuffer(
+            0, 0, width_, height_,
+            0, 0, width_, height_,
+            GL_COLOR_BUFFER_BIT, GL_NEAREST);
+        checkGlError("blit to window");
+
+        eglSwapBuffers(eglDisplay_, eglWindowSurface_);
+
+        // Switch back to pbuffer so GL state is consistent for readback
+        eglMakeCurrent(eglDisplay_, eglPbufferSurface_, eglPbufferSurface_, eglContext_);
+    }
+
+    // -----------------------------------------------------------------------
+    // 5. Issue async PBO readbacks (GPU→PBO DMA, no CPU stall)
+    // -----------------------------------------------------------------------
+
+    // Full-res readback
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo_);
+    glBindBuffer(GL_PIXEL_PACK_BUFFER, fullResPbo_[writeIdx]);
+    glReadPixels(0, 0, width_, height_, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    checkGlError("PBO readback full-res");
+
+    // Tracker readback
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, trackerFbo_);
+    glBindBuffer(GL_PIXEL_PACK_BUFFER, trackerPbo_[writeIdx]);
+    glReadPixels(0, 0, trackerWidth_, trackerHeight_, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    checkGlError("PBO readback tracker");
+
+    glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+
+    // Store metadata for the frame whose readback was just issued
+    pboMeta_[writeIdx] = {frameId, meta};
+
+    // -----------------------------------------------------------------------
+    // 6. Map previous frame's PBOs and invoke callbacks
+    //
+    // Use pboMeta_[readIdx] — the metadata stored when that PBO was written —
+    // so the pixel data and metadata always refer to the same frame.
+    // -----------------------------------------------------------------------
+    if (!firstFrame_) {
+        const auto& storedMeta = pboMeta_[readIdx];
+
+        // Full-res callback
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, fullResPbo_[readIdx]);
+        auto* fullPtr = static_cast<const uint8_t*>(
+            glMapBufferRange(GL_PIXEL_PACK_BUFFER, 0,
+                             static_cast<GLsizeiptr>(width_) * height_ * 4,
+                             GL_MAP_READ_BIT));
+        if (fullPtr) {
+            fullResCb(fullPtr, width_, height_, width_ * 4,
+                      storedMeta.frameId, storedMeta.meta);
+            glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
+        } else {
+            LOGE("drawAndReadback: failed to map full-res PBO[%d]", readIdx);
+        }
+        checkGlError("map full-res PBO");
+
+        // Tracker callback
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, trackerPbo_[readIdx]);
+        auto* trackPtr = static_cast<const uint8_t*>(
+            glMapBufferRange(GL_PIXEL_PACK_BUFFER, 0,
+                             static_cast<GLsizeiptr>(trackerWidth_) * trackerHeight_ * 4,
+                             GL_MAP_READ_BIT));
+        if (trackPtr) {
+            trackerCb(trackPtr, trackerWidth_, trackerHeight_, trackerWidth_ * 4,
+                      storedMeta.frameId, storedMeta.meta);
+            glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
+        } else {
+            LOGE("drawAndReadback: failed to map tracker PBO[%d]", readIdx);
+        }
+        checkGlError("map tracker PBO");
+
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+    }
+
+    // -----------------------------------------------------------------------
+    // 7. Advance double-buffer index
+    // -----------------------------------------------------------------------
+    pboIndex_   = 1 - pboIndex_;
+    firstFrame_ = false;
+}
+
+// ---------------------------------------------------------------------------
+// Public: uniform update (thread-safe)
+// ---------------------------------------------------------------------------
+
+void GpuRenderer::setAdjustments(float brightness, float contrast, float saturation,
+                                  float blackR, float blackG, float blackB)
+{
+    std::lock_guard<std::mutex> lk(uniformMu_);
+    brightness_      = brightness;
+    contrast_        = contrast;
+    saturation_      = saturation;
+    blackBalance_[0] = blackR;
+    blackBalance_[1] = blackG;
+    blackBalance_[2] = blackB;
+}
+
+// ---------------------------------------------------------------------------
+// Private: EGL setup
+// ---------------------------------------------------------------------------
+
+bool GpuRenderer::initEgl(EGLNativeWindowType windowSurface) {
+    eglDisplay_ = eglGetDisplay(EGL_DEFAULT_DISPLAY);
+    if (eglDisplay_ == EGL_NO_DISPLAY) {
+        LOGE("initEgl: eglGetDisplay failed");
+        return false;
+    }
+
+    EGLint major = 0, minor = 0;
+    if (!eglInitialize(eglDisplay_, &major, &minor)) {
+        LOGE("initEgl: eglInitialize failed");
+        return false;
+    }
+    LOGI("initEgl: EGL %d.%d", major, minor);
+
+    // Config: RGBA8888, GLES3, window + pbuffer surfaces
+    const EGLint configAttribs[] = {
+        EGL_RENDERABLE_TYPE, EGL_OPENGL_ES3_BIT,
+        EGL_SURFACE_TYPE,    EGL_WINDOW_BIT | EGL_PBUFFER_BIT,
+        EGL_RED_SIZE,   8,
+        EGL_GREEN_SIZE, 8,
+        EGL_BLUE_SIZE,  8,
+        EGL_ALPHA_SIZE, 8,
+        EGL_NONE
+    };
+    EGLConfig config;
+    EGLint numConfigs = 0;
+    if (!eglChooseConfig(eglDisplay_, configAttribs, &config, 1, &numConfigs)
+            || numConfigs == 0) {
+        LOGE("initEgl: eglChooseConfig failed (numConfigs=%d)", numConfigs);
+        return false;
+    }
+
+    const EGLint contextAttribs[] = {
+        EGL_CONTEXT_CLIENT_VERSION, 3,
+        EGL_NONE
+    };
+    eglContext_ = eglCreateContext(eglDisplay_, config, EGL_NO_CONTEXT, contextAttribs);
+    if (eglContext_ == EGL_NO_CONTEXT) {
+        LOGE("initEgl: eglCreateContext failed");
+        return false;
+    }
+
+    // Always create a 1×1 pbuffer surface so we can make the context current
+    // even when no window surface exists (offscreen-only mode).
+    const EGLint pbufferAttribs[] = {
+        EGL_WIDTH,  1,
+        EGL_HEIGHT, 1,
+        EGL_NONE
+    };
+    eglPbufferSurface_ = eglCreatePbufferSurface(eglDisplay_, config, pbufferAttribs);
+    if (eglPbufferSurface_ == EGL_NO_SURFACE) {
+        LOGE("initEgl: eglCreatePbufferSurface failed");
+        eglDestroyContext(eglDisplay_, eglContext_);
+        eglContext_ = EGL_NO_CONTEXT;
+        return false;
+    }
+
+    // Create window surface only if a window was provided
+    if (windowSurface != nullptr) {
+        eglWindowSurface_ = eglCreateWindowSurface(eglDisplay_, config, windowSurface, nullptr);
+        if (eglWindowSurface_ == EGL_NO_SURFACE) {
+            LOGE("initEgl: eglCreateWindowSurface failed — continuing offscreen-only");
+            // Non-fatal: preview just won't be shown
+        }
+    }
+
+    // Make the pbuffer current; window surface is only bound during preview blit
+    if (!eglMakeCurrent(eglDisplay_, eglPbufferSurface_, eglPbufferSurface_, eglContext_)) {
+        LOGE("initEgl: eglMakeCurrent failed");
+        releaseEgl();
+        return false;
+    }
+
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// Private: GL resource setup
+// ---------------------------------------------------------------------------
+
+bool GpuRenderer::initGl() {
+    // --- Shaders ---
+    GLuint vert = compileShader(GL_VERTEX_SHADER,   kVertSrc);
+    GLuint frag = compileShader(GL_FRAGMENT_SHADER, kFragSrc);
+    if (!vert || !frag) {
+        glDeleteShader(vert);
+        glDeleteShader(frag);
+        return false;
+    }
+    program_ = linkProgram(vert, frag);
+    // Shaders are no longer needed once linked
+    glDeleteShader(vert);
+    glDeleteShader(frag);
+    if (!program_) return false;
+
+    // Cache uniform locations
+    uTexture_      = glGetUniformLocation(program_, "uTexture");
+    uTexMatrix_    = glGetUniformLocation(program_, "uTexMatrix");
+    uBrightness_   = glGetUniformLocation(program_, "uBrightness");
+    uContrast_     = glGetUniformLocation(program_, "uContrast");
+    uSaturation_   = glGetUniformLocation(program_, "uSaturation");
+    uBlackBalance_ = glGetUniformLocation(program_, "uBlackBalance");
+    uCropScale_    = glGetUniformLocation(program_, "uCropScale");
+    uCropOffset_   = glGetUniformLocation(program_, "uCropOffset");
+
+    // --- Fullscreen quad VBO ---
+    glGenBuffers(1, &vbo_);
+    glBindBuffer(GL_ARRAY_BUFFER, vbo_);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(kQuad), kQuad, GL_STATIC_DRAW);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    checkGlError("VBO setup");
+
+    // --- Full-res FBO ---
+    glGenTextures(1, &fboTexture_);
+    glBindTexture(GL_TEXTURE_2D, fboTexture_);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width_, height_, 0,
+                 GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glBindTexture(GL_TEXTURE_2D, 0);
+
+    glGenFramebuffers(1, &fbo_);
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo_);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                           GL_TEXTURE_2D, fboTexture_, 0);
+    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+        LOGE("initGl: full-res FBO incomplete");
+        releaseGl();
+        return false;
+    }
+    checkGlError("full-res FBO");
+
+    // --- Tracker FBO ---
+    glGenTextures(1, &trackerTexture_);
+    glBindTexture(GL_TEXTURE_2D, trackerTexture_);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, trackerWidth_, trackerHeight_, 0,
+                 GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glBindTexture(GL_TEXTURE_2D, 0);
+
+    glGenFramebuffers(1, &trackerFbo_);
+    glBindFramebuffer(GL_FRAMEBUFFER, trackerFbo_);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                           GL_TEXTURE_2D, trackerTexture_, 0);
+    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+        LOGE("initGl: tracker FBO incomplete");
+        releaseGl();
+        return false;
+    }
+    checkGlError("tracker FBO");
+
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+    // --- Full-res PBOs (double-buffered) ---
+    glGenBuffers(2, fullResPbo_);
+    for (int i = 0; i < 2; ++i) {
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, fullResPbo_[i]);
+        glBufferData(GL_PIXEL_PACK_BUFFER,
+                     (GLsizeiptr)(width_ * height_ * 4),
+                     nullptr, GL_STREAM_READ);
+    }
+    checkGlError("full-res PBOs");
+
+    // --- Tracker PBOs (double-buffered) ---
+    glGenBuffers(2, trackerPbo_);
+    for (int i = 0; i < 2; ++i) {
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, trackerPbo_[i]);
+        glBufferData(GL_PIXEL_PACK_BUFFER,
+                     (GLsizeiptr)(trackerWidth_ * trackerHeight_ * 4),
+                     nullptr, GL_STREAM_READ);
+    }
+    glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+    checkGlError("tracker PBOs");
+
+    LOGI("initGl: OK");
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// Private: GL + EGL teardown (idempotent)
+// ---------------------------------------------------------------------------
+
+void GpuRenderer::releaseGl() {
+    if (fullResPbo_[0]) { glDeleteBuffers(2, fullResPbo_); fullResPbo_[0] = fullResPbo_[1] = 0; }
+    if (trackerPbo_[0]) { glDeleteBuffers(2, trackerPbo_); trackerPbo_[0] = trackerPbo_[1] = 0; }
+    if (trackerFbo_)     { glDeleteFramebuffers(1, &trackerFbo_);  trackerFbo_     = 0; }
+    if (trackerTexture_) { glDeleteTextures(1, &trackerTexture_);  trackerTexture_ = 0; }
+    if (fbo_)            { glDeleteFramebuffers(1, &fbo_);         fbo_            = 0; }
+    if (fboTexture_)     { glDeleteTextures(1, &fboTexture_);      fboTexture_     = 0; }
+    if (vbo_)            { glDeleteBuffers(1, &vbo_);              vbo_            = 0; }
+    if (program_)        { glDeleteProgram(program_);              program_        = 0; }
+
+    // Reset per-frame state so init() can be called again
+    pboIndex_   = 0;
+    firstFrame_ = true;
+}
+
+void GpuRenderer::releaseEgl() {
+    if (eglDisplay_ == EGL_NO_DISPLAY) return;
+
+    eglMakeCurrent(eglDisplay_, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+
+    if (eglWindowSurface_ != EGL_NO_SURFACE) {
+        eglDestroySurface(eglDisplay_, eglWindowSurface_);
+        eglWindowSurface_ = EGL_NO_SURFACE;
+    }
+    if (eglPbufferSurface_ != EGL_NO_SURFACE) {
+        eglDestroySurface(eglDisplay_, eglPbufferSurface_);
+        eglPbufferSurface_ = EGL_NO_SURFACE;
+    }
+    if (eglContext_ != EGL_NO_CONTEXT) {
+        eglDestroyContext(eglDisplay_, eglContext_);
+        eglContext_ = EGL_NO_CONTEXT;
+    }
+
+    eglTerminate(eglDisplay_);
+    eglDisplay_ = EGL_NO_DISPLAY;
+}
+
+// ---------------------------------------------------------------------------
+// Private: shader helpers
+// ---------------------------------------------------------------------------
+
+GLuint GpuRenderer::compileShader(GLenum type, const char* src) {
+    GLuint shader = glCreateShader(type);
+    glShaderSource(shader, 1, &src, nullptr);
+    glCompileShader(shader);
+
+    GLint ok = 0;
+    glGetShaderiv(shader, GL_COMPILE_STATUS, &ok);
+    if (!ok) {
+        GLint len = 0;
+        glGetShaderiv(shader, GL_INFO_LOG_LENGTH, &len);
+        if (len > 1) {
+            std::string log(len, '\0');
+            glGetShaderInfoLog(shader, len, nullptr, log.data());
+            LOGE("compileShader(%s): %s",
+                 type == GL_VERTEX_SHADER ? "vert" : "frag",
+                 log.c_str());
+        }
+        glDeleteShader(shader);
+        return 0;
+    }
+    return shader;
+}
+
+GLuint GpuRenderer::linkProgram(GLuint vert, GLuint frag) {
+    GLuint prog = glCreateProgram();
+    glAttachShader(prog, vert);
+    glAttachShader(prog, frag);
+    // Bind the single vertex attribute aPos to location 0 before linking
+    glBindAttribLocation(prog, 0, "aPos");
+    glLinkProgram(prog);
+
+    GLint ok = 0;
+    glGetProgramiv(prog, GL_LINK_STATUS, &ok);
+    if (!ok) {
+        GLint len = 0;
+        glGetProgramiv(prog, GL_INFO_LOG_LENGTH, &len);
+        if (len > 1) {
+            std::string log(len, '\0');
+            glGetProgramInfoLog(prog, len, nullptr, log.data());
+            LOGE("linkProgram: %s", log.c_str());
+        }
+        glDeleteProgram(prog);
+        return 0;
+    }
+    return prog;
+}
+
+} // namespace cam

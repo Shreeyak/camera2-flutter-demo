@@ -29,7 +29,7 @@ class GpuPipeline(
     private val glThread = HandlerThread("GpuPipeline-GL").also { it.start() }
     private val glHandler = Handler(glThread.looper)
 
-    private var gpuHandle: Long = 0L
+    @Volatile private var gpuHandle: Long = 0L
     private var surfaceTexture: SurfaceTexture? = null
     private var oesTexName: Int = 0
     private val texMatrix = FloatArray(16)

@@ -1,0 +1,158 @@
+#pragma once
+// GpuRenderer: manages OpenGL ES 3.0 rendering for the GPU camera pipeline.
+//
+// Responsibilities:
+//   - EGL context + surface lifecycle (window + pbuffer fallback)
+//   - OES texture → full-res FBO via single-pass fragment shader
+//   - Downscale full-res FBO → tracker (480p) FBO via glBlitFramebuffer
+//   - Preview output via EGL window surface blit + eglSwapBuffers
+//   - Double-buffered async PBO readback for full-res and tracker outputs
+//   - Thread-safe uniform updates (brightness, contrast, saturation, black balance)
+//
+// All GL calls must be issued from the same GL thread. GpuRenderer does not
+// manage a thread — the caller (GpuPipeline.kt) is responsible for that.
+
+#include "cambrian_camera_native.h"
+
+#include <EGL/egl.h>
+#include <GLES3/gl3.h>
+#include <GLES2/gl2ext.h>  // GL_TEXTURE_EXTERNAL_OES
+
+#include <functional>
+#include <mutex>
+
+namespace cam {
+
+class GpuRenderer {
+public:
+    /// Construct with stream dimensions. Does not allocate GL resources.
+    GpuRenderer(int width, int height);
+    ~GpuRenderer();
+
+    // Non-copyable, non-movable.
+    GpuRenderer(const GpuRenderer&) = delete;
+    GpuRenderer& operator=(const GpuRenderer&) = delete;
+
+    /// Initialize EGL context, surfaces, shaders, FBOs, and PBOs.
+    /// Must be called on the GL thread before any other GL methods.
+    /// @param windowSurface  ANativeWindow for preview output; may be null for offscreen-only.
+    /// @return true on success; false if EGL or GL init fails (resources are cleaned up).
+    bool init(EGLNativeWindowType windowSurface);
+
+    /// Release all GL and EGL resources. Idempotent — safe to call multiple times.
+    /// Must be called on the GL thread.
+    void release();
+
+    /// Per-frame render + readback.
+    ///
+    /// Sequence:
+    ///   1. Render OES texture → full-res FBO through the OES shader
+    ///   2. Blit full-res FBO → tracker FBO (480p downscale, bilinear)
+    ///   3. Blit full-res FBO → EGL window surface and swap buffers (preview)
+    ///   4. Issue async PBO readbacks for full-res and tracker FBOs (writeIdx)
+    ///   5. Map previous frame's PBOs (readIdx) and invoke callbacks
+    ///
+    /// Must be called on the GL thread.
+    ///
+    /// @param oesTexture   GL_TEXTURE_EXTERNAL_OES texture name from SurfaceTexture
+    /// @param texMatrix    4x4 row-major matrix from SurfaceTexture.getTransformMatrix()
+    /// @param frameId      Monotonic frame counter
+    /// @param meta         Per-frame sensor metadata
+    /// @param fullResCb    Called with full-res RGBA data (pointer valid only during call),
+    ///                     along with the frameId and metadata stored at write time
+    /// @param trackerCb    Called with 480p RGBA data (pointer valid only during call),
+    ///                     along with the frameId and metadata stored at write time
+    void drawAndReadback(
+        GLuint oesTexture,
+        const float texMatrix[16],
+        uint64_t frameId,
+        const cam::FrameMetadata& meta,
+        std::function<void(const uint8_t*, int w, int h, int stride,
+                           uint64_t frameId, const cam::FrameMetadata&)> fullResCb,
+        std::function<void(const uint8_t*, int w, int h, int stride,
+                           uint64_t frameId, const cam::FrameMetadata&)> trackerCb);
+
+    /// Update shader uniforms. Thread-safe; changes take effect on the next drawAndReadback().
+    /// @param brightness   Additive brightness offset [-1, 1]; 0 = identity
+    /// @param contrast     Contrast multiplier [0, ∞]; 1 = identity
+    /// @param saturation   Saturation multiplier [0, 3]; 1 = identity
+    /// @param blackR/G/B   Per-channel black-level subtraction [0, 0.5]; 0 = identity
+    void setAdjustments(float brightness, float contrast, float saturation,
+                        float blackR, float blackG, float blackB);
+
+    int trackerWidth()  const { return trackerWidth_; }
+    int trackerHeight() const { return trackerHeight_; }
+
+private:
+    int width_;
+    int height_;
+    int trackerWidth_;
+    int trackerHeight_;
+
+    // EGL objects
+    EGLDisplay eglDisplay_       = EGL_NO_DISPLAY;
+    EGLContext eglContext_        = EGL_NO_CONTEXT;
+    EGLSurface eglWindowSurface_ = EGL_NO_SURFACE;   // preview window; may stay NO_SURFACE
+    EGLSurface eglPbufferSurface_ = EGL_NO_SURFACE;  // 1×1 fallback; always created
+
+    // GL program + geometry
+    GLuint program_ = 0;
+    GLuint vbo_     = 0;   // fullscreen quad (6 vertices × 2 floats)
+
+    // Full-resolution FBO (width_ × height_)
+    GLuint fbo_        = 0;
+    GLuint fboTexture_ = 0;
+
+    // Tracker FBO (trackerWidth_ × trackerHeight_)
+    GLuint trackerFbo_        = 0;
+    GLuint trackerTexture_    = 0;
+
+    // Double-buffered PBOs for async readback
+    GLuint fullResPbo_[2] = {0, 0};
+    GLuint trackerPbo_[2] = {0, 0};
+    int    pboIndex_  = 0;    // index being written this frame; read = 1 - pboIndex_
+    bool   firstFrame_ = true; // skip readback on frame 0 (no previous write)
+
+    // Metadata stored alongside each PBO write to avoid off-by-one delivery
+    struct PboMeta { uint64_t frameId; cam::FrameMetadata meta; };
+    PboMeta pboMeta_[2] = {};
+
+    // Pending uniforms — written by setAdjustments(), read under uniformMu_ at draw time
+    std::mutex uniformMu_;
+    float brightness_      = 0.f;
+    float contrast_        = 1.f;
+    float saturation_      = 1.f;
+    float blackBalance_[3] = {0.f, 0.f, 0.f};
+
+    // Cached uniform locations
+    GLint uTexture_      = -1;
+    GLint uTexMatrix_    = -1;
+    GLint uBrightness_   = -1;
+    GLint uContrast_     = -1;
+    GLint uSaturation_   = -1;
+    GLint uBlackBalance_ = -1;
+    GLint uCropScale_    = -1;
+    GLint uCropOffset_   = -1;
+
+    // -- Private helpers ----------------------------------------------------------
+
+    /// Initialize EGL display, config, context, and surfaces.
+    bool initEgl(EGLNativeWindowType windowSurface);
+
+    /// Initialize GL objects (shaders, VBO, FBOs, PBOs). Assumes EGL is current.
+    bool initGl();
+
+    /// Delete all GL objects. Called by release() and on initGl() failure.
+    void releaseGl();
+
+    /// Destroy EGL surfaces and context. Called by release().
+    void releaseEgl();
+
+    /// Compile a single shader stage. Returns 0 on failure.
+    GLuint compileShader(GLenum type, const char* src);
+
+    /// Link a vertex + fragment shader into a program. Returns 0 on failure.
+    GLuint linkProgram(GLuint vert, GLuint frag);
+};
+
+} // namespace cam
