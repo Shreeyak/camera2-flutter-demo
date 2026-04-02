@@ -53,7 +53,9 @@ import java.util.concurrent.atomic.AtomicBoolean
 class CameraController(
     private val context: Context,
     private val surfaceProducer: TextureRegistry.SurfaceProducer,
-    private val rawSurfaceProducer: TextureRegistry.SurfaceProducer,
+    private val rawSurfaceProducer: TextureRegistry.SurfaceProducer?,
+    private val enableRawStream: Boolean,
+    private val rawStreamHeight: Int,
     private val flutterApi: CameraFlutterApi,
     val handle: Long,
 ) {
@@ -204,6 +206,11 @@ class CameraController(
 
     @Volatile private var previewHeight: Int = 0
 
+    /** Raw stream dimensions, set during [startCaptureSession] when [enableRawStream] is true. */
+    @Volatile private var rawW: Int = 0
+
+    @Volatile private var rawH: Int = 0
+
     /** Camera ID resolved in [open]; stored for reconnect retries. */
     @Volatile private var resolvedCameraId: String? = null
 
@@ -285,22 +292,18 @@ class CameraController(
                 }
             },
         )
-        rawSurfaceProducer.setCallback(
+        rawSurfaceProducer?.setCallback(
             object : TextureRegistry.SurfaceProducer.Callback {
                 override fun onSurfaceAvailable() {
-                    val ptr = nativePipelinePtr
-                    if (ptr == 0L) return
-                    val width = previewWidth
-                    val height = previewHeight
-                    if (width > 0 && height > 0) {
-                        rawSurfaceProducer.setSize(width, height)
+                    val w = rawW
+                    val h = rawH
+                    if (w > 0 && h > 0) {
+                        rawSurfaceProducer.setSize(w, h)
                     }
-                    nativeSetRawPreviewWindow(ptr, rawSurfaceProducer.getSurface())
                 }
 
                 override fun onSurfaceCleanup() {
-                    val ptr = nativePipelinePtr
-                    if (ptr != 0L) nativeSetRawPreviewWindow(ptr, null)
+                    // No-op: raw surface lifecycle is managed by GpuPipeline (EGL).
                 }
             },
         )
@@ -494,7 +497,7 @@ class CameraController(
             // Estimate 4 YUV_420_888 ring-buffer slots (1.5 bytes/pixel each) plus
             // one RGBA texture buffer if the raw preview surface is active.
             val yuvBytes: Long = streamWidth.toLong() * streamHeight * 3L / 2L * 4L
-            val textureBytes: Long = if (rawSurfaceProducer != null) streamWidth.toLong() * streamHeight * 4L else 0L
+            val textureBytes: Long = rawW.toLong() * rawH * 4L
             val estimatedBytes: Long = yuvBytes + textureBytes
 
             val caps =
@@ -512,9 +515,9 @@ class CameraController(
                     evCompMax = evRange?.upper?.toLong() ?: 6L,
                     evCompensationStep = evStep?.toDouble() ?: 0.5,
                     estimatedMemoryBytes = estimatedBytes,
-                    yuvStreamWidth = streamWidth.toLong(),
-                    yuvStreamHeight = streamHeight.toLong(),
-                    rawStreamTextureId = rawSurfaceProducer.id(),
+                    rawStreamTextureId = rawSurfaceProducer?.id() ?: 0L,
+                    rawStreamWidth = rawW.toLong(),
+                    rawStreamHeight = rawH.toLong(),
                 )
             callback(Result.success(caps))
         } catch (e: CameraAccessException) {
@@ -822,7 +825,14 @@ class CameraController(
         previewWidth = streamWidth
         previewHeight = streamHeight
         surfaceProducer.setSize(streamWidth, streamHeight)
-        rawSurfaceProducer.setSize(streamWidth, streamHeight)
+        if (enableRawStream && rawSurfaceProducer != null) {
+            rawW = (streamWidth.toFloat() / streamHeight * rawStreamHeight + 0.5f).toInt() and 1.inv()
+            rawH = rawStreamHeight
+            rawSurfaceProducer.setSize(rawW, rawH)
+        } else {
+            rawW = 0
+            rawH = 0
+        }
         if (CambrianCameraConfig.verboseDiagnostics) {
             android.util.Log.d(
                 "CambrianCamera",
@@ -846,15 +856,18 @@ class CameraController(
 
         // GPU pipeline — SurfaceTexture receives camera frames as an OES texture;
         // GpuPipeline renders each frame on its GL thread and delivers RGBA to pipeline sinks.
-        val pipeline = GpuPipeline(streamWidth, streamHeight, surfaceProducer.getSurface(), nativePipelinePtr)
+        val rawPreviewSurface = if (enableRawStream) rawSurfaceProducer?.getSurface() else null
+        val pipeline = GpuPipeline(
+            streamWidth, streamHeight,
+            surfaceProducer.getSurface(),
+            rawPreviewSurface, rawW, rawH,
+            nativePipelinePtr
+        )
         pipeline.start()
         gpuPipeline = pipeline
 
         // Replay any previously set processing params so they survive pipeline recreation.
         lastProcessingParams?.let { setProcessingParams(it) }
-
-        // Wire the raw (pre-processing) preview surface.
-        nativeSetRawPreviewWindow(nativePipelinePtr, rawSurfaceProducer.getSurface())
 
         val gpuSurface = gpuPipeline!!.cameraSurface!!
         val surfaces = listOf(gpuSurface, jpegReader.surface)
