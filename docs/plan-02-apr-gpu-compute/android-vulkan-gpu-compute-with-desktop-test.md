@@ -14,6 +14,7 @@ Desktop C++ prototype of the color transform pipeline using raw Vulkan compute, 
 - [Vulkan spec: Command Buffers](https://docs.vulkan.org/spec/latest/chapters/cmdbuffers.html#commandbuffers)
 - [Vulkan spec: Memory Barriers](https://docs.vulkan.org/spec/latest/chapters/synchronization.html#synchronization-memory-barriers)
 - [Android Vulkan compute example with depth (reference for VkDevice/queue setup)](https://github.com/tvaranka/vulkan_android_example_depth)
+- [Google Samples: Android Vulkan Tutorials (instance/device/pipeline patterns)](https://github.com/googlesamples/android-vulkan-tutorials)
 
 ---
 
