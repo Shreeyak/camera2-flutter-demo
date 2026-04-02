@@ -95,15 +95,6 @@ class CameraController(
         )
 
         /**
-         * Attaches or replaces the raw (pre-processing) preview [Surface].
-         * The raw surface receives BGR frames before saturation or other processing is applied.
-         */
-        @JvmStatic external fun nativeSetRawPreviewWindow(
-            pipelinePtr: Long,
-            previewSurface: Surface?,
-        )
-
-        /**
          * Copies one YUV_420_888 frame into the C++ input ring. Returns immediately;
          * the caller may close the camera Image right after this call returns.
          *
