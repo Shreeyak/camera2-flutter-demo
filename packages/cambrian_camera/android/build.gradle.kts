@@ -19,6 +19,12 @@ android {
         jvmTarget = "17"
     }
 
+    testOptions {
+        unitTests {
+            isReturnDefaultValues = true
+        }
+    }
+
     defaultConfig {
         // Targets OPD2403 hardware running API 33+. Single-device target for now.
         minSdk = 33
@@ -59,4 +65,7 @@ dependencies {
     compileOnly("androidx.lifecycle:lifecycle-common:2.7.0")
     androidTestImplementation("androidx.test.ext:junit:1.1.5")
     androidTestImplementation("androidx.test:runner:1.5.2")
+    testImplementation("org.mockito:mockito-core:5.3.1")
+    testImplementation("org.mockito.kotlin:mockito-kotlin:5.1.0")
+    testImplementation("junit:junit:4.13.2")
 }

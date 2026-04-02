@@ -318,6 +318,7 @@ class ProcessingParams {
     this.autoStretchLow = 0.01,
     this.autoStretchHigh = 0.99,
     this.brightness = 0.0,
+    this.contrast = 1.0,
     this.saturation = 1.0,
   }) {
     _validate();
@@ -349,6 +350,9 @@ class ProcessingParams {
   /// Brightness offset in [-1.0, +1.0]. 0.0 = no change.
   final double brightness;
 
+  /// Contrast multiplier in [0.5, 2.0]. 1.0 = identity.
+  final double contrast;
+
   /// Saturation multiplier in [0, 3]. 1.0 = identity.
   final double saturation;
 
@@ -374,6 +378,9 @@ class ProcessingParams {
     }
     if (brightness.isNaN) {
       throw ArgumentError.value(brightness, 'brightness', 'must not be NaN');
+    }
+    if (contrast.isNaN) {
+      throw ArgumentError.value(contrast, 'contrast', 'must not be NaN');
     }
     if (saturation.isNaN) {
       throw ArgumentError.value(saturation, 'saturation', 'must not be NaN');
@@ -403,6 +410,7 @@ class ProcessingParams {
         autoStretchLow: autoStretchLow,
         autoStretchHigh: autoStretchHigh,
         brightness: brightness,
+        contrast: contrast,
         saturation: saturation,
       );
 
@@ -417,6 +425,7 @@ class ProcessingParams {
     double? autoStretchLow,
     double? autoStretchHigh,
     double? brightness,
+    double? contrast,
     double? saturation,
   }) =>
       ProcessingParams(
@@ -430,6 +439,7 @@ class ProcessingParams {
         autoStretchLow: autoStretchLow ?? this.autoStretchLow,
         autoStretchHigh: autoStretchHigh ?? this.autoStretchHigh,
         brightness: brightness ?? this.brightness,
+        contrast: contrast ?? this.contrast,
         saturation: saturation ?? this.saturation,
       );
 }

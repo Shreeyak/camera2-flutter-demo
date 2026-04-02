@@ -177,6 +177,7 @@ void main() {
       final p = ProcessingParams();
       expect(p.gamma, 1.0);
       expect(p.brightness, 0.0);
+      expect(p.contrast, 1.0);
       expect(p.saturation, 1.0);
       expect(p.blackR, 0.0);
       expect(p.autoStretch, false);
@@ -202,12 +203,33 @@ void main() {
         autoStretchHigh: 0.99,
         brightness: 0.1,
         saturation: 1.2,
+        contrast: 1.5,
       );
       final cam = p.toCam();
       expect(cam.blackR, 0.05);
       expect(cam.gamma, 2.2);
       expect(cam.autoStretch, true);
       expect(cam.saturation, 1.2);
+      expect(cam.contrast, 1.5);
+    });
+
+    test('contrast defaults to 1.0', () {
+      expect(ProcessingParams().contrast, 1.0);
+    });
+
+    test('copyWith overrides contrast', () {
+      expect(ProcessingParams().copyWith(contrast: 1.5).contrast, 1.5);
+    });
+
+    test('toCam includes contrast', () {
+      expect(ProcessingParams(contrast: 1.5).toCam().contrast, 1.5);
+    });
+
+    test('contrast NaN throws', () {
+      expect(
+        () => ProcessingParams(contrast: double.nan),
+        throwsA(isA<ArgumentError>()),
+      );
     });
   });
 

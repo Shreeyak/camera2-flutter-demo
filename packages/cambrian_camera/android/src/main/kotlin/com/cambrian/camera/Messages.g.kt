@@ -187,6 +187,7 @@ data class CamProcessingParams (
   val autoStretchLow: Double,
   val autoStretchHigh: Double,
   val brightness: Double,
+  val contrast: Double,
   val saturation: Double
 )
  {
@@ -202,8 +203,9 @@ data class CamProcessingParams (
       val autoStretchLow = pigeonVar_list[7] as Double
       val autoStretchHigh = pigeonVar_list[8] as Double
       val brightness = pigeonVar_list[9] as Double
-      val saturation = pigeonVar_list[10] as Double
-      return CamProcessingParams(blackR, blackG, blackB, gamma, histBlackPoint, histWhitePoint, autoStretch, autoStretchLow, autoStretchHigh, brightness, saturation)
+      val contrast = pigeonVar_list[10] as Double
+      val saturation = pigeonVar_list[11] as Double
+      return CamProcessingParams(blackR, blackG, blackB, gamma, histBlackPoint, histWhitePoint, autoStretch, autoStretchLow, autoStretchHigh, brightness, contrast, saturation)
     }
   }
   fun toList(): List<Any?> {
@@ -218,6 +220,7 @@ data class CamProcessingParams (
       autoStretchLow,
       autoStretchHigh,
       brightness,
+      contrast,
       saturation,
     )
   }

@@ -5,6 +5,8 @@
 // nativeSetRawPreviewWindow, nativeDeliverYuv, nativeSetProcessingParams.
 // GPU pipeline entry points: nativeGpuInit, nativeGpuRelease,
 // nativeGpuSetAdjustments, nativeGpuDrawAndReadback.
+// Test helper entry points (GpuPipelineTestBridge):
+//   nativeAddDeliveryCountSink, nativeGetDeliveryCount.
 //
 // Each function is a thin wrapper that validates inputs, converts JNI types to
 // C++, and delegates to ImagePipeline or GpuRenderer.  No image logic lives here.
@@ -19,6 +21,11 @@
 #include <android/log.h>
 #include <android/native_window_jni.h> // ANativeWindow_fromSurface
 #include <jni.h>
+#include <atomic>
+#include <memory>
+#include <mutex>
+#include <string>
+#include <unordered_map>
 
 #define TAG  "CambrianCamera"
 #define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, TAG, __VA_ARGS__)
@@ -38,6 +45,39 @@ static cam::GpuRenderer* rendererFromHandle(jlong handle) {
     return reinterpret_cast<cam::GpuRenderer*>(static_cast<uintptr_t>(handle));
 }
 
+// ---------------------------------------------------------------------------
+// Test-helper state: delivery-count sinks
+//
+// Process-wide map keyed by (ImagePipeline*, sinkName) → shared counter.
+// Used by nativeAddDeliveryCountSink / nativeGetDeliveryCount (GpuPipelineTestBridge).
+// ---------------------------------------------------------------------------
+
+namespace {
+
+struct TestSinkKey {
+    cam::ImagePipeline* pipeline;
+    std::string         name;
+
+    bool operator==(const TestSinkKey& o) const {
+        return pipeline == o.pipeline && name == o.name;
+    }
+};
+
+struct TestSinkKeyHash {
+    std::size_t operator()(const TestSinkKey& k) const noexcept {
+        std::size_t h1 = std::hash<void*>{}(k.pipeline);
+        std::size_t h2 = std::hash<std::string>{}(k.name);
+        return h1 ^ (h2 << 1);
+    }
+};
+
+std::mutex                                                     gTestSinkMu;
+std::unordered_map<TestSinkKey,
+                   std::shared_ptr<std::atomic<int>>,
+                   TestSinkKeyHash>                            gTestSinkCounters;
+
+} // namespace
+
 extern "C" {
 
 // ---------------------------------------------------------------------------
@@ -48,7 +88,9 @@ extern "C" {
 // returns an opaque pointer (as jlong) that Kotlin stores for all subsequent
 // JNI calls.
 //
-// @param previewSurface  Android Surface backing the Flutter preview widget.
+// @param previewSurface  Android Surface backing the Flutter preview widget,
+//                        or null when the GPU pipeline owns its own preview
+//                        surface via EGL (GpuRenderer).
 // @param width           Stream width in pixels.
 // @param height          Stream height in pixels.
 // @return  Non-zero handle on success; 0 on failure.
@@ -58,15 +100,13 @@ Java_com_cambrian_camera_CameraController_nativeInit(
         JNIEnv* env, jclass /*clazz*/,
         jobject previewSurface,
         jint width, jint height) {
-    if (!previewSurface) {
-        LOGE("nativeInit: previewSurface is null");
-        return 0;
-    }
-
-    ANativeWindow* window = ANativeWindow_fromSurface(env, previewSurface);
-    if (!window) {
-        LOGE("nativeInit: ANativeWindow_fromSurface returned null");
-        return 0;
+    ANativeWindow* window = nullptr;
+    if (previewSurface) {
+        window = ANativeWindow_fromSurface(env, previewSurface);
+        if (!window) {
+            LOGE("nativeInit: ANativeWindow_fromSurface returned null");
+            return 0;
+        }
     }
 
     cam::ImagePipeline* pipeline;
@@ -76,16 +116,16 @@ Java_com_cambrian_camera_CameraController_nativeInit(
                                           static_cast<int>(height));
     } catch (const std::exception& e) {
         LOGE("nativeInit: ImagePipeline construction failed: %s", e.what());
-        ANativeWindow_release(window);
+        if (window) ANativeWindow_release(window);
         return 0;
     } catch (...) {
         LOGE("nativeInit: ImagePipeline construction failed with unknown exception");
-        ANativeWindow_release(window);
+        if (window) ANativeWindow_release(window);
         return 0;
     }
 
     // ImagePipeline acquires its own reference; release the one from fromSurface.
-    ANativeWindow_release(window);
+    if (window) ANativeWindow_release(window);
 
     LOGD("nativeInit: pipeline created at %p dims=%dx%d", pipeline,
          static_cast<int>(width), static_cast<int>(height));
@@ -110,7 +150,19 @@ Java_com_cambrian_camera_CameraController_nativeRelease(
 
     LOGD("nativeRelease: deleting pipeline at handle %lld",
          static_cast<long long>(pipelinePtr));
-    delete pipelineFromHandle(pipelinePtr);
+    cam::ImagePipeline* pipeline = pipelineFromHandle(pipelinePtr);
+    {
+        std::lock_guard<std::mutex> lk(gTestSinkMu);
+        auto it = gTestSinkCounters.begin();
+        while (it != gTestSinkCounters.end()) {
+            if (it->first.pipeline == pipeline) {
+                it = gTestSinkCounters.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+    delete pipeline;
 }
 
 // ---------------------------------------------------------------------------
@@ -461,6 +513,100 @@ Java_com_cambrian_camera_GpuPipeline_nativeGpuDrawAndReadback(
             });
 
     env->ReleaseFloatArrayElements(texMatrix, texMatrixPtr, JNI_ABORT);
+}
+
+// ---------------------------------------------------------------------------
+// Test helper: delivery-count sink
+//
+// GpuPipelineTestBridge.nativeAddDeliveryCountSink / nativeGetDeliveryCount
+//
+// Registers a lightweight FULL_RES sink on an ImagePipeline that simply
+// increments a counter each time a frame is delivered.  The counter is stored
+// in a process-wide map keyed by (pipelinePtr, sinkName) so that the Kotlin
+// test can retrieve it after one or more drawAndReadback calls.
+//
+// These helpers exist solely to support instrumented tests and add no
+// overhead to the production code paths.
+// ---------------------------------------------------------------------------
+
+// nativeAddDeliveryCountSink
+//
+// Registers a FULL_RES sink named `sinkName` on the pipeline at `pipelinePtr`.
+// Each frame delivery increments the counter retrievable by nativeGetDeliveryCount.
+//
+// @param pipelinePtr  Handle returned by nativeInit.
+// @param sinkName     Unique name for the test sink.
+JNIEXPORT void JNICALL
+Java_com_cambrian_camera_GpuPipelineTestBridge_nativeAddDeliveryCountSink(
+        JNIEnv* env, jclass /*clazz*/,
+        jlong pipelinePtr, jstring sinkName) {
+    if (!pipelinePtr) {
+        LOGE("nativeAddDeliveryCountSink: null pipeline handle");
+        return;
+    }
+    const char* nameChars = env->GetStringUTFChars(sinkName, nullptr);
+    if (!nameChars) {
+        LOGE("nativeAddDeliveryCountSink: failed to get sink name string");
+        return;
+    }
+    std::string name(nameChars);
+    env->ReleaseStringUTFChars(sinkName, nameChars);
+
+    cam::ImagePipeline* pipeline = pipelineFromHandle(pipelinePtr);
+
+    // Create the counter and store it in the global map.
+    auto counter = std::make_shared<std::atomic<int>>(0);
+    {
+        std::lock_guard<std::mutex> lk(gTestSinkMu);
+        gTestSinkCounters[{pipeline, name}] = counter;
+    }
+
+    // Register sink — lambda captures the shared_ptr by value so the counter
+    // outlives the callback registration.
+    cam::SinkConfig cfg;
+    cfg.name = name;
+    cfg.role = cam::SinkRole::FULL_RES;
+    pipeline->addSink(cfg, [counter](const cam::SinkFrame& /*frame*/) {
+        counter->fetch_add(1, std::memory_order_relaxed);
+    });
+
+    LOGD("nativeAddDeliveryCountSink: registered sink '%s' on pipeline %p",
+         name.c_str(), pipeline);
+}
+
+// nativeGetDeliveryCount
+//
+// Returns the number of frames delivered to the named test sink, or -1 if the
+// sink was never registered.
+//
+// @param pipelinePtr  Handle returned by nativeInit.
+// @param sinkName     Name passed to nativeAddDeliveryCountSink.
+JNIEXPORT jint JNICALL
+Java_com_cambrian_camera_GpuPipelineTestBridge_nativeGetDeliveryCount(
+        JNIEnv* env, jclass /*clazz*/,
+        jlong pipelinePtr, jstring sinkName) {
+    if (!pipelinePtr) {
+        LOGE("nativeGetDeliveryCount: null pipeline handle");
+        return -1;
+    }
+    const char* nameChars = env->GetStringUTFChars(sinkName, nullptr);
+    if (!nameChars) {
+        LOGE("nativeGetDeliveryCount: failed to get sink name string");
+        return -1;
+    }
+    std::string name(nameChars);
+    env->ReleaseStringUTFChars(sinkName, nameChars);
+
+    cam::ImagePipeline* pipeline = pipelineFromHandle(pipelinePtr);
+
+    std::lock_guard<std::mutex> lk(gTestSinkMu);
+    auto it = gTestSinkCounters.find({pipeline, name});
+    if (it == gTestSinkCounters.end()) {
+        LOGE("nativeGetDeliveryCount: no counter for sink '%s' on pipeline %p",
+             name.c_str(), pipeline);
+        return -1;
+    }
+    return static_cast<jint>(it->second->load(std::memory_order_relaxed));
 }
 
 } // extern "C"

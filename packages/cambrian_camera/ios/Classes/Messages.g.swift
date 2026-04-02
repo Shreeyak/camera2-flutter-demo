@@ -214,6 +214,7 @@ struct CamProcessingParams {
   var autoStretchLow: Double
   var autoStretchHigh: Double
   var brightness: Double
+  var contrast: Double
   var saturation: Double
 
 
@@ -229,7 +230,8 @@ struct CamProcessingParams {
     let autoStretchLow = pigeonVar_list[7] as! Double
     let autoStretchHigh = pigeonVar_list[8] as! Double
     let brightness = pigeonVar_list[9] as! Double
-    let saturation = pigeonVar_list[10] as! Double
+    let contrast = pigeonVar_list[10] as! Double
+    let saturation = pigeonVar_list[11] as! Double
 
     return CamProcessingParams(
       blackR: blackR,
@@ -242,6 +244,7 @@ struct CamProcessingParams {
       autoStretchLow: autoStretchLow,
       autoStretchHigh: autoStretchHigh,
       brightness: brightness,
+      contrast: contrast,
       saturation: saturation
     )
   }
@@ -257,6 +260,7 @@ struct CamProcessingParams {
       autoStretchLow,
       autoStretchHigh,
       brightness,
+      contrast,
       saturation,
     ]
   }
@@ -685,7 +689,7 @@ class CameraFlutterApi: CameraFlutterApiProtocol {
       if listResponse.count > 1 {
         let code: String = listResponse[0] as! String
         let message: String? = nilOrValue(listResponse[1])
-        let details: Any? = listResponse[2]
+        let details: String? = nilOrValue(listResponse[2])
         completion(.failure(PigeonError(code: code, message: message, details: details)))
       } else {
         completion(.success(Void()))
@@ -703,7 +707,7 @@ class CameraFlutterApi: CameraFlutterApiProtocol {
       if listResponse.count > 1 {
         let code: String = listResponse[0] as! String
         let message: String? = nilOrValue(listResponse[1])
-        let details: Any? = listResponse[2]
+        let details: String? = nilOrValue(listResponse[2])
         completion(.failure(PigeonError(code: code, message: message, details: details)))
       } else {
         completion(.success(Void()))
@@ -721,7 +725,7 @@ class CameraFlutterApi: CameraFlutterApiProtocol {
       if listResponse.count > 1 {
         let code: String = listResponse[0] as! String
         let message: String? = nilOrValue(listResponse[1])
-        let details: Any? = listResponse[2]
+        let details: String? = nilOrValue(listResponse[2])
         completion(.failure(PigeonError(code: code, message: message, details: details)))
       } else {
         completion(.success(Void()))

@@ -20,7 +20,7 @@ import java.util.concurrent.CountDownLatch
  * Lifecycle: call [start] after construction, [stop] when done.
  * The preview [Surface] (from Flutter SurfaceProducer) may be null for headless use.
  */
-class GpuPipeline(
+open class GpuPipeline(
     private val width: Int,
     private val height: Int,
     private val previewSurface: Surface?,
@@ -90,7 +90,7 @@ class GpuPipeline(
     /**
      * Release all GL resources and stop the render thread.
      */
-    fun stop() {
+    open fun stop() {
         glHandler.post {
             cameraSurface?.release()
             cameraSurface = null
@@ -108,7 +108,7 @@ class GpuPipeline(
     /**
      * Update shader adjustment uniforms. Thread-safe; takes effect on next frame.
      */
-    fun setAdjustments(
+    open fun setAdjustments(
         brightness: Double,
         contrast: Double,
         saturation: Double,
@@ -150,7 +150,12 @@ class GpuPipeline(
         private const val TAG = "GpuPipeline"
 
         init {
-            System.loadLibrary("cambrian_camera")
+            try {
+                System.loadLibrary("cambrian_camera")
+            } catch (_: UnsatisfiedLinkError) {
+                // Library not available in JVM unit tests; JNI calls will throw at runtime
+                // if invoked without the native library loaded.
+            }
         }
 
         @JvmStatic

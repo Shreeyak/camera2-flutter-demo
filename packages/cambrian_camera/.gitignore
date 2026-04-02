@@ -4,3 +4,6 @@ build/
 
 # Generated lock file (not committed for packages)
 pubspec.lock
+
+# Machine-specific clangd config (contains local NDK path)
+android/src/main/cpp/.clangd

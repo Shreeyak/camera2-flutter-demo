@@ -97,6 +97,7 @@ class CamProcessingParams {
     required this.autoStretchLow,
     required this.autoStretchHigh,
     required this.brightness,
+    required this.contrast,
     required this.saturation,
   });
 
@@ -110,6 +111,7 @@ class CamProcessingParams {
   double autoStretchLow;
   double autoStretchHigh;
   double brightness;
+  double contrast;
   double saturation;
 }
 

@@ -19,9 +19,10 @@ import 'camera/camera_settings_values.dart';
 import 'theme/material_theme.dart';
 import 'theme/theme_util.dart';
 import 'widgets/bottom_bar.dart';
+import 'widgets/bottom_bar_buttons.dart';
 import 'widgets/camera_control_overlay.dart'
     show CameraControlOverlay, kCameraDialMaxWidth;
-import 'widgets/bottom_bar_buttons.dart';
+import 'widgets/gpu_controls_sidebar.dart' show GpuControlsSidebar;
 
 /// Horizontal offset from the left edge of the dial to the auto-toggle button.
 const _kAutoToggleOffset = 60.0;
@@ -76,6 +77,8 @@ class _CameraScreenState extends State<CameraScreen> {
   // ── UI state
   bool _settingsDrawerOpen = false;
   CameraSettingType? _activeSetting;
+  ProcessingParams _processingParams = ProcessingParams();
+  bool _sidebarOpen = false;
 
   /// True once the first frame result with real AE values has arrived.
   /// Guards manual ISO/exposure changes to prevent a settingsConflict on open.
@@ -105,7 +108,8 @@ class _CameraScreenState extends State<CameraScreen> {
     try {
       final camera = await CambrianCamera.open(settings: _kInitialSettings);
       // High saturation so the processed pane is visually distinct from the raw pane.
-      await camera.setProcessingParams(ProcessingParams(saturation: 3.0));
+      final initialParams = ProcessingParams(saturation: 3.0);
+      await camera.setProcessingParams(initialParams);
       final caps = camera.capabilities;
       final ranges = CameraRanges(
         isoMin: caps.isoMin,
@@ -126,6 +130,7 @@ class _CameraScreenState extends State<CameraScreen> {
         _camera = camera;
         _ranges = ranges;
         _values = CameraSettingsValues.fromSettings(_kInitialSettings, ranges);
+        _processingParams = initialParams; // sidebar sliders reflect the initial values
       });
       _frameResultSub = camera.frameResultStream.listen(_onFrameResult);
       _errorSub = camera.errorStream.listen(_onCameraError);
@@ -158,6 +163,11 @@ class _CameraScreenState extends State<CameraScreen> {
   /// previous values.
   void _applySettings(CameraSettings settings) {
     _camera?.updateSettings(settings);
+  }
+
+  void _applyProcessingParams(ProcessingParams params) {
+    setState(() => _processingParams = params);
+    _camera?.setProcessingParams(params);
   }
 
   void _setWbLocked(bool locked) {
@@ -345,7 +355,45 @@ class _CameraScreenState extends State<CameraScreen> {
                 child: Row(
                   children: [
                     Expanded(child: _buildRawPreview()),
-                    Expanded(child: _buildCameraPreview()),
+                    Expanded(
+                      child: Stack(
+                        fit: StackFit.expand,
+                        children: [
+                          _buildCameraPreview(),
+                          // Sidebar toggle button — top right corner
+                          Positioned(
+                            top: 8,
+                            right: _sidebarOpen ? 268 : 8,
+                            child: AnimatedSwitcher(
+                              duration: const Duration(milliseconds: 200),
+                              child: FloatingActionButton.small(
+                                key: ValueKey(_sidebarOpen),
+                                heroTag: 'sidebarToggle',
+                                onPressed: () =>
+                                    setState(() => _sidebarOpen = !_sidebarOpen),
+                                child: Icon(
+                                  _sidebarOpen
+                                      ? Icons.tune_outlined
+                                      : Icons.tune,
+                                ),
+                              ),
+                            ),
+                          ),
+                          // Sidebar slides in from right
+                          AnimatedPositioned(
+                            duration: const Duration(milliseconds: 250),
+                            curve: Curves.easeInOutCubic,
+                            top: 0,
+                            bottom: 0,
+                            right: _sidebarOpen ? 0 : -270,
+                            child: GpuControlsSidebar(
+                              params: _processingParams,
+                              onChanged: _applyProcessingParams,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
                   ],
                 ),
               ),

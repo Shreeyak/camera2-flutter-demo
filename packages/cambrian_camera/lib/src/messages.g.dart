@@ -187,6 +187,7 @@ class CamProcessingParams {
     required this.autoStretchLow,
     required this.autoStretchHigh,
     required this.brightness,
+    required this.contrast,
     required this.saturation,
   });
 
@@ -210,6 +211,8 @@ class CamProcessingParams {
 
   double brightness;
 
+  double contrast;
+
   double saturation;
 
   Object encode() {
@@ -224,6 +227,7 @@ class CamProcessingParams {
       autoStretchLow,
       autoStretchHigh,
       brightness,
+      contrast,
       saturation,
     ];
   }
@@ -241,7 +245,8 @@ class CamProcessingParams {
       autoStretchLow: result[7]! as double,
       autoStretchHigh: result[8]! as double,
       brightness: result[9]! as double,
-      saturation: result[10]! as double,
+      contrast: result[10]! as double,
+      saturation: result[11]! as double,
     );
   }
 }
