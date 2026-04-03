@@ -477,17 +477,11 @@ class CameraController(
             val evRange: Range<Int>? = chars.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_RANGE)
             val evStep: Rational? = chars.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_STEP)
 
-            // Largest 4:3 YUV_420_888 output size — matches resolveStreamFormat selection.
-            val largestYuv = configMap
-                ?.getOutputSizes(ImageFormat.YUV_420_888)
-                ?.filter { it.width * 3 == it.height * 4 }
-                ?.maxByOrNull { it.width.toLong() * it.height }
-            val streamWidth: Int = largestYuv?.width ?: 1280
-            val streamHeight: Int = largestYuv?.height ?: 960
-
             // Estimate 4 YUV_420_888 ring-buffer slots (1.5 bytes/pixel each) plus
             // one RGBA texture buffer if the raw preview surface is active.
-            val yuvBytes: Long = streamWidth.toLong() * streamHeight * 3L / 2L * 4L
+            // previewWidth/previewHeight are set by startCaptureSession() before getCapabilities()
+            // is ever called, so they always reflect the actual configured stream resolution.
+            val yuvBytes: Long = previewWidth.toLong() * previewHeight * 3L / 2L * 4L
             val textureBytes: Long = rawW.toLong() * rawH * 4L
             val estimatedBytes: Long = yuvBytes + textureBytes
 
@@ -509,6 +503,8 @@ class CameraController(
                     rawStreamTextureId = rawSurfaceProducer?.id() ?: 0L,
                     rawStreamWidth = rawW.toLong(),
                     rawStreamHeight = rawH.toLong(),
+                    streamWidth = previewWidth.toLong(),
+                    streamHeight = previewHeight.toLong(),
                 )
             callback(Result.success(caps))
         } catch (e: CameraAccessException) {
@@ -824,12 +820,7 @@ class CameraController(
             rawW = 0
             rawH = 0
         }
-        if (CambrianCameraConfig.verboseDiagnostics) {
-            android.util.Log.d(
-                "CambrianCamera",
-                "startCaptureSession format=GPU_OES size=${streamWidth}x$streamHeight",
-            )
-        }
+        android.util.Log.i("CambrianCamera", "Camera stream resolution selected: ${streamWidth}x$streamHeight")
 
         // JPEG ImageReader — pre-allocated for still capture (use streaming resolution).
         val jpegReader = ImageReader.newInstance(streamWidth, streamHeight, ImageFormat.JPEG, 1)
@@ -874,6 +865,7 @@ class CameraController(
                 { command -> backgroundHandler.post(command) },
                 object : CameraCaptureSession.StateCallback() {
                     override fun onConfigured(session: CameraCaptureSession) {
+                        android.util.Log.i("CambrianCamera", "Camera session configured: ${previewWidth}x$previewHeight")
                         captureSession = session
                         try {
                             val settings = pendingSettings
@@ -953,9 +945,13 @@ class CameraController(
     private fun resolveStreamFormat(device: CameraDevice): Triple<Int, Int, Int> {
         val chars = cameraManager.getCameraCharacteristics(device.id)
         val configMap = chars.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+        // Filter to 4:3: most sensors have a 4:3 active pixel array (SENSOR_INFO_ACTIVE_ARRAY_SIZE).
+        // Non-4:3 output sizes crop that area, discarding live pixels. The largest 4:3 YUV size
+        // = full sensor utilisation. getOutputSizes() is the authoritative valid-size list;
+        // any size from it is guaranteed accepted by createCaptureSession.
         val largest = configMap
             ?.getOutputSizes(ImageFormat.YUV_420_888)
-            ?.filter { it.width * 3 == it.height * 4 } // exact 4:3 check (no floating-point)
+            ?.filter { it.width * 3 == it.height * 4 }
             ?.maxByOrNull { it.width.toLong() * it.height }
         return if (largest != null) {
             Triple(ImageFormat.YUV_420_888, largest.width, largest.height)

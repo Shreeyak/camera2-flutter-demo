@@ -249,7 +249,11 @@ data class CamCapabilities (
   /** Actual computed width of the GPU raw stream (pixels). 0 if raw stream is disabled. */
   val rawStreamWidth: Long,
   /** Requested height of the GPU raw stream (pixels). 0 if raw stream is disabled. */
-  val rawStreamHeight: Long
+  val rawStreamHeight: Long,
+  /** Width of the GPU processed stream texture (pixels). Matches the largest 4:3 YUV size. */
+  val streamWidth: Long,
+  /** Height of the GPU processed stream texture (pixels). */
+  val streamHeight: Long
 )
  {
   companion object {
@@ -270,7 +274,9 @@ data class CamCapabilities (
       val rawStreamTextureId = pigeonVar_list[13] as Long
       val rawStreamWidth = pigeonVar_list[14] as Long
       val rawStreamHeight = pigeonVar_list[15] as Long
-      return CamCapabilities(supportedSizes, isoMin, isoMax, exposureTimeMinNs, exposureTimeMaxNs, focusMin, focusMax, zoomMin, zoomMax, evCompMin, evCompMax, evCompensationStep, estimatedMemoryBytes, rawStreamTextureId, rawStreamWidth, rawStreamHeight)
+      val streamWidth = pigeonVar_list[16] as Long
+      val streamHeight = pigeonVar_list[17] as Long
+      return CamCapabilities(supportedSizes, isoMin, isoMax, exposureTimeMinNs, exposureTimeMaxNs, focusMin, focusMax, zoomMin, zoomMax, evCompMin, evCompMax, evCompensationStep, estimatedMemoryBytes, rawStreamTextureId, rawStreamWidth, rawStreamHeight, streamWidth, streamHeight)
     }
   }
   fun toList(): List<Any?> {
@@ -291,6 +297,8 @@ data class CamCapabilities (
       rawStreamTextureId,
       rawStreamWidth,
       rawStreamHeight,
+      streamWidth,
+      streamHeight,
     )
   }
 }

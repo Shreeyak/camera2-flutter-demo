@@ -269,6 +269,8 @@ class CamCapabilities {
     required this.rawStreamTextureId,
     required this.rawStreamWidth,
     required this.rawStreamHeight,
+    required this.streamWidth,
+    required this.streamHeight,
   });
 
   List<CamSize> supportedSizes;
@@ -307,6 +309,12 @@ class CamCapabilities {
   /// Requested height of the GPU raw stream (pixels). 0 if raw stream is disabled.
   int rawStreamHeight;
 
+  /// Width of the GPU processed stream texture (pixels). Matches the largest 4:3 YUV size.
+  int streamWidth;
+
+  /// Height of the GPU processed stream texture (pixels).
+  int streamHeight;
+
   Object encode() {
     return <Object?>[
       supportedSizes,
@@ -325,6 +333,8 @@ class CamCapabilities {
       rawStreamTextureId,
       rawStreamWidth,
       rawStreamHeight,
+      streamWidth,
+      streamHeight,
     ];
   }
 
@@ -347,6 +357,8 @@ class CamCapabilities {
       rawStreamTextureId: result[13]! as int,
       rawStreamWidth: result[14]! as int,
       rawStreamHeight: result[15]! as int,
+      streamWidth: result[16]! as int,
+      streamHeight: result[17]! as int,
     );
   }
 }

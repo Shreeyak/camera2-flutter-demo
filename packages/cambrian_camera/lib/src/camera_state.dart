@@ -92,6 +92,8 @@ class CameraCapabilities {
     required this.rawStreamTextureId,
     required this.rawStreamWidth,
     required this.rawStreamHeight,
+    required this.streamWidth,
+    required this.streamHeight,
   });
 
   /// Empty placeholder used during the open() factory before getCapabilities completes.
@@ -112,6 +114,8 @@ class CameraCapabilities {
         rawStreamTextureId: 0,
         rawStreamWidth: 0,
         rawStreamHeight: 0,
+        streamWidth: 0,
+        streamHeight: 0,
       );
 
   factory CameraCapabilities.fromPigeon(CamCapabilities c) =>
@@ -134,6 +138,8 @@ class CameraCapabilities {
         rawStreamTextureId: c.rawStreamTextureId,
         rawStreamWidth: c.rawStreamWidth,
         rawStreamHeight: c.rawStreamHeight,
+        streamWidth: c.streamWidth,
+        streamHeight: c.streamHeight,
       );
 
   final List<CameraSize> supportedSizes;
@@ -162,4 +168,10 @@ class CameraCapabilities {
 
   /// Requested height of the GPU raw stream (pixels). 0 if raw stream is disabled.
   final int rawStreamHeight;
+
+  /// Width of the GPU processed stream texture (pixels). Matches the largest 4:3 YUV size.
+  final int streamWidth;
+
+  /// Height of the GPU processed stream texture (pixels).
+  final int streamHeight;
 }

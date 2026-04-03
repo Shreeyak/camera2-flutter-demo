@@ -4,7 +4,6 @@ import 'package:flutter/widgets.dart'
         BoxFit,
         BuildContext,
         FittedBox,
-        Key,
         RotatedBox,
         SizedBox,
         State,
@@ -115,19 +114,16 @@ class _CambrianCameraPreviewState extends State<CambrianCameraPreview>
     // FittedBox applies the [fit] to the Texture so aspect ratio is preserved
     // regardless of the widget's constraints.
     //
-    // Use the largest supported JPEG size for natural aspect ratio.
-    // supportedSizes is sorted descending by area; first entry gives the
-    // correct camera stream aspect ratio for processed preview sizing.
-    final size = widget.camera.capabilities.supportedSizes.isNotEmpty
-        ? widget.camera.capabilities.supportedSizes.first
-        : const CameraSize(1280, 960);
+    // Use the actual GPU texture dimensions reported by the native side so the
+    // SizedBox aspect ratio always matches the processed stream content.
+    final caps = widget.camera.capabilities;
     return FittedBox(
       fit: widget.fit,
       child: RotatedBox(
         quarterTurns: _quarterTurns,
         child: SizedBox(
-          width: size.width.toDouble(),
-          height: size.height.toDouble(),
+          width: caps.streamWidth.toDouble(),
+          height: caps.streamHeight.toDouble(),
           child: Texture(textureId: widget.camera.processedStreamTextureId),
         ),
       ),
