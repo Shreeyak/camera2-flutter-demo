@@ -227,6 +227,12 @@ class CambrianCamera {
   /// Does not interrupt the streaming pipeline.
   Future<String> takePicture() => _hostApi.takePicture(_handle);
 
+  /// Returns the current display rotation in degrees CW from portrait: 0, 90, 180, or 270.
+  ///
+  /// Used by preview widgets to select the correct [RotatedBox.quarterTurns] for all
+  /// four device orientations.
+  Future<int> getDisplayRotation() => _hostApi.getDisplayRotation();
+
   /// Returns the native `IImagePipeline*` pointer as an int64, or null if the
   /// pipeline is not yet initialized.
   ///
@@ -262,14 +268,7 @@ class CambrianCamera {
     if (texId == 0) {
       return placeholder ?? const ColoredBox(color: Colors.black);
     }
-    return FittedBox(
-      fit: fit,
-      child: SizedBox(
-        width: _capabilities.rawStreamWidth.toDouble(),
-        height: _capabilities.rawStreamHeight.toDouble(),
-        child: Texture(textureId: texId),
-      ),
-    );
+    return _RawPreviewWidget(camera: this, fit: fit, placeholder: placeholder);
   }
 
   /// Closes the camera and releases all native resources.
@@ -335,5 +334,79 @@ class _FlutterApiDispatcher extends CameraFlutterApi {
   @override
   void onFrameResult(int handle, CamFrameResult result) {
     CambrianCamera._instances[handle]?._onFrameResult(result);
+  }
+}
+
+/// Internal widget that displays the raw GPU preview stream with 4-way rotation.
+///
+/// Uses [WidgetsBindingObserver.didChangeMetrics] to re-fetch the exact display
+/// rotation degrees (0/90/180/270) from the platform on every device rotation,
+/// including landscape-left ↔ landscape-right which [MediaQuery.orientation]
+/// cannot distinguish (both report [Orientation.landscape]).
+class _RawPreviewWidget extends StatefulWidget {
+  const _RawPreviewWidget({
+    required this.camera,
+    required this.fit,
+    this.placeholder,
+  });
+
+  final CambrianCamera camera;
+  final BoxFit fit;
+  final Widget? placeholder;
+
+  @override
+  State<_RawPreviewWidget> createState() => _RawPreviewWidgetState();
+}
+
+class _RawPreviewWidgetState extends State<_RawPreviewWidget>
+    with WidgetsBindingObserver {
+  int _displayRotationDeg = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _fetchRotation();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeMetrics() {
+    _fetchRotation();
+  }
+
+  Future<void> _fetchRotation() async {
+    final deg = await widget.camera.getDisplayRotation();
+    if (mounted) setState(() => _displayRotationDeg = deg);
+  }
+
+  // ROTATION_90 = landscape-left (device rotated 90° CCW), ROTATION_270 = landscape-right.
+  // GPU always outputs landscape-right, so ROTATION_270 needs 0 turns and ROTATION_90 needs 2.
+  int get _quarterTurns => switch (_displayRotationDeg) {
+    90  => 2,   // landscape-left
+    180 => 1,   // reverse-portrait
+    270 => 0,   // landscape-right — matches GPU output
+    _   => 3,   // portrait
+  };
+
+  @override
+  Widget build(BuildContext context) {
+    final caps = widget.camera.capabilities;
+    return FittedBox(
+      fit: widget.fit,
+      child: RotatedBox(
+        quarterTurns: _quarterTurns,
+        child: SizedBox(
+          width: caps.rawStreamWidth.toDouble(),
+          height: caps.rawStreamHeight.toDouble(),
+          child: Texture(textureId: caps.rawStreamTextureId),
+        ),
+      ),
+    );
   }
 }

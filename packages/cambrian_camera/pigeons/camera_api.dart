@@ -249,6 +249,13 @@ abstract class CameraHostApi {
 
   @async
   void close(int handle);
+
+  /// Returns the current display rotation in degrees CW from portrait: 0, 90, 180, or 270.
+  ///
+  /// Used by Dart preview widgets to select the correct [RotatedBox.quarterTurns]
+  /// for all four device orientations, since [MediaQuery.orientation] only
+  /// distinguishes portrait from landscape.
+  int getDisplayRotation();
 }
 
 // ---------------------------------------------------------------------------

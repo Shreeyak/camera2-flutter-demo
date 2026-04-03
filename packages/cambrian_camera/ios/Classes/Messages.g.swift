@@ -535,6 +535,7 @@ protocol CameraHostApi {
   func takePicture(handle: Int64, completion: @escaping (Result<String, Error>) -> Void)
   func getNativePipelineHandle(handle: Int64, completion: @escaping (Result<Int64?, Error>) -> Void)
   func close(handle: Int64, completion: @escaping (Result<Void, Error>) -> Void)
+  func getDisplayRotation() throws -> Int64
 }
 
 /// Generated setup class from Pigeon to handle messages through the `binaryMessenger`.
@@ -645,6 +646,19 @@ class CameraHostApiSetup {
       }
     } else {
       getNativePipelineHandleChannel.setMessageHandler(nil)
+    }
+    let getDisplayRotationChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.cambrian_camera.CameraHostApi.getDisplayRotation\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
+    if let api = api {
+      getDisplayRotationChannel.setMessageHandler { _, reply in
+        do {
+          let result = try api.getDisplayRotation()
+          reply(wrapResult(result))
+        } catch {
+          reply(wrapError(error))
+        }
+      }
+    } else {
+      getDisplayRotationChannel.setMessageHandler(nil)
     }
     let closeChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.cambrian_camera.CameraHostApi.close\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
     if let api = api {

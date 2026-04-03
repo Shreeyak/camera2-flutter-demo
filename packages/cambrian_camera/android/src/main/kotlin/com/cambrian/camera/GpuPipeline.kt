@@ -1,12 +1,15 @@
 package com.cambrian.camera
 
+import android.content.Context
 import android.graphics.SurfaceTexture
 import android.opengl.GLES11Ext
 import android.opengl.GLES30
+import android.opengl.Matrix
 import android.os.Handler
 import android.os.HandlerThread
 import android.util.Log
 import android.view.Surface
+import android.view.WindowManager
 import java.util.concurrent.CountDownLatch
 
 /**
@@ -27,6 +30,7 @@ open class GpuPipeline(
     private val rawPreviewSurface: Surface?,
     private val rawW: Int,
     private val rawH: Int,
+    private val context: Context,
     private val pipelineHandle: Long   // ImagePipeline* handle from nativeInit
 ) {
     private val glThread = HandlerThread("GpuPipeline-GL").also { it.start() }
@@ -35,7 +39,24 @@ open class GpuPipeline(
     @Volatile private var gpuHandle: Long = 0L
     private var surfaceTexture: SurfaceTexture? = null
     private var oesTexName: Int = 0
-    private val texMatrix = FloatArray(16)
+    private val texMatrix      = FloatArray(16)
+    private val combinedMatrix = FloatArray(16)
+
+    // Fixed 90° CW UV rotation applied every frame to normalise output to landscape-right.
+    //
+    // Camera2 JPEG formula: (sensorOrientation + targetDeviceOrientation + 360) % 360
+    // For PRIVATE/SurfaceTexture surfaces the camera HAL auto-applies sensorOrientation,
+    // so getTransformMatrix() already delivers portrait-correct pixels. The remaining
+    // correction is always portrait→landscape-right = 90° CW, independent of device.
+    //
+    // UV 90° CW: u' = v,  v' = 1 - u
+    // Column-major homogeneous form (OpenGL convention).
+    private val rotMatrix90CW = floatArrayOf(
+         0f, -1f, 0f, 0f,   // col 0
+         1f,  0f, 0f, 0f,   // col 1
+         0f,  0f, 1f, 0f,   // col 2
+         0f,  1f, 0f, 1f    // col 3
+    )
 
     /** The [Surface] wrapping our [SurfaceTexture] — set as camera capture target. */
     var cameraSurface: Surface? = null
@@ -135,17 +156,35 @@ open class GpuPipeline(
         st.updateTexImage()
         st.getTransformMatrix(texMatrix)
 
+        // Compose fixed 90° CW UV rotation so output is always landscape-right,
+        // independent of device orientation. combinedMatrix = texMatrix * rotMatrix90CW
+        // (rotMatrix90CW is applied first to the UV coords, then texMatrix).
+        Matrix.multiplyMM(combinedMatrix, 0, texMatrix, 0, rotMatrix90CW, 0)
+
         // SurfaceTexture.getTimestamp() returns the frame's sensor timestamp in ns.
         val sensorTimestampNs = st.timestamp
+
+        // Read display rotation for metadata — cheap cached value, does not change per frame.
+        @Suppress("DEPRECATION")
+        val displayRotDeg = when (
+            (context.getSystemService(Context.WINDOW_SERVICE) as WindowManager)
+                .defaultDisplay.rotation
+        ) {
+            Surface.ROTATION_90  ->  90
+            Surface.ROTATION_180 -> 180
+            Surface.ROTATION_270 -> 270
+            else                 ->   0
+        }
 
         nativeGpuDrawAndReadback(
             handle, pipelineHandle,
             oesTexName,
-            texMatrix,
+            combinedMatrix,
             /* frameId = */ sensorTimestampNs,   // monotonic; used as frame ID
             sensorTimestampNs,
             /* exposureTimeNs = */ 0L,
-            /* iso = */ 0
+            /* iso = */ 0,
+            displayRotDeg
         )
     }
 
@@ -190,7 +229,8 @@ open class GpuPipeline(
             frameId: Long,
             sensorTimestampNs: Long,
             exposureTimeNs: Long,
-            iso: Int
+            iso: Int,
+            displayRotation: Int
         )
     }
 }

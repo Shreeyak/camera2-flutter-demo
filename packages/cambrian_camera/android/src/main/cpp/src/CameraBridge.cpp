@@ -463,7 +463,8 @@ Java_com_cambrian_camera_GpuPipeline_nativeGpuDrawAndReadback(
         jlong frameId,
         jlong sensorTimestampNs,
         jlong exposureTimeNs,
-        jint iso) {
+        jint iso,
+        jint displayRotation) {
     if (!gpuHandle) {
         LOGE("nativeGpuDrawAndReadback: null renderer handle");
         return;
@@ -485,6 +486,7 @@ Java_com_cambrian_camera_GpuPipeline_nativeGpuDrawAndReadback(
     meta.sensorTimestampNs = static_cast<int64_t>(sensorTimestampNs);
     meta.exposureTimeNs    = static_cast<int64_t>(exposureTimeNs);
     meta.iso               = static_cast<int32_t>(iso);
+    meta.displayRotation   = static_cast<int32_t>(displayRotation);
 
     jfloat* texMatrixPtr = env->GetFloatArrayElements(texMatrix, nullptr);
 

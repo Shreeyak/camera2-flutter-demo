@@ -475,6 +475,7 @@ interface CameraHostApi {
   fun getCapabilities(handle: Long, callback: (Result<CamCapabilities>) -> Unit)
   fun updateSettings(handle: Long, settings: CamSettings)
   fun setProcessingParams(handle: Long, params: CamProcessingParams)
+  fun getDisplayRotation(): Long
   fun takePicture(handle: Long, callback: (Result<String>) -> Unit)
   fun getNativePipelineHandle(handle: Long, callback: (Result<Long?>) -> Unit)
   fun close(handle: Long, callback: (Result<Unit>) -> Unit)
@@ -604,6 +605,21 @@ interface CameraHostApi {
                 reply.reply(wrapResult(data))
               }
             }
+          }
+        } else {
+          channel.setMessageHandler(null)
+        }
+      }
+      run {
+        val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.cambrian_camera.CameraHostApi.getDisplayRotation$separatedMessageChannelSuffix", codec)
+        if (api != null) {
+          channel.setMessageHandler { _, reply ->
+            val wrapped: List<Any?> = try {
+              wrapResult(api.getDisplayRotation())
+            } catch (exception: Throwable) {
+              wrapError(exception)
+            }
+            reply.reply(wrapped)
           }
         } else {
           channel.setMessageHandler(null)

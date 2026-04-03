@@ -852,6 +852,7 @@ class CameraController(
             streamWidth, streamHeight,
             surfaceProducer.getSurface(),
             rawPreviewSurface, rawW, rawH,
+            context,
             nativePipelinePtr
         )
         pipeline.start()

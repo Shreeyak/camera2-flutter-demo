@@ -3,6 +3,7 @@ package com.cambrian.camera
 
 import android.app.Activity
 import android.content.Context
+import android.view.Surface
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.embedding.engine.plugins.activity.ActivityAware
 import io.flutter.embedding.engine.plugins.activity.ActivityPluginBinding
@@ -245,6 +246,23 @@ class CambrianCameraPlugin : FlutterPlugin, ActivityAware, CameraHostApi {
      * @param callback Invoked with [Result.success] on success, or [Result.failure] if the
      *   handle is not found.
      */
+    /**
+     * Returns the current display rotation in degrees CW from portrait: 0, 90, 180, or 270.
+     *
+     * Used by Dart preview widgets to select the correct [RotatedBox.quarterTurns] for
+     * all four device orientations. Falls back to 0 (portrait) if activity is unavailable.
+     */
+    @Suppress("DEPRECATION")
+    override fun getDisplayRotation(): Long {
+        val rot = activity?.windowManager?.defaultDisplay?.rotation ?: return 0L
+        return when (rot) {
+            Surface.ROTATION_90  ->  90L
+            Surface.ROTATION_180 -> 180L
+            Surface.ROTATION_270 -> 270L
+            else                 ->   0L
+        }
+    }
+
     override fun close(handle: Long, callback: (Result<Unit>) -> Unit) {
         val session = sessions.remove(handle)
         if (session == null) {
