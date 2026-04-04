@@ -177,6 +177,8 @@ class CameraSettings {
     this.noiseReductionMode,
     this.edgeMode,
     this.evCompensation,
+    this.enableRawStream,
+    this.rawStreamHeight,
   });
 
   /// Sensor sensitivity (e.g. 100–3200).
@@ -220,6 +222,42 @@ class CameraSettings {
   /// Applied by the AE algorithm — **has no effect** when [iso] or
   /// [exposureTimeNs] is manual (AE is disabled in that mode).
   final int? evCompensation;
+
+  /// Enable GPU raw (passthrough) stream. Null = don't change (preserves prior setting).
+  /// Only meaningful at open() time; changes after open() are ignored.
+  final bool? enableRawStream;
+
+  /// Requested height of the GPU raw stream in pixels. Null = don't change. 0 = use default.
+  /// Only meaningful when [enableRawStream] is true.
+  final int? rawStreamHeight;
+
+  /// Creates a copy of this settings object with specified fields replaced.
+  ///
+  /// Omitted fields preserve their original values.
+  CameraSettings copyWith({
+    AutoValue<int>? iso,
+    AutoValue<int>? exposureTimeNs,
+    AutoValue<double>? focus,
+    WhiteBalance? whiteBalance,
+    double? zoomRatio,
+    NoiseReductionMode? noiseReductionMode,
+    EdgeMode? edgeMode,
+    int? evCompensation,
+    bool? enableRawStream,
+    int? rawStreamHeight,
+  }) =>
+      CameraSettings(
+        iso: iso ?? this.iso,
+        exposureTimeNs: exposureTimeNs ?? this.exposureTimeNs,
+        focus: focus ?? this.focus,
+        whiteBalance: whiteBalance ?? this.whiteBalance,
+        zoomRatio: zoomRatio ?? this.zoomRatio,
+        noiseReductionMode: noiseReductionMode ?? this.noiseReductionMode,
+        edgeMode: edgeMode ?? this.edgeMode,
+        evCompensation: evCompensation ?? this.evCompensation,
+        enableRawStream: enableRawStream ?? this.enableRawStream,
+        rawStreamHeight: rawStreamHeight ?? this.rawStreamHeight,
+      );
 
   /// Serializes to the Pigeon transport type.
   ///
@@ -300,6 +338,8 @@ class CameraSettings {
       noiseReductionMode: noiseReductionMode?.index,
       edgeMode: edgeMode?.index,
       evCompensation: evCompensation,
+      enableRawStream: enableRawStream,
+      rawStreamHeight: rawStreamHeight,
     );
   }
 }

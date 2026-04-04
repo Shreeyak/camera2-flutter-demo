@@ -89,6 +89,8 @@ class CamSettings {
     this.noiseReductionMode,
     this.edgeMode,
     this.evCompensation,
+    this.enableRawStream,
+    this.rawStreamHeight,
   });
 
   /// "auto" | "manual" | null (don't change).
@@ -135,6 +137,12 @@ class CamSettings {
   /// because CONTROL_AE_MODE is set to OFF in that case.
   int? evCompensation;
 
+  /// Enable GPU raw (passthrough) stream. Null = don't change.
+  bool? enableRawStream;
+
+  /// Requested height of the GPU raw stream in pixels. Null = don't change. 0 = use default.
+  int? rawStreamHeight;
+
   Object encode() {
     return <Object?>[
       isoMode,
@@ -151,6 +159,8 @@ class CamSettings {
       noiseReductionMode,
       edgeMode,
       evCompensation,
+      enableRawStream,
+      rawStreamHeight,
     ];
   }
 
@@ -171,6 +181,8 @@ class CamSettings {
       noiseReductionMode: result[11] as int?,
       edgeMode: result[12] as int?,
       evCompensation: result[13] as int?,
+      enableRawStream: result[14] as bool?,
+      rawStreamHeight: result[15] as int?,
     );
   }
 }
@@ -548,7 +560,7 @@ class CameraHostApi {
 
   final String pigeonVar_messageChannelSuffix;
 
-  Future<int> open(String? cameraId, CamSettings? settings, bool enableRawStream, int rawStreamHeight) async {
+  Future<int> open(String? cameraId, CamSettings? settings) async {
     final String pigeonVar_channelName = 'dev.flutter.pigeon.cambrian_camera.CameraHostApi.open$pigeonVar_messageChannelSuffix';
     final BasicMessageChannel<Object?> pigeonVar_channel = BasicMessageChannel<Object?>(
       pigeonVar_channelName,
@@ -556,7 +568,7 @@ class CameraHostApi {
       binaryMessenger: pigeonVar_binaryMessenger,
     );
     final List<Object?>? pigeonVar_replyList =
-        await pigeonVar_channel.send(<Object?>[cameraId, settings, enableRawStream, rawStreamHeight]) as List<Object?>?;
+        await pigeonVar_channel.send(<Object?>[cameraId, settings]) as List<Object?>?;
     if (pigeonVar_replyList == null) {
       throw _createConnectionError(pigeonVar_channelName);
     } else if (pigeonVar_replyList.length > 1) {
@@ -695,6 +707,33 @@ class CameraHostApi {
     }
   }
 
+  Future<void> close(int handle) async {
+    final String pigeonVar_channelName = 'dev.flutter.pigeon.cambrian_camera.CameraHostApi.close$pigeonVar_messageChannelSuffix';
+    final BasicMessageChannel<Object?> pigeonVar_channel = BasicMessageChannel<Object?>(
+      pigeonVar_channelName,
+      pigeonChannelCodec,
+      binaryMessenger: pigeonVar_binaryMessenger,
+    );
+    final List<Object?>? pigeonVar_replyList =
+        await pigeonVar_channel.send(<Object?>[handle]) as List<Object?>?;
+    if (pigeonVar_replyList == null) {
+      throw _createConnectionError(pigeonVar_channelName);
+    } else if (pigeonVar_replyList.length > 1) {
+      throw PlatformException(
+        code: pigeonVar_replyList[0]! as String,
+        message: pigeonVar_replyList[1] as String?,
+        details: pigeonVar_replyList[2],
+      );
+    } else {
+      return;
+    }
+  }
+
+  /// Returns the current display rotation in degrees CW from portrait: 0, 90, 180, or 270.
+  ///
+  /// Used by Dart preview widgets to select the correct [RotatedBox.quarterTurns]
+  /// for all four device orientations, since [MediaQuery.orientation] only
+  /// distinguishes portrait from landscape.
   Future<int> getDisplayRotation() async {
     final String pigeonVar_channelName = 'dev.flutter.pigeon.cambrian_camera.CameraHostApi.getDisplayRotation$pigeonVar_messageChannelSuffix';
     final BasicMessageChannel<Object?> pigeonVar_channel = BasicMessageChannel<Object?>(
@@ -719,28 +758,6 @@ class CameraHostApi {
       );
     } else {
       return (pigeonVar_replyList[0] as int?)!;
-    }
-  }
-
-  Future<void> close(int handle) async {
-    final String pigeonVar_channelName = 'dev.flutter.pigeon.cambrian_camera.CameraHostApi.close$pigeonVar_messageChannelSuffix';
-    final BasicMessageChannel<Object?> pigeonVar_channel = BasicMessageChannel<Object?>(
-      pigeonVar_channelName,
-      pigeonChannelCodec,
-      binaryMessenger: pigeonVar_binaryMessenger,
-    );
-    final List<Object?>? pigeonVar_replyList =
-        await pigeonVar_channel.send(<Object?>[handle]) as List<Object?>?;
-    if (pigeonVar_replyList == null) {
-      throw _createConnectionError(pigeonVar_channelName);
-    } else if (pigeonVar_replyList.length > 1) {
-      throw PlatformException(
-        code: pigeonVar_replyList[0]! as String,
-        message: pigeonVar_replyList[1] as String?,
-        details: pigeonVar_replyList[2],
-      );
-    } else {
-      return;
     }
   }
 }

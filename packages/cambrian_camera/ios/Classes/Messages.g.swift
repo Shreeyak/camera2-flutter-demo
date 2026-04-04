@@ -146,6 +146,10 @@ struct CamSettings {
   /// NOTE: has no effect when isoMode == "manual" or exposureMode == "manual"
   /// because CONTROL_AE_MODE is set to OFF in that case.
   var evCompensation: Int64? = nil
+  /// Enable GPU raw (passthrough) stream. Null = don't change.
+  var enableRawStream: Bool? = nil
+  /// Requested height of the GPU raw stream in pixels. Null = don't change. 0 = use default.
+  var rawStreamHeight: Int64? = nil
 
 
   // swift-format-ignore: AlwaysUseLowerCamelCase
@@ -164,6 +168,8 @@ struct CamSettings {
     let noiseReductionMode: Int64? = nilOrValue(pigeonVar_list[11])
     let edgeMode: Int64? = nilOrValue(pigeonVar_list[12])
     let evCompensation: Int64? = nilOrValue(pigeonVar_list[13])
+    let enableRawStream: Bool? = nilOrValue(pigeonVar_list[14])
+    let rawStreamHeight: Int64? = nilOrValue(pigeonVar_list[15])
 
     return CamSettings(
       isoMode: isoMode,
@@ -179,7 +185,9 @@ struct CamSettings {
       zoomRatio: zoomRatio,
       noiseReductionMode: noiseReductionMode,
       edgeMode: edgeMode,
-      evCompensation: evCompensation
+      evCompensation: evCompensation,
+      enableRawStream: enableRawStream,
+      rawStreamHeight: rawStreamHeight
     )
   }
   func toList() -> [Any?] {
@@ -198,6 +206,8 @@ struct CamSettings {
       noiseReductionMode,
       edgeMode,
       evCompensation,
+      enableRawStream,
+      rawStreamHeight,
     ]
   }
 }
@@ -288,6 +298,10 @@ struct CamCapabilities {
   var rawStreamWidth: Int64
   /// Requested height of the GPU raw stream (pixels). 0 if raw stream is disabled.
   var rawStreamHeight: Int64
+  /// Width of the GPU processed stream texture (pixels). Matches the largest 4:3 YUV size.
+  var streamWidth: Int64
+  /// Height of the GPU processed stream texture (pixels).
+  var streamHeight: Int64
 
 
   // swift-format-ignore: AlwaysUseLowerCamelCase
@@ -308,6 +322,8 @@ struct CamCapabilities {
     let rawStreamTextureId = pigeonVar_list[13] as! Int64
     let rawStreamWidth = pigeonVar_list[14] as! Int64
     let rawStreamHeight = pigeonVar_list[15] as! Int64
+    let streamWidth = pigeonVar_list[16] as! Int64
+    let streamHeight = pigeonVar_list[17] as! Int64
 
     return CamCapabilities(
       supportedSizes: supportedSizes,
@@ -325,7 +341,9 @@ struct CamCapabilities {
       estimatedMemoryBytes: estimatedMemoryBytes,
       rawStreamTextureId: rawStreamTextureId,
       rawStreamWidth: rawStreamWidth,
-      rawStreamHeight: rawStreamHeight
+      rawStreamHeight: rawStreamHeight,
+      streamWidth: streamWidth,
+      streamHeight: streamHeight
     )
   }
   func toList() -> [Any?] {
@@ -346,6 +364,8 @@ struct CamCapabilities {
       rawStreamTextureId,
       rawStreamWidth,
       rawStreamHeight,
+      streamWidth,
+      streamHeight,
     ]
   }
 }
@@ -528,13 +548,18 @@ class MessagesPigeonCodec: FlutterStandardMessageCodec, @unchecked Sendable {
 
 /// Generated protocol from Pigeon that represents a handler of messages from Flutter.
 protocol CameraHostApi {
-  func open(cameraId: String?, settings: CamSettings?, enableRawStream: Bool, rawStreamHeight: Int64, completion: @escaping (Result<Int64, Error>) -> Void)
+  func open(cameraId: String?, settings: CamSettings?, completion: @escaping (Result<Int64, Error>) -> Void)
   func getCapabilities(handle: Int64, completion: @escaping (Result<CamCapabilities, Error>) -> Void)
   func updateSettings(handle: Int64, settings: CamSettings) throws
   func setProcessingParams(handle: Int64, params: CamProcessingParams) throws
   func takePicture(handle: Int64, completion: @escaping (Result<String, Error>) -> Void)
   func getNativePipelineHandle(handle: Int64, completion: @escaping (Result<Int64?, Error>) -> Void)
   func close(handle: Int64, completion: @escaping (Result<Void, Error>) -> Void)
+  /// Returns the current display rotation in degrees CW from portrait: 0, 90, 180, or 270.
+  ///
+  /// Used by Dart preview widgets to select the correct [RotatedBox.quarterTurns]
+  /// for all four device orientations, since [MediaQuery.orientation] only
+  /// distinguishes portrait from landscape.
   func getDisplayRotation() throws -> Int64
 }
 
@@ -550,9 +575,7 @@ class CameraHostApiSetup {
         let args = message as! [Any?]
         let cameraIdArg: String? = nilOrValue(args[0])
         let settingsArg: CamSettings? = nilOrValue(args[1])
-        let enableRawStreamArg = args[2] as! Bool
-        let rawStreamHeightArg = args[3] as! Int64
-        api.open(cameraId: cameraIdArg, settings: settingsArg, enableRawStream: enableRawStreamArg, rawStreamHeight: rawStreamHeightArg) { result in
+        api.open(cameraId: cameraIdArg, settings: settingsArg) { result in
           switch result {
           case .success(let res):
             reply(wrapResult(res))
@@ -647,19 +670,6 @@ class CameraHostApiSetup {
     } else {
       getNativePipelineHandleChannel.setMessageHandler(nil)
     }
-    let getDisplayRotationChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.cambrian_camera.CameraHostApi.getDisplayRotation\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
-    if let api = api {
-      getDisplayRotationChannel.setMessageHandler { _, reply in
-        do {
-          let result = try api.getDisplayRotation()
-          reply(wrapResult(result))
-        } catch {
-          reply(wrapError(error))
-        }
-      }
-    } else {
-      getDisplayRotationChannel.setMessageHandler(nil)
-    }
     let closeChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.cambrian_camera.CameraHostApi.close\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
     if let api = api {
       closeChannel.setMessageHandler { message, reply in
@@ -676,6 +686,24 @@ class CameraHostApiSetup {
       }
     } else {
       closeChannel.setMessageHandler(nil)
+    }
+    /// Returns the current display rotation in degrees CW from portrait: 0, 90, 180, or 270.
+    ///
+    /// Used by Dart preview widgets to select the correct [RotatedBox.quarterTurns]
+    /// for all four device orientations, since [MediaQuery.orientation] only
+    /// distinguishes portrait from landscape.
+    let getDisplayRotationChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.cambrian_camera.CameraHostApi.getDisplayRotation\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
+    if let api = api {
+      getDisplayRotationChannel.setMessageHandler { _, reply in
+        do {
+          let result = try api.getDisplayRotation()
+          reply(wrapResult(result))
+        } catch {
+          reply(wrapError(error))
+        }
+      }
+    } else {
+      getDisplayRotationChannel.setMessageHandler(nil)
     }
   }
 }

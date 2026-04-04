@@ -36,6 +36,8 @@ const _kInitialSettings = CameraSettings(
   iso: AutoValue<int>.auto(),
   exposureTimeNs: AutoValue<int>.auto(),
   focus: AutoValue<double>.auto(),
+  enableRawStream: true,
+  rawStreamHeight: 720,
 );
 
 void main() async {
@@ -143,8 +145,6 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
     try {
       final camera = await CambrianCamera.open(
         settings: _kInitialSettings,
-        enableRawStream: true,
-        rawStreamHeight: 720,
       );
       // High saturation so the processed pane is visually distinct from the raw pane.
       final initialParams = ProcessingParams(saturation: 3.0);

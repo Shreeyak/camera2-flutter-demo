@@ -12,11 +12,19 @@ import 'messages.g.dart';
 ///
 /// Usage:
 /// ```dart
-/// final camera = await CambrianCamera.open();
-/// // Show preview
-/// camera.buildPreview()
+/// final camera = await CambrianCamera.open(
+///   settings: CameraSettings(
+///     iso: AutoValue.auto(),
+///     focus: AutoValue.auto(),
+///     enableRawStream: true,        // Enable dual-stream preview
+///     rawStreamHeight: 720,          // Request 720p height
+///   ),
+/// );
 /// // Listen for state changes
 /// camera.stateStream.listen((state) { ... });
+/// // Get preview textures (streams)
+/// camera.toneMappedTexture.listen((info) { /* render processed stream */ });
+/// camera.rawTexture.listen((info) { /* render raw stream */ });
 /// // Adjust settings — only send what changed, omitted fields are preserved
 /// camera.updateSettings(CameraSettings(iso: AutoValue.manual(400)));
 /// camera.updateSettings(CameraSettings(focus: AutoValue.auto()));
@@ -117,27 +125,28 @@ class CambrianCamera {
   ///
   /// [cameraId] selects a specific device; pass null to use the default camera.
   /// [settings] apply initial ISP settings before streaming starts.
-  /// [enableRawStream] enables the GPU raw (passthrough) preview stream.
-  /// [rawStreamHeight] controls the height of the raw stream; 0 uses a default.
+  ///
+  /// To enable the GPU raw (passthrough) preview stream, set [CameraSettings.enableRawStream]
+  /// to true in the settings. The [CameraSettings.rawStreamHeight] field controls the
+  /// requested height of the raw stream; 0 uses a default.
   ///
   /// Throws [PlatformException] if the camera cannot be opened (e.g. permission
   /// denied). After opening, errors are delivered via [errorStream].
   static Future<CambrianCamera> open({
     String? cameraId,
     CameraSettings? settings,
-    bool enableRawStream = false,
-    int rawStreamHeight = 0,
   }) async {
     final api = CameraHostApi();
     // Ensure Flutter→Dart callbacks are wired before we open.
     _ensureFlutterApiSetup();
 
+    // Extract raw stream settings, defaulting to false if not specified.
+    final enableRawStream = settings?.enableRawStream ?? false;
+
     // The handle returned by the platform is also used as the texture ID.
     final handle = await api.open(
       cameraId,
       settings?.toCam(),
-      enableRawStream,
-      rawStreamHeight,
     );
 
     // Register the instance immediately after open() so that any state/error
@@ -199,7 +208,9 @@ class CambrianCamera {
   Stream<CameraTextureInfo> get rawTexture => _rawTextureStream();
 
   Stream<CameraTextureInfo> _rawTextureStream() async* {
-    if (_currentState == CameraState.streaming && _enableRawStream) {
+    if (_currentState == CameraState.streaming &&
+        _enableRawStream &&
+        _capabilities.rawStreamTextureId != 0) {
       yield CameraTextureInfo(
         textureId: _capabilities.rawStreamTextureId,
         width: _capabilities.rawStreamWidth,
@@ -207,7 +218,10 @@ class CambrianCamera {
       );
     }
     yield* stateStream
-        .where((s) => s == CameraState.streaming && _enableRawStream)
+        .where((s) =>
+            s == CameraState.streaming &&
+            _enableRawStream &&
+            _capabilities.rawStreamTextureId != 0)
         .map((_) => CameraTextureInfo(
               textureId: _capabilities.rawStreamTextureId,
               width: _capabilities.rawStreamWidth,

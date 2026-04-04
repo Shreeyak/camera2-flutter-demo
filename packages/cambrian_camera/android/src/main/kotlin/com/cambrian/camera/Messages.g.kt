@@ -133,7 +133,11 @@ data class CamSettings (
    * NOTE: has no effect when isoMode == "manual" or exposureMode == "manual"
    * because CONTROL_AE_MODE is set to OFF in that case.
    */
-  val evCompensation: Long? = null
+  val evCompensation: Long? = null,
+  /** Enable GPU raw (passthrough) stream. Null = don't change. */
+  val enableRawStream: Boolean? = null,
+  /** Requested height of the GPU raw stream in pixels. Null = don't change. 0 = use default. */
+  val rawStreamHeight: Long? = null
 )
  {
   companion object {
@@ -152,7 +156,9 @@ data class CamSettings (
       val noiseReductionMode = pigeonVar_list[11] as Long?
       val edgeMode = pigeonVar_list[12] as Long?
       val evCompensation = pigeonVar_list[13] as Long?
-      return CamSettings(isoMode, iso, exposureMode, exposureTimeNs, focusMode, focusDistanceDiopters, wbMode, wbGainR, wbGainG, wbGainB, zoomRatio, noiseReductionMode, edgeMode, evCompensation)
+      val enableRawStream = pigeonVar_list[14] as Boolean?
+      val rawStreamHeight = pigeonVar_list[15] as Long?
+      return CamSettings(isoMode, iso, exposureMode, exposureTimeNs, focusMode, focusDistanceDiopters, wbMode, wbGainR, wbGainG, wbGainB, zoomRatio, noiseReductionMode, edgeMode, evCompensation, enableRawStream, rawStreamHeight)
     }
   }
   fun toList(): List<Any?> {
@@ -171,6 +177,8 @@ data class CamSettings (
       noiseReductionMode,
       edgeMode,
       evCompensation,
+      enableRawStream,
+      rawStreamHeight,
     )
   }
 }
@@ -479,14 +487,21 @@ private open class MessagesPigeonCodec : StandardMessageCodec() {
 
 /** Generated interface from Pigeon that represents a handler of messages from Flutter. */
 interface CameraHostApi {
-  fun open(cameraId: String?, settings: CamSettings?, enableRawStream: Boolean, rawStreamHeight: Long, callback: (Result<Long>) -> Unit)
+  fun open(cameraId: String?, settings: CamSettings?, callback: (Result<Long>) -> Unit)
   fun getCapabilities(handle: Long, callback: (Result<CamCapabilities>) -> Unit)
   fun updateSettings(handle: Long, settings: CamSettings)
   fun setProcessingParams(handle: Long, params: CamProcessingParams)
-  fun getDisplayRotation(): Long
   fun takePicture(handle: Long, callback: (Result<String>) -> Unit)
   fun getNativePipelineHandle(handle: Long, callback: (Result<Long?>) -> Unit)
   fun close(handle: Long, callback: (Result<Unit>) -> Unit)
+  /**
+   * Returns the current display rotation in degrees CW from portrait: 0, 90, 180, or 270.
+   *
+   * Used by Dart preview widgets to select the correct [RotatedBox.quarterTurns]
+   * for all four device orientations, since [MediaQuery.orientation] only
+   * distinguishes portrait from landscape.
+   */
+  fun getDisplayRotation(): Long
 
   companion object {
     /** The codec used by CameraHostApi. */
@@ -504,9 +519,7 @@ interface CameraHostApi {
             val args = message as List<Any?>
             val cameraIdArg = args[0] as String?
             val settingsArg = args[1] as CamSettings?
-            val enableRawStreamArg = args[2] as Boolean
-            val rawStreamHeightArg = args[3] as Long
-            api.open(cameraIdArg, settingsArg, enableRawStreamArg, rawStreamHeightArg) { result: Result<Long> ->
+            api.open(cameraIdArg, settingsArg) { result: Result<Long> ->
               val error = result.exceptionOrNull()
               if (error != null) {
                 reply.reply(wrapError(error))
@@ -619,21 +632,6 @@ interface CameraHostApi {
         }
       }
       run {
-        val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.cambrian_camera.CameraHostApi.getDisplayRotation$separatedMessageChannelSuffix", codec)
-        if (api != null) {
-          channel.setMessageHandler { _, reply ->
-            val wrapped: List<Any?> = try {
-              wrapResult(api.getDisplayRotation())
-            } catch (exception: Throwable) {
-              wrapError(exception)
-            }
-            reply.reply(wrapped)
-          }
-        } else {
-          channel.setMessageHandler(null)
-        }
-      }
-      run {
         val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.cambrian_camera.CameraHostApi.close$separatedMessageChannelSuffix", codec)
         if (api != null) {
           channel.setMessageHandler { message, reply ->
@@ -647,6 +645,21 @@ interface CameraHostApi {
                 reply.reply(wrapResult(null))
               }
             }
+          }
+        } else {
+          channel.setMessageHandler(null)
+        }
+      }
+      run {
+        val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.cambrian_camera.CameraHostApi.getDisplayRotation$separatedMessageChannelSuffix", codec)
+        if (api != null) {
+          channel.setMessageHandler { _, reply ->
+            val wrapped: List<Any?> = try {
+              listOf(api.getDisplayRotation())
+            } catch (exception: Throwable) {
+              wrapError(exception)
+            }
+            reply.reply(wrapped)
           }
         } else {
           channel.setMessageHandler(null)

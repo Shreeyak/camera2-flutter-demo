@@ -47,6 +47,8 @@ class CamSettings {
     this.noiseReductionMode,
     this.edgeMode,
     this.evCompensation,
+    this.enableRawStream,
+    this.rawStreamHeight,
   });
 
   /// "auto" | "manual" | null (don't change).
@@ -83,6 +85,11 @@ class CamSettings {
   /// NOTE: has no effect when isoMode == "manual" or exposureMode == "manual"
   /// because CONTROL_AE_MODE is set to OFF in that case.
   int? evCompensation;
+
+  /// Enable GPU raw (passthrough) stream. Null = don't change.
+  bool? enableRawStream;
+  /// Requested height of the GPU raw stream in pixels. Null = don't change. 0 = use default.
+  int? rawStreamHeight;
 }
 
 class CamProcessingParams {
@@ -238,7 +245,7 @@ class CamFrameResult {
 @HostApi()
 abstract class CameraHostApi {
   @async
-  int open(String? cameraId, CamSettings? settings, bool enableRawStream, int rawStreamHeight);
+  int open(String? cameraId, CamSettings? settings);
 
   @async
   CamCapabilities getCapabilities(int handle);
