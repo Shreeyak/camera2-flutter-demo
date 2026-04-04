@@ -116,7 +116,7 @@ CambrianCamera
 |---|---|
 | `CamSettings` | `iso?`, `exposureTimeNs?`, `focusDistanceDiopters?`, `zoomRatio?`, `afEnabled?`, `awbLocked?`, `noiseReductionMode?`, `edgeMode?`, `evCompensation?` |
 | `CamProcessingParams` | `blackR/G/B`, `gamma`, `brightness`, `saturation` |
-| `CamCapabilities` | `supportedSizes`, ISO/exposure/focus/zoom ranges, `evCompensationStep`, `estimatedMemoryBytes` |
+| `CamCapabilities` | `supportedSizes`, ISO/exposure/focus/zoom ranges, `evCompensationStep` |
 | `CamStateUpdate` | `state: String` — one of `"closed"`, `"opening"`, `"streaming"`, `"recovering"`, `"error"` |
 | `CamError` | `code: String`, `message: String`, `isFatal: bool` |
 

@@ -233,7 +233,6 @@ data class CamCapabilities (
   val evCompMin: Long,
   val evCompMax: Long,
   val evCompensationStep: Double,
-  val estimatedMemoryBytes: Long,
   /**
    * Flutter texture ID for the GPU raw stream (passthrough, no color adjustments).
    * 0 if raw stream is disabled.
@@ -263,13 +262,12 @@ data class CamCapabilities (
       val evCompMin = pigeonVar_list[9] as Long
       val evCompMax = pigeonVar_list[10] as Long
       val evCompensationStep = pigeonVar_list[11] as Double
-      val estimatedMemoryBytes = pigeonVar_list[12] as Long
-      val rawStreamTextureId = pigeonVar_list[13] as Long
-      val rawStreamWidth = pigeonVar_list[14] as Long
-      val rawStreamHeight = pigeonVar_list[15] as Long
-      val streamWidth = pigeonVar_list[16] as Long
-      val streamHeight = pigeonVar_list[17] as Long
-      return CamCapabilities(supportedSizes, isoMin, isoMax, exposureTimeMinNs, exposureTimeMaxNs, focusMin, focusMax, zoomMin, zoomMax, evCompMin, evCompMax, evCompensationStep, estimatedMemoryBytes, rawStreamTextureId, rawStreamWidth, rawStreamHeight, streamWidth, streamHeight)
+      val rawStreamTextureId = pigeonVar_list[12] as Long
+      val rawStreamWidth = pigeonVar_list[13] as Long
+      val rawStreamHeight = pigeonVar_list[14] as Long
+      val streamWidth = pigeonVar_list[15] as Long
+      val streamHeight = pigeonVar_list[16] as Long
+      return CamCapabilities(supportedSizes, isoMin, isoMax, exposureTimeMinNs, exposureTimeMaxNs, focusMin, focusMax, zoomMin, zoomMax, evCompMin, evCompMax, evCompensationStep, rawStreamTextureId, rawStreamWidth, rawStreamHeight, streamWidth, streamHeight)
     }
   }
   fun toList(): List<Any?> {
@@ -286,7 +284,6 @@ data class CamCapabilities (
       evCompMin,
       evCompMax,
       evCompensationStep,
-      estimatedMemoryBytes,
       rawStreamTextureId,
       rawStreamWidth,
       rawStreamHeight,

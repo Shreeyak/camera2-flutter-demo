@@ -599,7 +599,6 @@ print('Resolutions: ${caps.supportedSizes}');
 | `yuvStreamWidth` / `yuvStreamHeight` | `int` | YUV stream dimensions delivered to the C++ pipeline (pixels). Used by the preview widget for correct aspect ratio. |
 | `rawStreamTextureId` | `int` | Flutter texture ID for the raw (passthrough) preview stream. `0` when raw is disabled. Available via `rawTexture` stream. |
 | `rawStreamWidth` / `rawStreamHeight` | `int` | Raw stream dimensions in pixels. Both are `0` when raw is disabled (either `enableRawStream` was `false`, or raw init failed). Width is auto-computed from aspect ratio; height matches the `rawStreamHeight` passed to `open()`. |
-| `estimatedMemoryBytes` | `int` | Estimated native memory usage |
 
 ---
 
@@ -790,8 +789,6 @@ Example at 4K (4160×3120, as reported by `yuvStreamWidth`/`yuvStreamHeight`):
 | Preview RGBA conversion buffer | ~49 MB |
 
 > **Tip:** Keep sink callbacks fast. Each sink has a dedicated dispatch thread and a 1-slot mailbox — a slow callback causes frames to be dropped, not queued.
-
-Use `camera.capabilities.estimatedMemoryBytes` to check the plugin's own memory usage (input ring + preview). Plan your sink budgets accordingly.
 
 ---
 

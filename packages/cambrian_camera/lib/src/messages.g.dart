@@ -252,7 +252,6 @@ class CamCapabilities {
     required this.evCompMin,
     required this.evCompMax,
     required this.evCompensationStep,
-    required this.estimatedMemoryBytes,
     required this.rawStreamTextureId,
     required this.rawStreamWidth,
     required this.rawStreamHeight,
@@ -284,8 +283,6 @@ class CamCapabilities {
 
   double evCompensationStep;
 
-  int estimatedMemoryBytes;
-
   /// Flutter texture ID for the GPU raw stream (passthrough, no color adjustments).
   /// 0 if raw stream is disabled.
   int rawStreamTextureId;
@@ -316,7 +313,6 @@ class CamCapabilities {
       evCompMin,
       evCompMax,
       evCompensationStep,
-      estimatedMemoryBytes,
       rawStreamTextureId,
       rawStreamWidth,
       rawStreamHeight,
@@ -340,12 +336,11 @@ class CamCapabilities {
       evCompMin: result[9]! as int,
       evCompMax: result[10]! as int,
       evCompensationStep: result[11]! as double,
-      estimatedMemoryBytes: result[12]! as int,
-      rawStreamTextureId: result[13]! as int,
-      rawStreamWidth: result[14]! as int,
-      rawStreamHeight: result[15]! as int,
-      streamWidth: result[16]! as int,
-      streamHeight: result[17]! as int,
+      rawStreamTextureId: result[12]! as int,
+      rawStreamWidth: result[13]! as int,
+      rawStreamHeight: result[14]! as int,
+      streamWidth: result[15]! as int,
+      streamHeight: result[16]! as int,
     );
   }
 }

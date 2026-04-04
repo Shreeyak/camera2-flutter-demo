@@ -126,7 +126,6 @@ class CamCapabilities {
     required this.evCompMin,
     required this.evCompMax,
     required this.evCompensationStep,
-    required this.estimatedMemoryBytes,
     required this.rawStreamTextureId,
     required this.rawStreamWidth,
     required this.rawStreamHeight,
@@ -146,7 +145,6 @@ class CamCapabilities {
   int evCompMin;
   int evCompMax;
   double evCompensationStep;
-  int estimatedMemoryBytes;
   /// Flutter texture ID for the GPU raw stream (passthrough, no color adjustments).
   /// 0 if raw stream is disabled.
   int rawStreamTextureId;

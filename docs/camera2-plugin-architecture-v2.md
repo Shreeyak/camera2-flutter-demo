@@ -214,7 +214,6 @@ class CameraCapabilities {
   final int rawStreamTextureId;   // Flutter texture ID for raw preview; 0 when disabled
   final int rawStreamWidth;       // auto-computed from aspect ratio; 0 when disabled
   final int rawStreamHeight;      // matches rawStreamHeight passed to open(); 0 when disabled
-  final int estimatedMemoryBytes;       // current native memory usage
 }
 ```
 
@@ -760,15 +759,13 @@ Example budget for the WSI scanner app (4K = 3840×2160):
 | "tracker" consumer | 960×540 | 1 (green) | 8 | 4 MB |
 | **Total (processed only)** | | | | **~336 MB** |
 
-When the raw stream is enabled, additional GPU memory is allocated for the raw path (not counted in `estimatedMemoryBytes`):
+When the raw stream is enabled, additional GPU memory is allocated for the raw path (not counted above):
 
 | Resource | Resolution | Memory |
 |----------|-----------|--------|
 | rawFBO | rawW × rawH RGBA | e.g., ~8 MB at 1920×1080 |
 | rawPBOs[2] (double-buffered) | rawW × rawH RGBA | e.g., ~16 MB at 1920×1080 |
 | rawEGLSurface (optional) | rawW × rawH | ~8 MB at 1920×1080 |
-
-The library reports `estimatedMemoryBytes` in `CameraCapabilities` (includes input ring + preview). Each `addSink()` call increases memory. Applications can query total memory before/after registering sinks.
 
 ---
 

@@ -88,7 +88,6 @@ class CameraCapabilities {
     required this.evCompMin,
     required this.evCompMax,
     required this.evCompensationStep,
-    required this.estimatedMemoryBytes,
     required this.rawStreamTextureId,
     required this.rawStreamWidth,
     required this.rawStreamHeight,
@@ -110,7 +109,6 @@ class CameraCapabilities {
         evCompMin: 0,
         evCompMax: 0,
         evCompensationStep: 0,
-        estimatedMemoryBytes: 0,
         rawStreamTextureId: 0,
         rawStreamWidth: 0,
         rawStreamHeight: 0,
@@ -134,7 +132,6 @@ class CameraCapabilities {
         evCompMin: c.evCompMin,
         evCompMax: c.evCompMax,
         evCompensationStep: c.evCompensationStep,
-        estimatedMemoryBytes: c.estimatedMemoryBytes,
         rawStreamTextureId: c.rawStreamTextureId,
         rawStreamWidth: c.rawStreamWidth,
         rawStreamHeight: c.rawStreamHeight,
@@ -154,10 +151,6 @@ class CameraCapabilities {
   final int evCompMin;
   final int evCompMax;
   final double evCompensationStep;
-
-  /// Estimated native memory usage in bytes (input ring + preview buffer).
-  /// Increases as consumers are registered via the C++ API.
-  final int estimatedMemoryBytes;
 
   /// Flutter texture ID for the GPU raw stream (passthrough, no color adjustments).
   /// 0 if raw stream is disabled.

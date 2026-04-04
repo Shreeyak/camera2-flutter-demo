@@ -270,7 +270,6 @@ struct CamCapabilities {
   var evCompMin: Int64
   var evCompMax: Int64
   var evCompensationStep: Double
-  var estimatedMemoryBytes: Int64
   /// Flutter texture ID for the GPU raw stream (passthrough, no color adjustments).
   /// 0 if raw stream is disabled.
   var rawStreamTextureId: Int64
@@ -298,12 +297,11 @@ struct CamCapabilities {
     let evCompMin = pigeonVar_list[9] as! Int64
     let evCompMax = pigeonVar_list[10] as! Int64
     let evCompensationStep = pigeonVar_list[11] as! Double
-    let estimatedMemoryBytes = pigeonVar_list[12] as! Int64
-    let rawStreamTextureId = pigeonVar_list[13] as! Int64
-    let rawStreamWidth = pigeonVar_list[14] as! Int64
-    let rawStreamHeight = pigeonVar_list[15] as! Int64
-    let streamWidth = pigeonVar_list[16] as! Int64
-    let streamHeight = pigeonVar_list[17] as! Int64
+    let rawStreamTextureId = pigeonVar_list[12] as! Int64
+    let rawStreamWidth = pigeonVar_list[13] as! Int64
+    let rawStreamHeight = pigeonVar_list[14] as! Int64
+    let streamWidth = pigeonVar_list[15] as! Int64
+    let streamHeight = pigeonVar_list[16] as! Int64
 
     return CamCapabilities(
       supportedSizes: supportedSizes,
@@ -318,7 +316,6 @@ struct CamCapabilities {
       evCompMin: evCompMin,
       evCompMax: evCompMax,
       evCompensationStep: evCompensationStep,
-      estimatedMemoryBytes: estimatedMemoryBytes,
       rawStreamTextureId: rawStreamTextureId,
       rawStreamWidth: rawStreamWidth,
       rawStreamHeight: rawStreamHeight,
@@ -340,7 +337,6 @@ struct CamCapabilities {
       evCompMin,
       evCompMax,
       evCompensationStep,
-      estimatedMemoryBytes,
       rawStreamTextureId,
       rawStreamWidth,
       rawStreamHeight,

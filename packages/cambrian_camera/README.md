@@ -57,6 +57,10 @@ class _MyState extends State<MyWidget> with WidgetsBindingObserver {
 }
 ```
 
+## Device Capabilities
+
+After `open()`, `camera.capabilities` exposes hardware ranges for building UI controls: ISO, exposure time, focus distance, zoom, EV compensation, and supported resolutions. Check `capabilities.rawStreamWidth > 0` to confirm the raw stream is active.
+
 ## Camera Settings
 
 Update ISP-level settings (ISO, exposure, focus, white balance):
@@ -108,6 +112,10 @@ is the correct order — you remove the sensor's DC offset before stretching or 
 final path = await camera.takePicture();
 print('Image saved to: $path');
 ```
+
+## Error Recovery
+
+Transient camera errors (disconnection, session failure) are handled automatically via a full teardown and re-open with exponential backoff (500ms → 8s, up to 5 retries). The `stateStream` transitions through `recovering` during this process; unrecoverable failures emit a fatal `CameraError` with `isFatal: true`.
 
 ## Cleanup
 

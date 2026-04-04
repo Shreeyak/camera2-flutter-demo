@@ -474,14 +474,6 @@ class CameraController(
             val evRange: Range<Int>? = chars.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_RANGE)
             val evStep: Rational? = chars.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_STEP)
 
-            // Estimate 4 YUV_420_888 ring-buffer slots (1.5 bytes/pixel each) plus
-            // one RGBA texture buffer if the raw preview surface is active.
-            // previewWidth/previewHeight are set by startCaptureSession() before getCapabilities()
-            // is ever called, so they always reflect the actual configured stream resolution.
-            val yuvBytes: Long = previewWidth.toLong() * previewHeight * 3L / 2L * 4L
-            val textureBytes: Long = rawW.toLong() * rawH * 4L
-            val estimatedBytes: Long = yuvBytes + textureBytes
-
             val caps =
                 CamCapabilities(
                     supportedSizes = jpegSizes,
@@ -496,7 +488,6 @@ class CameraController(
                     evCompMin = evRange?.lower?.toLong() ?: -6L,
                     evCompMax = evRange?.upper?.toLong() ?: 6L,
                     evCompensationStep = evStep?.toDouble() ?: 0.5,
-                    estimatedMemoryBytes = estimatedBytes,
                     rawStreamTextureId = rawSurfaceProducer?.id() ?: 0L,
                     rawStreamWidth = rawW.toLong(),
                     rawStreamHeight = rawH.toLong(),
