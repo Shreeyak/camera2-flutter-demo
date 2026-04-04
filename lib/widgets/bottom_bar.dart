@@ -12,6 +12,7 @@ class BottomBar extends StatelessWidget {
   final CameraCallbacks callbacks;
   final VoidCallback onToggleSettings;
   final ValueChanged<CameraSettingType?> onSettingChipTap;
+  final VoidCallback onToggleGpuControls;
 
   const BottomBar({
     super.key,
@@ -22,6 +23,7 @@ class BottomBar extends StatelessWidget {
     required this.callbacks,
     required this.onToggleSettings,
     required this.onSettingChipTap,
+    required this.onToggleGpuControls,
   });
 
   @override
@@ -44,6 +46,7 @@ class BottomBar extends StatelessWidget {
                   child: _MainActionBar(
                     isSettingsEnabled: isSettingsEnabled,
                     onToggleSettings: onToggleSettings,
+                    onToggleGpuControls: onToggleGpuControls,
                   ),
                 ),
               ),
@@ -73,14 +76,16 @@ class BottomBar extends StatelessWidget {
   }
 }
 
-// ── Main action bar with just the SETTINGS button
+// ── Main action bar with SETTINGS and CALIBRATE COLOR buttons
 class _MainActionBar extends StatelessWidget {
   final bool isSettingsEnabled;
   final VoidCallback onToggleSettings;
+  final VoidCallback onToggleGpuControls;
 
   const _MainActionBar({
     required this.isSettingsEnabled,
     required this.onToggleSettings,
+    required this.onToggleGpuControls,
   });
 
   @override
@@ -102,6 +107,13 @@ class _MainActionBar extends StatelessWidget {
                 label: 'SETTINGS',
                 isDisabled: !isSettingsEnabled,
                 onTap: onToggleSettings,
+              ),
+              const SizedBox(width: 16),
+              BottomBarActionButton(
+                icon: Icons.palette,
+                label: 'CALIBRATE COLOR',
+                isDisabled: false,
+                onTap: onToggleGpuControls,
               ),
             ],
           ),

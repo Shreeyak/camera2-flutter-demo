@@ -36,12 +36,26 @@ ImagePipeline::ImagePipeline(ANativeWindow* window, int width, int height)
     processingThread_ = std::thread(&ImagePipeline::processingLoop, this);
 
     // Built-in processed-preview consumer (post-saturation BGR → preview window).
-    addSink({"__preview"}, [this](const SinkFrame& f) {
-        cv::Mat bgr(f.height, f.width, CV_8UC3,
-                    const_cast<uint8_t*>(f.data), f.stride);
-        cv::cvtColor(bgr, previewRgba_, cv::COLOR_BGR2RGBA);
-        blitToWindow(previewWindow_, lastWidth_, lastHeight_, previewRgba_);
-    });
+    // Registered directly into consumers_ (CPU path) rather than via addSink(),
+    // so that external addSink() callers are routed to the GPU consumer vectors.
+    {
+        auto consumer      = std::make_unique<Consumer>();
+        consumer->name     = "__preview";
+        consumer->callback = [this](const SinkFrame& f) {
+            cv::Mat bgr(f.height, f.width, CV_8UC3,
+                        const_cast<uint8_t*>(f.data), f.stride);
+            cv::cvtColor(bgr, previewRgba_, cv::COLOR_BGR2RGBA);
+            blitToWindow(previewWindow_, lastWidth_, lastHeight_, previewRgba_);
+        };
+        Consumer* raw;
+        {
+            std::lock_guard<std::mutex> lock(consumersMu_);
+            raw = consumer.get();
+            consumers_.push_back(std::move(consumer));
+        }
+        startConsumerThread(raw);
+        LOGD("addSink: name=__preview role=CPU_PREVIEW");
+    }
 
     // Built-in raw-preview consumer (pre-saturation BGR → raw preview window).
     rawConsumer_ = std::make_unique<Consumer>();
@@ -418,51 +432,215 @@ void ImagePipeline::publishToConsumers(SharedFrame frame) {
     }
 }
 
+void ImagePipeline::publishToFullResConsumers(SharedFrame frame) {
+    std::lock_guard<std::mutex> lock(fullResConsumersMu_);
+    for (auto& c : fullResConsumers_) {
+        std::lock_guard<std::mutex> cl(c->mu);
+        c->pending = frame;
+        c->cv.notify_one();
+    }
+}
+
+void ImagePipeline::publishToTrackerConsumers(SharedFrame frame) {
+    std::lock_guard<std::mutex> lock(trackerConsumersMu_);
+    for (auto& c : trackerConsumers_) {
+        std::lock_guard<std::mutex> cl(c->mu);
+        c->pending = frame;
+        c->cv.notify_one();
+    }
+}
+
+void ImagePipeline::publishToRawConsumers(SharedFrame frame) {
+    std::lock_guard<std::mutex> lock(rawConsumersMu_);
+    for (auto& c : rawConsumers_) {
+        std::lock_guard<std::mutex> cl(c->mu);
+        c->pending = frame;
+        c->cv.notify_one();
+    }
+}
+
+// ---------------------------------------------------------------------------
+// GPU frame delivery (GL thread → consumer mailboxes)
+// ---------------------------------------------------------------------------
+
+void ImagePipeline::deliverFullResRgba(const uint8_t* rgba, int w, int h, int stride,
+                                        uint64_t frameId, const FrameMetadata& meta) {
+    {
+        std::lock_guard<std::mutex> lock(fullResConsumersMu_);
+        if (fullResConsumers_.empty()) return;
+    }
+    auto frame    = std::make_shared<Frame>();
+    frame->id     = frameId;
+    frame->meta   = meta;
+    // Store RGBA as CV_8UC4 for uniform frame handling; 'bgr' field reused for any pixel data.
+    frame->bgr    = cv::Mat(h, w, CV_8UC4);
+    for (int row = 0; row < h; ++row) {
+        memcpy(frame->bgr.ptr(row), rgba + row * stride,
+               static_cast<size_t>(w) * 4);
+    }
+    frame->width  = w;
+    frame->height = h;
+    frame->stride = static_cast<int>(frame->bgr.step);
+    frame->format = PixelFormat::RGBA;
+    publishToFullResConsumers(std::move(frame));
+}
+
+void ImagePipeline::deliverTrackerRgba(const uint8_t* rgba, int w, int h, int stride,
+                                        uint64_t frameId, const FrameMetadata& meta) {
+    {
+        std::lock_guard<std::mutex> lock(trackerConsumersMu_);
+        if (trackerConsumers_.empty()) return;
+    }
+    auto frame    = std::make_shared<Frame>();
+    frame->id     = frameId;
+    frame->meta   = meta;
+    frame->bgr    = cv::Mat(h, w, CV_8UC4);
+    for (int row = 0; row < h; ++row) {
+        memcpy(frame->bgr.ptr(row), rgba + row * stride,
+               static_cast<size_t>(w) * 4);
+    }
+    frame->width  = w;
+    frame->height = h;
+    frame->stride = static_cast<int>(frame->bgr.step);
+    frame->format = PixelFormat::RGBA;
+    publishToTrackerConsumers(std::move(frame));
+}
+
+void ImagePipeline::deliverRawRgba(const uint8_t* rgba, int w, int h, int stride,
+                                    uint64_t frameId, const FrameMetadata& meta) {
+    {
+        std::lock_guard<std::mutex> lock(rawConsumersMu_);
+        if (rawConsumers_.empty()) return;
+    }
+    auto frame    = std::make_shared<Frame>();
+    frame->id     = frameId;
+    frame->meta   = meta;
+    frame->bgr    = cv::Mat(h, w, CV_8UC4);
+    for (int row = 0; row < h; ++row) {
+        memcpy(frame->bgr.ptr(row), rgba + row * stride,
+               static_cast<size_t>(w) * 4);
+    }
+    frame->width  = w;
+    frame->height = h;
+    frame->stride = static_cast<int>(frame->bgr.step);
+    frame->format = PixelFormat::RGBA;
+    publishToRawConsumers(std::move(frame));
+}
+
 void ImagePipeline::addSink(const SinkConfig& config, SinkCallback callback) {
     auto consumer      = std::make_unique<Consumer>();
     consumer->name     = config.name;
     consumer->callback = std::move(callback);
 
     Consumer* raw;
-    {
-        std::lock_guard<std::mutex> lock(consumersMu_);
+    if (config.role == SinkRole::TRACKER) {
+        std::lock_guard<std::mutex> lock(trackerConsumersMu_);
         raw = consumer.get();
-        consumers_.push_back(std::move(consumer));
+        trackerConsumers_.push_back(std::move(consumer));
+    } else if (config.role == SinkRole::RAW) {
+        std::lock_guard<std::mutex> lock(rawConsumersMu_);
+        raw = consumer.get();
+        rawConsumers_.push_back(std::move(consumer));
+    } else {
+        // SinkRole::FULL_RES (default) — GPU full-res path
+        std::lock_guard<std::mutex> lock(fullResConsumersMu_);
+        raw = consumer.get();
+        fullResConsumers_.push_back(std::move(consumer));
     }
 
     startConsumerThread(raw);
-    LOGD("addSink: name=%s", config.name.c_str());
+    const char* roleStr = config.role == SinkRole::TRACKER ? "TRACKER"
+                        : config.role == SinkRole::RAW     ? "RAW"
+                                                           : "FULL_RES";
+    LOGD("addSink: name=%s role=%s", config.name.c_str(), roleStr);
 }
 
 void ImagePipeline::removeSink(const std::string& name) {
-    std::unique_lock<std::mutex> lock(consumersMu_);
-    auto it = std::find_if(consumers_.begin(), consumers_.end(),
-                           [&name](const std::unique_ptr<Consumer>& c) {
-                               return c->name == name;
-                           });
-    if (it == consumers_.end()) {
-        LOGE("removeSink: unknown sink '%s'", name.c_str());
-        return;
+    // Search full-res GPU consumers first.
+    {
+        std::unique_lock<std::mutex> lock(fullResConsumersMu_);
+        auto it = std::find_if(fullResConsumers_.begin(), fullResConsumers_.end(),
+                               [&name](const std::unique_ptr<Consumer>& c) {
+                                   return c->name == name;
+                               });
+        if (it != fullResConsumers_.end()) {
+            auto consumer = std::move(*it);
+            fullResConsumers_.erase(it);
+            lock.unlock();
+            shutdownConsumer(consumer.get());
+            LOGD("removeSink: '%s' removed from fullResConsumers", name.c_str());
+            return;
+        }
     }
-
-    // Move out before releasing the lock so we can join without holding consumersMu_.
-    auto consumer = std::move(*it);
-    consumers_.erase(it);
-    lock.unlock();
-
-    shutdownConsumer(consumer.get());
-    LOGD("removeSink: '%s' removed", name.c_str());
+    // Search tracker GPU consumers.
+    {
+        std::unique_lock<std::mutex> lock(trackerConsumersMu_);
+        auto it = std::find_if(trackerConsumers_.begin(), trackerConsumers_.end(),
+                               [&name](const std::unique_ptr<Consumer>& c) {
+                                   return c->name == name;
+                               });
+        if (it != trackerConsumers_.end()) {
+            auto consumer = std::move(*it);
+            trackerConsumers_.erase(it);
+            lock.unlock();
+            shutdownConsumer(consumer.get());
+            LOGD("removeSink: '%s' removed from trackerConsumers", name.c_str());
+            return;
+        }
+    }
+    // Search raw GPU consumers.
+    {
+        std::unique_lock<std::mutex> lock(rawConsumersMu_);
+        auto it = std::find_if(rawConsumers_.begin(), rawConsumers_.end(),
+                               [&name](const std::unique_ptr<Consumer>& c) {
+                                   return c->name == name;
+                               });
+        if (it != rawConsumers_.end()) {
+            auto consumer = std::move(*it);
+            rawConsumers_.erase(it);
+            lock.unlock();
+            shutdownConsumer(consumer.get());
+            LOGD("removeSink: '%s' removed from rawConsumers", name.c_str());
+            return;
+        }
+    }
+    // Fall back to CPU consumers_ vector (built-in __preview and legacy callers).
+    {
+        std::unique_lock<std::mutex> lock(consumersMu_);
+        auto it = std::find_if(consumers_.begin(), consumers_.end(),
+                               [&name](const std::unique_ptr<Consumer>& c) {
+                                   return c->name == name;
+                               });
+        if (it == consumers_.end()) {
+            LOGE("removeSink: unknown sink '%s'", name.c_str());
+            return;
+        }
+        // Move out before releasing the lock so we can join without holding consumersMu_.
+        auto consumer = std::move(*it);
+        consumers_.erase(it);
+        lock.unlock();
+        shutdownConsumer(consumer.get());
+        LOGD("removeSink: '%s' removed from consumers", name.c_str());
+    }
 }
 
 void ImagePipeline::shutdownConsumers() {
-    std::vector<std::unique_ptr<Consumer>> local;
-    {
-        std::lock_guard<std::mutex> lock(consumersMu_);
-        local = std::move(consumers_);
-    }
-    for (auto& c : local) {
-        shutdownConsumer(c.get());
-    }
+    // Helper: move a vector out under its lock, then join all consumers outside.
+    auto drainVector = [&](auto& mu, auto& vec) {
+        std::vector<std::unique_ptr<Consumer>> local;
+        {
+            std::lock_guard<std::mutex> lock(mu);
+            local = std::move(vec);
+        }
+        for (auto& c : local) {
+            shutdownConsumer(c.get());
+        }
+    };
+
+    drainVector(consumersMu_, consumers_);
+    drainVector(fullResConsumersMu_, fullResConsumers_);
+    drainVector(trackerConsumersMu_, trackerConsumers_);
+    drainVector(rawConsumersMu_, rawConsumers_);
     LOGD("shutdownConsumers: all consumers removed");
 }
 

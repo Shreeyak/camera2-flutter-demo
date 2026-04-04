@@ -119,18 +119,21 @@ dispatchThread thread
 running        atomic<bool>
 ```
 
-### ProcessingParams  _(ImagePipeline.h)_
-All user-adjustable processing knobs. Snapshot-copied into processingLoop under
-`paramsMu_` at the start of each frame — inner loop holds no lock.
+### ProcessingParams  _(ImagePipeline.h / GpuRenderer.cpp)_
+All user-adjustable processing knobs. On the CPU path these are snapshot-copied into
+processingLoop under `paramsMu_` at the start of each frame. On the GPU path (active)
+they are uploaded as GLSL uniforms via `GpuRenderer::setAdjustments()`.
 
+**GPU renderer — active, applied as GLSL uniforms:**
 ```
-blackR/G/B     float   [0, 0.5]   black level (stored, not yet applied)
-gamma          float   [0.1, 4.0] (stored, not yet applied)
-histBlackPoint float   [0, 1]     (stored, not yet applied)
-histWhitePoint float   [0, 1]     (stored, not yet applied)
-autoStretch    bool               (stored, not yet applied)
-brightness     float   [-1, 1]    (stored, not yet applied)
-saturation     float   [0, 3]     ACTIVE — luminance-preserving formula
+blackR/G/B     float   [0, 0.5]   per-channel black level subtraction:
+                                   rgb = max(rgb - blackBalance, 0.0)
+                                   applied first, before all other adjustments
+brightness     float   [-1, 1]    additive offset: rgb += brightness
+contrast       float   [-1, 1]    pivot around mid-grey:
+                                   rgb = (rgb - 0.5) * (contrast + 1.0) + 0.5
+saturation     float   [-1, 1]    luminance-preserving mix:
+                                   rgb = mix(luma, rgb, saturation + 1.0)
 ```
 
 ---

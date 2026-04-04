@@ -126,9 +126,6 @@ All user-adjustable processing knobs. Snapshot-copied into processingLoop under
 ```
 blackR/G/B     float   [0, 0.5]   black level (stored, not yet applied)
 gamma          float   [0.1, 4.0] (stored, not yet applied)
-histBlackPoint float   [0, 1]     (stored, not yet applied)
-histWhitePoint float   [0, 1]     (stored, not yet applied)
-autoStretch    bool               (stored, not yet applied)
 brightness     float   [-1, 1]    (stored, not yet applied)
 saturation     float   [0, 3]     ACTIVE — luminance-preserving formula
 ```
@@ -152,7 +149,7 @@ saturation     float   [0, 3]     ACTIVE — luminance-preserving formula
 │                  │   │                      │   │  [user sinks...]     │
 └──────────────────┘   └──────────────────────┘   └──────────────────────┘
 
-   Appliction/JNI
+   Application/JNI
    ┌──────────────────┐
    │  Dart/JNI thread │
    │                  │

@@ -17,6 +17,9 @@ struct FrameMetadata {
     int64_t sensorTimestampNs; ///< Sensor capture start time, nanoseconds
     int64_t exposureTimeNs;    ///< Actual exposure duration, nanoseconds
     int32_t iso;               ///< Sensor sensitivity (ISO equivalent)
+    int32_t displayRotation;   ///< Device display rotation in degrees CW from portrait: 0, 90, 180, 270.
+                               ///< Pixel data is always landscape-right; use this to relate it to
+                               ///< what was visible on screen at capture time.
     // Future: focus distance, WB gains, lens intrinsics, etc.
 };
 
@@ -40,9 +43,18 @@ struct SinkFrame {
     FrameMetadata meta;     ///< Per-frame sensor metadata
 };
 
+/// Routing role for a registered sink.
+/// Controls which frame stream the sink receives.
+enum class SinkRole {
+    FULL_RES,  ///< receives full-resolution RGBA (stitcher, any full-res sink)
+    TRACKER,   ///< receives 480p-height downscaled RGBA
+    RAW,       ///< receives passthrough (pre-color-processing) RGBA at rawStreamHeight
+};
+
 /// Configuration for registering a consumer sink on the pipeline.
 struct SinkConfig {
-    std::string name;  ///< Unique identifier; passed to removeSink() to deregister
+    std::string name;                    ///< Unique identifier; passed to removeSink() to deregister
+    SinkRole    role = SinkRole::FULL_RES;  ///< Routing role; default FULL_RES is backward compatible
 };
 
 /// Callback type invoked for each frame delivered to a sink.
@@ -57,8 +69,13 @@ class IImagePipeline {
 public:
     virtual ~IImagePipeline() = default;
 
-    /// Register a consumer sink that receives processed BGR frames.
+    /// Register a consumer sink on the pipeline.
     /// The sink is identified by config.name; use that name with removeSink().
+    ///
+    /// Routing is determined by config.role:
+    ///   - SinkRole::FULL_RES — receives full-resolution RGBA via deliverFullResRgba().
+    ///   - SinkRole::TRACKER  — receives 480p-height downscaled RGBA via deliverTrackerRgba().
+    ///   - SinkRole::RAW      — receives passthrough RGBA at rawStreamHeight via deliverRawRgba().
     virtual void addSink(const SinkConfig& config, SinkCallback callback) = 0;
 
     /// Remove a previously registered sink by name. Blocks until its dispatch thread exits.

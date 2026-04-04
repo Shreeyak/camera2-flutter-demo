@@ -146,6 +146,10 @@ struct CamSettings {
   /// NOTE: has no effect when isoMode == "manual" or exposureMode == "manual"
   /// because CONTROL_AE_MODE is set to OFF in that case.
   var evCompensation: Int64? = nil
+  /// Enable GPU raw (passthrough) stream. Null = don't change.
+  var enableRawStream: Bool? = nil
+  /// Requested height of the GPU raw stream in pixels. Null = don't change. 0 = use default.
+  var rawStreamHeight: Int64? = nil
 
 
   // swift-format-ignore: AlwaysUseLowerCamelCase
@@ -164,6 +168,8 @@ struct CamSettings {
     let noiseReductionMode: Int64? = nilOrValue(pigeonVar_list[11])
     let edgeMode: Int64? = nilOrValue(pigeonVar_list[12])
     let evCompensation: Int64? = nilOrValue(pigeonVar_list[13])
+    let enableRawStream: Bool? = nilOrValue(pigeonVar_list[14])
+    let rawStreamHeight: Int64? = nilOrValue(pigeonVar_list[15])
 
     return CamSettings(
       isoMode: isoMode,
@@ -179,7 +185,9 @@ struct CamSettings {
       zoomRatio: zoomRatio,
       noiseReductionMode: noiseReductionMode,
       edgeMode: edgeMode,
-      evCompensation: evCompensation
+      evCompensation: evCompensation,
+      enableRawStream: enableRawStream,
+      rawStreamHeight: rawStreamHeight
     )
   }
   func toList() -> [Any?] {
@@ -198,6 +206,8 @@ struct CamSettings {
       noiseReductionMode,
       edgeMode,
       evCompensation,
+      enableRawStream,
+      rawStreamHeight,
     ]
   }
 }
@@ -208,12 +218,8 @@ struct CamProcessingParams {
   var blackG: Double
   var blackB: Double
   var gamma: Double
-  var histBlackPoint: Double
-  var histWhitePoint: Double
-  var autoStretch: Bool
-  var autoStretchLow: Double
-  var autoStretchHigh: Double
   var brightness: Double
+  var contrast: Double
   var saturation: Double
 
 
@@ -223,25 +229,17 @@ struct CamProcessingParams {
     let blackG = pigeonVar_list[1] as! Double
     let blackB = pigeonVar_list[2] as! Double
     let gamma = pigeonVar_list[3] as! Double
-    let histBlackPoint = pigeonVar_list[4] as! Double
-    let histWhitePoint = pigeonVar_list[5] as! Double
-    let autoStretch = pigeonVar_list[6] as! Bool
-    let autoStretchLow = pigeonVar_list[7] as! Double
-    let autoStretchHigh = pigeonVar_list[8] as! Double
-    let brightness = pigeonVar_list[9] as! Double
-    let saturation = pigeonVar_list[10] as! Double
+    let brightness = pigeonVar_list[4] as! Double
+    let contrast = pigeonVar_list[5] as! Double
+    let saturation = pigeonVar_list[6] as! Double
 
     return CamProcessingParams(
       blackR: blackR,
       blackG: blackG,
       blackB: blackB,
       gamma: gamma,
-      histBlackPoint: histBlackPoint,
-      histWhitePoint: histWhitePoint,
-      autoStretch: autoStretch,
-      autoStretchLow: autoStretchLow,
-      autoStretchHigh: autoStretchHigh,
       brightness: brightness,
+      contrast: contrast,
       saturation: saturation
     )
   }
@@ -251,12 +249,8 @@ struct CamProcessingParams {
       blackG,
       blackB,
       gamma,
-      histBlackPoint,
-      histWhitePoint,
-      autoStretch,
-      autoStretchLow,
-      autoStretchHigh,
       brightness,
+      contrast,
       saturation,
     ]
   }
@@ -276,13 +270,17 @@ struct CamCapabilities {
   var evCompMin: Int64
   var evCompMax: Int64
   var evCompensationStep: Double
-  var estimatedMemoryBytes: Int64
-  /// Width of the YUV stream used by the C++ pipeline (pixels).
-  var yuvStreamWidth: Int64
-  /// Height of the YUV stream used by the C++ pipeline (pixels).
-  var yuvStreamHeight: Int64
-  /// Flutter texture ID for the raw (pre-processing) preview.
+  /// Flutter texture ID for the GPU raw stream (passthrough, no color adjustments).
+  /// 0 if raw stream is disabled.
   var rawStreamTextureId: Int64
+  /// Actual computed width of the GPU raw stream (pixels). 0 if raw stream is disabled.
+  var rawStreamWidth: Int64
+  /// Requested height of the GPU raw stream (pixels). 0 if raw stream is disabled.
+  var rawStreamHeight: Int64
+  /// Width of the GPU processed stream texture (pixels). Matches the largest 4:3 YUV size.
+  var streamWidth: Int64
+  /// Height of the GPU processed stream texture (pixels).
+  var streamHeight: Int64
 
 
   // swift-format-ignore: AlwaysUseLowerCamelCase
@@ -299,10 +297,11 @@ struct CamCapabilities {
     let evCompMin = pigeonVar_list[9] as! Int64
     let evCompMax = pigeonVar_list[10] as! Int64
     let evCompensationStep = pigeonVar_list[11] as! Double
-    let estimatedMemoryBytes = pigeonVar_list[12] as! Int64
-    let yuvStreamWidth = pigeonVar_list[13] as! Int64
-    let yuvStreamHeight = pigeonVar_list[14] as! Int64
-    let rawStreamTextureId = pigeonVar_list[15] as! Int64
+    let rawStreamTextureId = pigeonVar_list[12] as! Int64
+    let rawStreamWidth = pigeonVar_list[13] as! Int64
+    let rawStreamHeight = pigeonVar_list[14] as! Int64
+    let streamWidth = pigeonVar_list[15] as! Int64
+    let streamHeight = pigeonVar_list[16] as! Int64
 
     return CamCapabilities(
       supportedSizes: supportedSizes,
@@ -317,10 +316,11 @@ struct CamCapabilities {
       evCompMin: evCompMin,
       evCompMax: evCompMax,
       evCompensationStep: evCompensationStep,
-      estimatedMemoryBytes: estimatedMemoryBytes,
-      yuvStreamWidth: yuvStreamWidth,
-      yuvStreamHeight: yuvStreamHeight,
-      rawStreamTextureId: rawStreamTextureId
+      rawStreamTextureId: rawStreamTextureId,
+      rawStreamWidth: rawStreamWidth,
+      rawStreamHeight: rawStreamHeight,
+      streamWidth: streamWidth,
+      streamHeight: streamHeight
     )
   }
   func toList() -> [Any?] {
@@ -337,10 +337,11 @@ struct CamCapabilities {
       evCompMin,
       evCompMax,
       evCompensationStep,
-      estimatedMemoryBytes,
-      yuvStreamWidth,
-      yuvStreamHeight,
       rawStreamTextureId,
+      rawStreamWidth,
+      rawStreamHeight,
+      streamWidth,
+      streamHeight,
     ]
   }
 }
@@ -530,6 +531,12 @@ protocol CameraHostApi {
   func takePicture(handle: Int64, completion: @escaping (Result<String, Error>) -> Void)
   func getNativePipelineHandle(handle: Int64, completion: @escaping (Result<Int64?, Error>) -> Void)
   func close(handle: Int64, completion: @escaping (Result<Void, Error>) -> Void)
+  /// Returns the current display rotation in degrees CW from portrait: 0, 90, 180, or 270.
+  ///
+  /// Used by Dart preview widgets to select the correct [RotatedBox.quarterTurns]
+  /// for all four device orientations, since [MediaQuery.orientation] only
+  /// distinguishes portrait from landscape.
+  func getDisplayRotation() throws -> Int64
 }
 
 /// Generated setup class from Pigeon to handle messages through the `binaryMessenger`.
@@ -656,6 +663,24 @@ class CameraHostApiSetup {
     } else {
       closeChannel.setMessageHandler(nil)
     }
+    /// Returns the current display rotation in degrees CW from portrait: 0, 90, 180, or 270.
+    ///
+    /// Used by Dart preview widgets to select the correct [RotatedBox.quarterTurns]
+    /// for all four device orientations, since [MediaQuery.orientation] only
+    /// distinguishes portrait from landscape.
+    let getDisplayRotationChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.cambrian_camera.CameraHostApi.getDisplayRotation\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
+    if let api = api {
+      getDisplayRotationChannel.setMessageHandler { _, reply in
+        do {
+          let result = try api.getDisplayRotation()
+          reply(wrapResult(result))
+        } catch {
+          reply(wrapError(error))
+        }
+      }
+    } else {
+      getDisplayRotationChannel.setMessageHandler(nil)
+    }
   }
 }
 /// Generated protocol from Pigeon that represents Flutter messages that can be called from Swift.
@@ -685,7 +710,7 @@ class CameraFlutterApi: CameraFlutterApiProtocol {
       if listResponse.count > 1 {
         let code: String = listResponse[0] as! String
         let message: String? = nilOrValue(listResponse[1])
-        let details: Any? = listResponse[2]
+        let details: Any? = nilOrValue(listResponse[2])
         completion(.failure(PigeonError(code: code, message: message, details: details)))
       } else {
         completion(.success(Void()))
@@ -703,7 +728,7 @@ class CameraFlutterApi: CameraFlutterApiProtocol {
       if listResponse.count > 1 {
         let code: String = listResponse[0] as! String
         let message: String? = nilOrValue(listResponse[1])
-        let details: Any? = listResponse[2]
+        let details: Any? = nilOrValue(listResponse[2])
         completion(.failure(PigeonError(code: code, message: message, details: details)))
       } else {
         completion(.success(Void()))
@@ -721,7 +746,7 @@ class CameraFlutterApi: CameraFlutterApiProtocol {
       if listResponse.count > 1 {
         let code: String = listResponse[0] as! String
         let message: String? = nilOrValue(listResponse[1])
-        let details: Any? = listResponse[2]
+        let details: Any? = nilOrValue(listResponse[2])
         completion(.failure(PigeonError(code: code, message: message, details: details)))
       } else {
         completion(.success(Void()))

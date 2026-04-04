@@ -89,6 +89,8 @@ class CamSettings {
     this.noiseReductionMode,
     this.edgeMode,
     this.evCompensation,
+    this.enableRawStream,
+    this.rawStreamHeight,
   });
 
   /// "auto" | "manual" | null (don't change).
@@ -135,6 +137,12 @@ class CamSettings {
   /// because CONTROL_AE_MODE is set to OFF in that case.
   int? evCompensation;
 
+  /// Enable GPU raw (passthrough) stream. Null = don't change.
+  bool? enableRawStream;
+
+  /// Requested height of the GPU raw stream in pixels. Null = don't change. 0 = use default.
+  int? rawStreamHeight;
+
   Object encode() {
     return <Object?>[
       isoMode,
@@ -151,6 +159,8 @@ class CamSettings {
       noiseReductionMode,
       edgeMode,
       evCompensation,
+      enableRawStream,
+      rawStreamHeight,
     ];
   }
 
@@ -171,6 +181,8 @@ class CamSettings {
       noiseReductionMode: result[11] as int?,
       edgeMode: result[12] as int?,
       evCompensation: result[13] as int?,
+      enableRawStream: result[14] as bool?,
+      rawStreamHeight: result[15] as int?,
     );
   }
 }
@@ -181,12 +193,8 @@ class CamProcessingParams {
     required this.blackG,
     required this.blackB,
     required this.gamma,
-    required this.histBlackPoint,
-    required this.histWhitePoint,
-    required this.autoStretch,
-    required this.autoStretchLow,
-    required this.autoStretchHigh,
     required this.brightness,
+    required this.contrast,
     required this.saturation,
   });
 
@@ -198,17 +206,9 @@ class CamProcessingParams {
 
   double gamma;
 
-  double histBlackPoint;
-
-  double histWhitePoint;
-
-  bool autoStretch;
-
-  double autoStretchLow;
-
-  double autoStretchHigh;
-
   double brightness;
+
+  double contrast;
 
   double saturation;
 
@@ -218,12 +218,8 @@ class CamProcessingParams {
       blackG,
       blackB,
       gamma,
-      histBlackPoint,
-      histWhitePoint,
-      autoStretch,
-      autoStretchLow,
-      autoStretchHigh,
       brightness,
+      contrast,
       saturation,
     ];
   }
@@ -235,13 +231,9 @@ class CamProcessingParams {
       blackG: result[1]! as double,
       blackB: result[2]! as double,
       gamma: result[3]! as double,
-      histBlackPoint: result[4]! as double,
-      histWhitePoint: result[5]! as double,
-      autoStretch: result[6]! as bool,
-      autoStretchLow: result[7]! as double,
-      autoStretchHigh: result[8]! as double,
-      brightness: result[9]! as double,
-      saturation: result[10]! as double,
+      brightness: result[4]! as double,
+      contrast: result[5]! as double,
+      saturation: result[6]! as double,
     );
   }
 }
@@ -260,10 +252,11 @@ class CamCapabilities {
     required this.evCompMin,
     required this.evCompMax,
     required this.evCompensationStep,
-    required this.estimatedMemoryBytes,
-    required this.yuvStreamWidth,
-    required this.yuvStreamHeight,
     required this.rawStreamTextureId,
+    required this.rawStreamWidth,
+    required this.rawStreamHeight,
+    required this.streamWidth,
+    required this.streamHeight,
   });
 
   List<CamSize> supportedSizes;
@@ -290,16 +283,21 @@ class CamCapabilities {
 
   double evCompensationStep;
 
-  int estimatedMemoryBytes;
-
-  /// Width of the YUV stream used by the C++ pipeline (pixels).
-  int yuvStreamWidth;
-
-  /// Height of the YUV stream used by the C++ pipeline (pixels).
-  int yuvStreamHeight;
-
-  /// Flutter texture ID for the raw (pre-processing) preview.
+  /// Flutter texture ID for the GPU raw stream (passthrough, no color adjustments).
+  /// 0 if raw stream is disabled.
   int rawStreamTextureId;
+
+  /// Actual computed width of the GPU raw stream (pixels). 0 if raw stream is disabled.
+  int rawStreamWidth;
+
+  /// Requested height of the GPU raw stream (pixels). 0 if raw stream is disabled.
+  int rawStreamHeight;
+
+  /// Width of the GPU processed stream texture (pixels). Matches the largest 4:3 YUV size.
+  int streamWidth;
+
+  /// Height of the GPU processed stream texture (pixels).
+  int streamHeight;
 
   Object encode() {
     return <Object?>[
@@ -315,10 +313,11 @@ class CamCapabilities {
       evCompMin,
       evCompMax,
       evCompensationStep,
-      estimatedMemoryBytes,
-      yuvStreamWidth,
-      yuvStreamHeight,
       rawStreamTextureId,
+      rawStreamWidth,
+      rawStreamHeight,
+      streamWidth,
+      streamHeight,
     ];
   }
 
@@ -337,10 +336,11 @@ class CamCapabilities {
       evCompMin: result[9]! as int,
       evCompMax: result[10]! as int,
       evCompensationStep: result[11]! as double,
-      estimatedMemoryBytes: result[12]! as int,
-      yuvStreamWidth: result[13]! as int,
-      yuvStreamHeight: result[14]! as int,
-      rawStreamTextureId: result[15]! as int,
+      rawStreamTextureId: result[12]! as int,
+      rawStreamWidth: result[13]! as int,
+      rawStreamHeight: result[14]! as int,
+      streamWidth: result[15]! as int,
+      streamHeight: result[16]! as int,
     );
   }
 }
@@ -696,6 +696,38 @@ class CameraHostApi {
       );
     } else {
       return;
+    }
+  }
+
+  /// Returns the current display rotation in degrees CW from portrait: 0, 90, 180, or 270.
+  ///
+  /// Used by Dart preview widgets to select the correct [RotatedBox.quarterTurns]
+  /// for all four device orientations, since [MediaQuery.orientation] only
+  /// distinguishes portrait from landscape.
+  Future<int> getDisplayRotation() async {
+    final String pigeonVar_channelName = 'dev.flutter.pigeon.cambrian_camera.CameraHostApi.getDisplayRotation$pigeonVar_messageChannelSuffix';
+    final BasicMessageChannel<Object?> pigeonVar_channel = BasicMessageChannel<Object?>(
+      pigeonVar_channelName,
+      pigeonChannelCodec,
+      binaryMessenger: pigeonVar_binaryMessenger,
+    );
+    final List<Object?>? pigeonVar_replyList =
+        await pigeonVar_channel.send(null) as List<Object?>?;
+    if (pigeonVar_replyList == null) {
+      throw _createConnectionError(pigeonVar_channelName);
+    } else if (pigeonVar_replyList.length > 1) {
+      throw PlatformException(
+        code: pigeonVar_replyList[0]! as String,
+        message: pigeonVar_replyList[1] as String?,
+        details: pigeonVar_replyList[2],
+      );
+    } else if (pigeonVar_replyList[0] == null) {
+      throw PlatformException(
+        code: 'null-error',
+        message: 'Host platform returned null value for non-null return value.',
+      );
+    } else {
+      return (pigeonVar_replyList[0] as int?)!;
     }
   }
 }

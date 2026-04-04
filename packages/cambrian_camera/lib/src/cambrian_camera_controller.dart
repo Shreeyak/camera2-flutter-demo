@@ -5,7 +5,6 @@ import 'package:flutter/widgets.dart';
 import 'camera_settings.dart';
 import 'camera_settings_serializer.dart';
 import 'camera_state.dart';
-import 'cambrian_camera_preview.dart';
 import 'frame_result.dart' show FrameResult;
 import 'messages.g.dart';
 
@@ -13,11 +12,19 @@ import 'messages.g.dart';
 ///
 /// Usage:
 /// ```dart
-/// final camera = await CambrianCamera.open();
-/// // Show preview
-/// camera.buildPreview()
+/// final camera = await CambrianCamera.open(
+///   settings: CameraSettings(
+///     iso: AutoValue.auto(),
+///     focus: AutoValue.auto(),
+///     enableRawStream: true,        // Enable dual-stream preview
+///     rawStreamHeight: 720,          // Request 720p height
+///   ),
+/// );
 /// // Listen for state changes
 /// camera.stateStream.listen((state) { ... });
+/// // Get preview textures (streams)
+/// camera.toneMappedTexture.listen((info) { /* render processed stream */ });
+/// camera.rawTexture.listen((info) { /* render raw stream */ });
 /// // Adjust settings — only send what changed, omitted fields are preserved
 /// camera.updateSettings(CameraSettings(iso: AutoValue.manual(400)));
 /// camera.updateSettings(CameraSettings(focus: AutoValue.auto()));
@@ -39,10 +46,12 @@ class CambrianCamera {
     required int handle,
     required CameraHostApi hostApi,
     required CameraCapabilities capabilities,
+    required bool enableRawStream,
     CameraState initialState = CameraState.closed,
   }) : _handle = handle,
        _hostApi = hostApi,
        _capabilities = capabilities,
+       _enableRawStream = enableRawStream,
        _currentState = initialState,
        _stateController = StreamController<CameraState>.broadcast(),
        _errorController = StreamController<CameraError>.broadcast(),
@@ -91,6 +100,10 @@ class CambrianCamera {
   /// Opaque handle identifying this camera in platform channel calls.
   /// Also serves as the Flutter [Texture] widget's texture ID.
   final int _handle;
+
+  /// Whether the raw (pre-processing) GPU stream was requested via [open].
+  final bool _enableRawStream;
+
   final CameraHostApi _hostApi;
   // Non-final: set to CameraCapabilities.empty() at construction, then updated
   // with real values from getCapabilities() before open() resolves.
@@ -104,6 +117,9 @@ class CambrianCamera {
   /// to avoid a race where the streaming event fires before the widget subscribes.
   CameraState _currentState;
 
+  /// Whether [close] has been called on this camera instance.
+  bool _closed = false;
+
   // ---------------------------------------------------------------------------
   // Factory
   // ---------------------------------------------------------------------------
@@ -112,6 +128,10 @@ class CambrianCamera {
   ///
   /// [cameraId] selects a specific device; pass null to use the default camera.
   /// [settings] apply initial ISP settings before streaming starts.
+  ///
+  /// To enable the GPU raw (passthrough) preview stream, set [CameraSettings.enableRawStream]
+  /// to true in the settings. The [CameraSettings.rawStreamHeight] field controls the
+  /// requested height of the raw stream; 0 uses a default.
   ///
   /// Throws [PlatformException] if the camera cannot be opened (e.g. permission
   /// denied). After opening, errors are delivered via [errorStream].
@@ -123,8 +143,14 @@ class CambrianCamera {
     // Ensure Flutter→Dart callbacks are wired before we open.
     _ensureFlutterApiSetup();
 
+    // Extract raw stream settings, defaulting to false if not specified.
+    final enableRawStream = settings?.enableRawStream ?? false;
+
     // The handle returned by the platform is also used as the texture ID.
-    final handle = await api.open(cameraId, settings?.toCam());
+    final handle = await api.open(
+      cameraId,
+      settings?.toCam(),
+    );
 
     // Register the instance immediately after open() so that any state/error
     // callbacks fired during the getCapabilities round-trip are not dropped.
@@ -132,6 +158,7 @@ class CambrianCamera {
       handle: handle,
       hostApi: api,
       capabilities: CameraCapabilities.empty(), // replaced below
+      enableRawStream: enableRawStream,
       initialState: CameraState.streaming,
     );
 
@@ -149,10 +176,61 @@ class CambrianCamera {
   // Public API
   // ---------------------------------------------------------------------------
 
-  /// Flutter texture ID for the processed (post-pipeline) preview stream.
+  /// Emits a [CameraTextureInfo] each time the tone-mapped (color-processed)
+  /// stream becomes ready for display.
   ///
-  /// Prefer [buildPreview] over constructing a [Texture] widget manually.
-  int get processedStreamTextureId => _handle;
+  /// Emits the current state immediately if already streaming, then continues
+  /// with future state changes. This ensures late subscribers don't miss the
+  /// streaming transition event.
+  Stream<CameraTextureInfo> get toneMappedTexture => _toneMappedTextureStream();
+
+  Stream<CameraTextureInfo> _toneMappedTextureStream() async* {
+    if (_currentState == CameraState.streaming) {
+      yield CameraTextureInfo(
+        textureId: _handle,
+        width: _capabilities.streamWidth,
+        height: _capabilities.streamHeight,
+      );
+    }
+    yield* stateStream
+        .where((s) => s == CameraState.streaming)
+        .map((_) => CameraTextureInfo(
+              textureId: _handle,
+              width: _capabilities.streamWidth,
+              height: _capabilities.streamHeight,
+            ));
+  }
+
+  /// Emits a [CameraTextureInfo] each time the raw (unprocessed) stream
+  /// becomes ready for display. Only emits if [enableRawStream] was true
+  /// when [open] was called.
+  ///
+  /// Emits the current state immediately if already streaming, then continues
+  /// with future state changes. This ensures late subscribers don't miss the
+  /// streaming transition event.
+  Stream<CameraTextureInfo> get rawTexture => _rawTextureStream();
+
+  Stream<CameraTextureInfo> _rawTextureStream() async* {
+    if (_currentState == CameraState.streaming &&
+        _enableRawStream &&
+        _capabilities.rawStreamTextureId != 0) {
+      yield CameraTextureInfo(
+        textureId: _capabilities.rawStreamTextureId,
+        width: _capabilities.rawStreamWidth,
+        height: _capabilities.rawStreamHeight,
+      );
+    }
+    yield* stateStream
+        .where((s) =>
+            s == CameraState.streaming &&
+            _enableRawStream &&
+            _capabilities.rawStreamTextureId != 0)
+        .map((_) => CameraTextureInfo(
+              textureId: _capabilities.rawStreamTextureId,
+              width: _capabilities.rawStreamWidth,
+              height: _capabilities.rawStreamHeight,
+            ));
+  }
 
   /// Device capabilities (resolution list, ISO/exposure ranges, etc.).
   CameraCapabilities get capabilities => _capabilities;
@@ -162,6 +240,9 @@ class CambrianCamera {
   /// Use this as [StreamBuilder.initialData] so the preview widget renders
   /// correctly when it is first built after [open] resolves.
   CameraState get state => _currentState;
+
+  /// Whether [close] has been called on this camera instance.
+  bool get isClosed => _closed;
 
   /// Broadcasts camera lifecycle state changes.
   ///
@@ -210,6 +291,12 @@ class CambrianCamera {
   /// Does not interrupt the streaming pipeline.
   Future<String> takePicture() => _hostApi.takePicture(_handle);
 
+  /// Returns the current display rotation in degrees CW from portrait: 0, 90, 180, or 270.
+  ///
+  /// This is a device-level query, not a per-camera query. Used by preview widgets
+  /// to select the correct [RotatedBox.quarterTurns] for all four device orientations.
+  static Future<int> getDisplayRotation() => CameraHostApi().getDisplayRotation();
+
   /// Returns the native `IImagePipeline*` pointer as an int64, or null if the
   /// pipeline is not yet initialized.
   ///
@@ -218,17 +305,16 @@ class CambrianCamera {
   Future<int?> getNativePipelineHandle() =>
       _hostApi.getNativePipelineHandle(_handle);
 
-  /// Returns a widget that displays the camera preview.
-  ///
-  /// Internally wraps a Flutter [Texture] widget. Shows [placeholder] while
-  /// the camera is not yet streaming (e.g. during opening or recovery).
-  Widget buildPreview({BoxFit fit = BoxFit.contain, Widget? placeholder}) =>
-      CambrianCameraPreview(camera: this, fit: fit, placeholder: placeholder);
 
   /// Closes the camera and releases all native resources.
   ///
   /// After this call the instance must not be used again.
+  /// Safe to call multiple times; subsequent calls are no-ops.
   Future<void> close() async {
+    if (_closed) return;
+    // Set before the try block intentionally: prevents concurrent/reentrant second
+    // calls from reaching the native layer even if _hostApi.close() throws.
+    _closed = true;
     try {
       await _hostApi.close(_handle);
     } finally {
@@ -290,3 +376,4 @@ class _FlutterApiDispatcher extends CameraFlutterApi {
     CambrianCamera._instances[handle]?._onFrameResult(result);
   }
 }
+

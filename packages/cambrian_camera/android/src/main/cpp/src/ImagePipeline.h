@@ -4,9 +4,13 @@
 // shared BGR frames to registered consumer sinks via per-consumer mailboxes.
 //
 // Thread safety — lock ordering (always acquire in this order):
-//   1. windowMu_    — ANativeWindow access (setPreviewWindow, blitToWindow)
-//   2. consumersMu_ — consumers_ vector (addSink, removeSink, publishToConsumers)
-//   3. Consumer::mu — per-consumer mailbox (publishToConsumers, dispatch thread)
+//   1. windowMu_           — ANativeWindow access (setPreviewWindow, blitToWindow)
+//   2. consumersMu_        — CPU path consumers_ vector (addSink ctor path, removeSink, publishToConsumers)
+//      fullResConsumersMu_ — GPU full-res consumers vector (addSink FULL_RES, removeSink, publishToFullResConsumers)
+//      trackerConsumersMu_ — GPU tracker consumers vector (addSink TRACKER, removeSink, publishToTrackerConsumers)
+//      rawConsumersMu_     — GPU raw consumers vector (addSink RAW, removeSink, publishToRawConsumers)
+//      (consumersMu_, fullResConsumersMu_, trackerConsumersMu_, rawConsumersMu_ are independent of each other)
+//   3. Consumer::mu        — per-consumer mailbox (publish*, dispatch thread)
 //   paramsMu_ is independent: only held momentarily for a snapshot copy.
 //   rawConsumer_ is managed like consumers_ entries but outside the vector so
 //   it receives pre-saturation frames independent of publishToConsumers.
@@ -29,18 +33,11 @@ namespace cam {
 
 /// User-adjustable processing parameters. All fields have identity defaults.
 /// setParams() is thread-safe; the processing loop reads a snapshot under paramsMu_.
-/// Currently only saturation is applied; remaining fields are stored and will be
-/// wired incrementally.
 struct ProcessingParams {
     float blackR = 0.f, blackG = 0.f, blackB = 0.f;  ///< [0, 0.5] per-channel black level
-    float gamma           = 1.f;                       ///< [0.1, 4.0]; 1.0 = identity
-    float histBlackPoint  = 0.f;                       ///< [0, 1]
-    float histWhitePoint  = 1.f;                       ///< [0, 1]
-    bool  autoStretch     = false;
-    float autoStretchLow  = 0.01f;
-    float autoStretchHigh = 0.99f;
-    float brightness      = 0.f;                       ///< [-1, 1]; 0.0 = identity
-    float saturation      = 1.f;                       ///< [0, 3]; 1.0 = identity
+    float gamma      = 1.f;                            ///< [0.1, 4.0]; 1.0 = identity
+    float brightness = 0.f;                            ///< [-1, 1]; 0.0 = identity
+    float saturation = 1.f;                            ///< [0, 3]; 1.0 = identity
 };
 
 /// Internal shared frame distributed to all consumers. cv::Mat is kept out of
@@ -86,6 +83,21 @@ public:
     /// Atomically update processing parameters. Takes effect on the next frame.
     void setParams(const ProcessingParams& p);
 
+    /// GPU entry point: called from GL thread after mapping fullResPbo[readIdx].
+    /// Copies RGBA data into a SharedFrame and dispatches to fullResConsumers_.
+    void deliverFullResRgba(const uint8_t* rgba, int w, int h, int stride,
+                            uint64_t frameId, const FrameMetadata& meta);
+
+    /// GPU entry point: called from GL thread after mapping trackerPbo[readIdx].
+    /// Copies RGBA data into a SharedFrame and dispatches to trackerConsumers_.
+    void deliverTrackerRgba(const uint8_t* rgba, int w, int h, int stride,
+                            uint64_t frameId, const FrameMetadata& meta);
+
+    /// GPU entry point: called from GL thread after mapping rawPbo[readIdx].
+    /// Copies RGBA data into a SharedFrame and dispatches to rawConsumers_.
+    void deliverRawRgba(const uint8_t* rgba, int w, int h, int stride,
+                        uint64_t frameId, const FrameMetadata& meta);
+
     // -- IImagePipeline ----------------------------------------------------------
     void addSink(const SinkConfig& config, SinkCallback callback) override;
     void removeSink(const std::string& name) override;
@@ -123,14 +135,30 @@ private:
         std::atomic<bool> running{true};
     };
 
+    // -- CPU-path consumer mailboxes (built-in __preview, publishToConsumers) ----
     std::mutex consumersMu_;
     std::vector<std::unique_ptr<Consumer>> consumers_;
 
     /// Dedicated consumer for raw (pre-saturation) preview; not in consumers_.
     std::unique_ptr<Consumer> rawConsumer_;
 
+    // -- Full-res consumer mailboxes (SinkRole::FULL_RES) ------------------------
+    std::mutex fullResConsumersMu_;
+    std::vector<std::unique_ptr<Consumer>> fullResConsumers_;
+
+    // -- Tracker consumer mailboxes (SinkRole::TRACKER) --------------------------
+    std::mutex trackerConsumersMu_;
+    std::vector<std::unique_ptr<Consumer>> trackerConsumers_;
+
+    // -- Raw consumer mailboxes (SinkRole::RAW) ----------------------------------
+    std::mutex rawConsumersMu_;
+    std::vector<std::unique_ptr<Consumer>> rawConsumers_;
+
     void publishToConsumers(SharedFrame frame);
     void publishToRawConsumer(SharedFrame frame);
+    void publishToFullResConsumers(SharedFrame frame);
+    void publishToTrackerConsumers(SharedFrame frame);
+    void publishToRawConsumers(SharedFrame frame);
     void startConsumerThread(Consumer* c);
     void shutdownConsumer(Consumer* c);
     void shutdownConsumers();

@@ -47,18 +47,15 @@ dart format lib/            # Format code to match Flutter conventions
 - **`pubspec.yaml`** — Flutter dependencies and project metadata
 - **`analysis_options.yaml`** — Linting rules (extends `package:flutter_lints`)
 
-## Reference Documentation
-  Camera2 API reference is at:
-  ~/work/cambrian/eva-ref/camera2-docs-scrape/output/
-
-  - API classes: output/api-reference/camera2/ClassName.md
-  - Params: output/api-reference/camera2-params/ClassName.md
-  - Architecture guides: output/guides/camera/
-  - Search index: output/MANIFEST.json
+## Development Guidelines
+- Use the `camera2-docs` skill when looking up Camera2 API details while coding. Camera2 API reference is at:
+  `~/work/cambrian/eva-ref/camera2-docs-scrape/output/`
+- Always create a todo list to track progress and remain on track
 
 ## Important Notes
 
 - This is a Flutter demo project for the camera2 library
+- **Preview layout**: The app shows dual previews (raw + processed) for debugging. Most users will need only the tone-mapped stream; remove the raw preview by deleting it from the `Row` in `main.dart`. Use `StreamBuilder<CameraTextureInfo>` with the `toneMappedTexture` or `rawTexture` streams to bind texture data to Flutter's `Texture` widget. See `packages/cambrian_camera/README.md` for usage examples.
 - Platform-specific implementations belong in `android/` and `ios/` directories
 - Follow Flutter style conventions enforced by `flutter_lints`
 - Do not use wildcard imports; always import explicit symbols

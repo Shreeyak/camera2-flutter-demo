@@ -177,6 +177,8 @@ class CameraSettings {
     this.noiseReductionMode,
     this.edgeMode,
     this.evCompensation,
+    this.enableRawStream,
+    this.rawStreamHeight,
   });
 
   /// Sensor sensitivity (e.g. 100–3200).
@@ -220,6 +222,42 @@ class CameraSettings {
   /// Applied by the AE algorithm — **has no effect** when [iso] or
   /// [exposureTimeNs] is manual (AE is disabled in that mode).
   final int? evCompensation;
+
+  /// Enable GPU raw (passthrough) stream. Null = don't change (preserves prior setting).
+  /// Only meaningful at open() time; changes after open() are ignored.
+  final bool? enableRawStream;
+
+  /// Requested height of the GPU raw stream in pixels. Null = don't change. 0 = use default.
+  /// Only meaningful when [enableRawStream] is true.
+  final int? rawStreamHeight;
+
+  /// Creates a copy of this settings object with specified fields replaced.
+  ///
+  /// Omitted fields preserve their original values.
+  CameraSettings copyWith({
+    AutoValue<int>? iso,
+    AutoValue<int>? exposureTimeNs,
+    AutoValue<double>? focus,
+    WhiteBalance? whiteBalance,
+    double? zoomRatio,
+    NoiseReductionMode? noiseReductionMode,
+    EdgeMode? edgeMode,
+    int? evCompensation,
+    bool? enableRawStream,
+    int? rawStreamHeight,
+  }) =>
+      CameraSettings(
+        iso: iso ?? this.iso,
+        exposureTimeNs: exposureTimeNs ?? this.exposureTimeNs,
+        focus: focus ?? this.focus,
+        whiteBalance: whiteBalance ?? this.whiteBalance,
+        zoomRatio: zoomRatio ?? this.zoomRatio,
+        noiseReductionMode: noiseReductionMode ?? this.noiseReductionMode,
+        edgeMode: edgeMode ?? this.edgeMode,
+        evCompensation: evCompensation ?? this.evCompensation,
+        enableRawStream: enableRawStream ?? this.enableRawStream,
+        rawStreamHeight: rawStreamHeight ?? this.rawStreamHeight,
+      );
 
   /// Serializes to the Pigeon transport type.
   ///
@@ -300,6 +338,8 @@ class CameraSettings {
       noiseReductionMode: noiseReductionMode?.index,
       edgeMode: edgeMode?.index,
       evCompensation: evCompensation,
+      enableRawStream: enableRawStream,
+      rawStreamHeight: rawStreamHeight,
     );
   }
 }
@@ -312,13 +352,9 @@ class ProcessingParams {
     this.blackG = 0.0,
     this.blackB = 0.0,
     this.gamma = 1.0,
-    this.histBlackPoint = 0.0,
-    this.histWhitePoint = 1.0,
-    this.autoStretch = false,
-    this.autoStretchLow = 0.01,
-    this.autoStretchHigh = 0.99,
     this.brightness = 0.0,
-    this.saturation = 1.0,
+    this.contrast = 0.0,
+    this.saturation = 0.0,
   }) {
     _validate();
   }
@@ -331,25 +367,15 @@ class ProcessingParams {
   /// Gamma correction exponent in [0.1, 4.0]. 1.0 = identity.
   final double gamma;
 
-  /// Manual histogram stretch: black point fraction in [0, 1].
-  final double histBlackPoint;
-
-  /// Manual histogram stretch: white point fraction in [0, 1].
-  final double histWhitePoint;
-
-  /// If true, auto-compute histogram stretch per-frame.
-  final bool autoStretch;
-
-  /// Lower percentile clip for auto-stretch (e.g. 0.01 = 1%).
-  final double autoStretchLow;
-
-  /// Upper percentile clip for auto-stretch (e.g. 0.99 = 99%).
-  final double autoStretchHigh;
-
-  /// Brightness offset in [-1.0, +1.0]. 0.0 = no change.
+  /// Brightness offset in [-1.0, +1.0]. 0.0 = no change (identity).
   final double brightness;
 
-  /// Saturation multiplier in [0, 3]. 1.0 = identity.
+  /// Contrast adjustment in [-1.0, +1.0]. 0.0 = no change (identity).
+  /// Maps to internal multiplier [0.0, 2.0] where 0.0 = flat grey, 2.0 = maximum contrast.
+  final double contrast;
+
+  /// Saturation adjustment in [-1.0, +1.0]. 0.0 = no change (identity/full natural color).
+  /// -1.0 = greyscale (zero saturation), +1.0 = boosted saturation (2x mix factor).
   final double saturation;
 
   void _validate() {
@@ -357,38 +383,36 @@ class ProcessingParams {
     if (blackR.isNaN) throw ArgumentError.value(blackR, 'blackR', 'must not be NaN');
     if (blackG.isNaN) throw ArgumentError.value(blackG, 'blackG', 'must not be NaN');
     if (blackB.isNaN) throw ArgumentError.value(blackB, 'blackB', 'must not be NaN');
-    if (gamma.isNaN || gamma <= 0) {
-      throw ArgumentError.value(gamma, 'gamma', 'must be > 0 and not NaN');
-    }
-    if (histBlackPoint.isNaN) {
-      throw ArgumentError.value(histBlackPoint, 'histBlackPoint', 'must not be NaN');
-    }
-    if (histWhitePoint.isNaN) {
-      throw ArgumentError.value(histWhitePoint, 'histWhitePoint', 'must not be NaN');
-    }
-    if (autoStretchLow.isNaN) {
-      throw ArgumentError.value(autoStretchLow, 'autoStretchLow', 'must not be NaN');
-    }
-    if (autoStretchHigh.isNaN) {
-      throw ArgumentError.value(autoStretchHigh, 'autoStretchHigh', 'must not be NaN');
+    if (gamma.isNaN || gamma < 0.1 || gamma > 4.0) {
+      throw ArgumentError.value(gamma, 'gamma', 'must be in [0.1, 4.0]');
     }
     if (brightness.isNaN) {
       throw ArgumentError.value(brightness, 'brightness', 'must not be NaN');
+    }
+    if (contrast.isNaN) {
+      throw ArgumentError.value(contrast, 'contrast', 'must not be NaN');
     }
     if (saturation.isNaN) {
       throw ArgumentError.value(saturation, 'saturation', 'must not be NaN');
     }
     // Range checks.
-    if (histBlackPoint > histWhitePoint) {
-      throw ArgumentError(
-        'histBlackPoint ($histBlackPoint) must be <= histWhitePoint ($histWhitePoint)',
-      );
+    if (blackR < 0.0 || blackR > 0.5) {
+      throw ArgumentError.value(blackR, 'blackR', 'must be in [0.0, 0.5]');
     }
-    if (autoStretch && autoStretchLow >= autoStretchHigh) {
-      throw ArgumentError(
-        'autoStretchLow ($autoStretchLow) must be < autoStretchHigh ($autoStretchHigh) '
-        'when autoStretch is true',
-      );
+    if (blackG < 0.0 || blackG > 0.5) {
+      throw ArgumentError.value(blackG, 'blackG', 'must be in [0.0, 0.5]');
+    }
+    if (blackB < 0.0 || blackB > 0.5) {
+      throw ArgumentError.value(blackB, 'blackB', 'must be in [0.0, 0.5]');
+    }
+    if (brightness < -1.0 || brightness > 1.0) {
+      throw ArgumentError.value(brightness, 'brightness', 'must be in [-1.0, 1.0]');
+    }
+    if (contrast < -1.0 || contrast > 1.0) {
+      throw ArgumentError.value(contrast, 'contrast', 'must be in [-1.0, 1.0]');
+    }
+    if (saturation < -1.0 || saturation > 1.0) {
+      throw ArgumentError.value(saturation, 'saturation', 'must be in [-1.0, 1.0]');
     }
   }
 
@@ -397,12 +421,8 @@ class ProcessingParams {
         blackG: blackG,
         blackB: blackB,
         gamma: gamma,
-        histBlackPoint: histBlackPoint,
-        histWhitePoint: histWhitePoint,
-        autoStretch: autoStretch,
-        autoStretchLow: autoStretchLow,
-        autoStretchHigh: autoStretchHigh,
         brightness: brightness,
+        contrast: contrast,
         saturation: saturation,
       );
 
@@ -411,12 +431,8 @@ class ProcessingParams {
     double? blackG,
     double? blackB,
     double? gamma,
-    double? histBlackPoint,
-    double? histWhitePoint,
-    bool? autoStretch,
-    double? autoStretchLow,
-    double? autoStretchHigh,
     double? brightness,
+    double? contrast,
     double? saturation,
   }) =>
       ProcessingParams(
@@ -424,12 +440,8 @@ class ProcessingParams {
         blackG: blackG ?? this.blackG,
         blackB: blackB ?? this.blackB,
         gamma: gamma ?? this.gamma,
-        histBlackPoint: histBlackPoint ?? this.histBlackPoint,
-        histWhitePoint: histWhitePoint ?? this.histWhitePoint,
-        autoStretch: autoStretch ?? this.autoStretch,
-        autoStretchLow: autoStretchLow ?? this.autoStretchLow,
-        autoStretchHigh: autoStretchHigh ?? this.autoStretchHigh,
         brightness: brightness ?? this.brightness,
+        contrast: contrast ?? this.contrast,
         saturation: saturation ?? this.saturation,
       );
 }

@@ -47,6 +47,8 @@ class CamSettings {
     this.noiseReductionMode,
     this.edgeMode,
     this.evCompensation,
+    this.enableRawStream,
+    this.rawStreamHeight,
   });
 
   /// "auto" | "manual" | null (don't change).
@@ -83,6 +85,11 @@ class CamSettings {
   /// NOTE: has no effect when isoMode == "manual" or exposureMode == "manual"
   /// because CONTROL_AE_MODE is set to OFF in that case.
   int? evCompensation;
+
+  /// Enable GPU raw (passthrough) stream. Null = don't change.
+  bool? enableRawStream;
+  /// Requested height of the GPU raw stream in pixels. Null = don't change. 0 = use default.
+  int? rawStreamHeight;
 }
 
 class CamProcessingParams {
@@ -91,12 +98,8 @@ class CamProcessingParams {
     required this.blackG,
     required this.blackB,
     required this.gamma,
-    required this.histBlackPoint,
-    required this.histWhitePoint,
-    required this.autoStretch,
-    required this.autoStretchLow,
-    required this.autoStretchHigh,
     required this.brightness,
+    required this.contrast,
     required this.saturation,
   });
 
@@ -104,12 +107,8 @@ class CamProcessingParams {
   double blackG;
   double blackB;
   double gamma;
-  double histBlackPoint;
-  double histWhitePoint;
-  bool autoStretch;
-  double autoStretchLow;
-  double autoStretchHigh;
   double brightness;
+  double contrast;
   double saturation;
 }
 
@@ -127,10 +126,11 @@ class CamCapabilities {
     required this.evCompMin,
     required this.evCompMax,
     required this.evCompensationStep,
-    required this.estimatedMemoryBytes,
-    required this.yuvStreamWidth,
-    required this.yuvStreamHeight,
     required this.rawStreamTextureId,
+    required this.rawStreamWidth,
+    required this.rawStreamHeight,
+    required this.streamWidth,
+    required this.streamHeight,
   });
 
   List<CamSize> supportedSizes;
@@ -145,13 +145,17 @@ class CamCapabilities {
   int evCompMin;
   int evCompMax;
   double evCompensationStep;
-  int estimatedMemoryBytes;
-  /// Width of the YUV stream used by the C++ pipeline (pixels).
-  int yuvStreamWidth;
-  /// Height of the YUV stream used by the C++ pipeline (pixels).
-  int yuvStreamHeight;
-  /// Flutter texture ID for the raw (pre-processing) preview.
+  /// Flutter texture ID for the GPU raw stream (passthrough, no color adjustments).
+  /// 0 if raw stream is disabled.
   int rawStreamTextureId;
+  /// Actual computed width of the GPU raw stream (pixels). 0 if raw stream is disabled.
+  int rawStreamWidth;
+  /// Requested height of the GPU raw stream (pixels). 0 if raw stream is disabled.
+  int rawStreamHeight;
+  /// Width of the GPU processed stream texture (pixels). Matches the largest 4:3 YUV size.
+  int streamWidth;
+  /// Height of the GPU processed stream texture (pixels).
+  int streamHeight;
 }
 
 class CamStateUpdate {
@@ -246,6 +250,13 @@ abstract class CameraHostApi {
 
   @async
   void close(int handle);
+
+  /// Returns the current display rotation in degrees CW from portrait: 0, 90, 180, or 270.
+  ///
+  /// Used by Dart preview widgets to select the correct [RotatedBox.quarterTurns]
+  /// for all four device orientations, since [MediaQuery.orientation] only
+  /// distinguishes portrait from landscape.
+  int getDisplayRotation();
 }
 
 // ---------------------------------------------------------------------------

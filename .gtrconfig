@@ -10,4 +10,4 @@
     prefix = camera2_flutter_demo-
 
 [gtr]
-	defaultBranch = dev
+    defaultBranch = dev

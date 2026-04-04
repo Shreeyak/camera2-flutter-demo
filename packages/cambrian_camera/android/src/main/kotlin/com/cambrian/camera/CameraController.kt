@@ -38,9 +38,9 @@ import java.util.concurrent.atomic.AtomicBoolean
  * Camera2 lifecycle manager for the cambrian_camera plugin.
  *
  * Responsibilities:
- * - Opens a Camera2 device and configures a [CaptureSession] with a YUV_420_888 [ImageReader]
- *   and a JPEG [ImageReader] for still capture.
- * - Streams YUV frames via the SurfaceProducer for display; JNI delivery to C++ is a future step.
+ * - Opens a Camera2 device and configures a [CaptureSession] with a [GpuPipeline]
+ *   (OES SurfaceTexture → GL render thread → RGBA sinks) and a JPEG [ImageReader] for still capture.
+ * - Routes shader adjustment params via [GpuPipeline.setAdjustments].
  * - Implements an auto-recovery state machine with exponential backoff.
  * - Applies per-request ISP settings via [updateSettings].
  * - Provides [takePicture] to capture a single JPEG frame to the app's cache directory.
@@ -53,7 +53,9 @@ import java.util.concurrent.atomic.AtomicBoolean
 class CameraController(
     private val context: Context,
     private val surfaceProducer: TextureRegistry.SurfaceProducer,
-    private val rawSurfaceProducer: TextureRegistry.SurfaceProducer,
+    private val rawSurfaceProducer: TextureRegistry.SurfaceProducer?,
+    private val enableRawStream: Boolean,
+    private val rawStreamHeight: Int,
     private val flutterApi: CameraFlutterApi,
     val handle: Long,
 ) {
@@ -63,11 +65,16 @@ class CameraController(
 
     companion object {
         init {
-            System.loadLibrary("cambrian_camera")
+            try {
+                System.loadLibrary("cambrian_camera")
+            } catch (_: UnsatisfiedLinkError) {
+                // Library not available in JVM unit tests; JNI calls will throw at runtime
+                // if invoked without the native library loaded.
+            }
         }
 
         /** Initialises the native pipeline and pre-allocates the input ring for the given dims. */
-        @JvmStatic external fun nativeInit(previewSurface: Surface, width: Int, height: Int): Long
+        @JvmStatic external fun nativeInit(previewSurface: Surface?, width: Int, height: Int): Long
 
         // YUV layout constants — kept in sync with InputRing.h.
         const val YUV_FORMAT_UNKNOWN = 0
@@ -83,15 +90,6 @@ class CameraController(
          * recreation event from [TextureRegistry.SurfaceProducer.Callback]).
          */
         @JvmStatic external fun nativeSetPreviewWindow(
-            pipelinePtr: Long,
-            previewSurface: Surface?,
-        )
-
-        /**
-         * Attaches or replaces the raw (pre-processing) preview [Surface].
-         * The raw surface receives BGR frames before saturation or other processing is applied.
-         */
-        @JvmStatic external fun nativeSetRawPreviewWindow(
             pipelinePtr: Long,
             previewSurface: Surface?,
         )
@@ -134,9 +132,6 @@ class CameraController(
             pipelinePtr: Long,
             blackR: Double, blackG: Double, blackB: Double,
             gamma: Double,
-            histBlackPoint: Double, histWhitePoint: Double,
-            autoStretch: Boolean,
-            autoStretchLow: Double, autoStretchHigh: Double,
             brightness: Double,
             saturation: Double,
         )
@@ -169,6 +164,8 @@ class CameraController(
 
     @Volatile private var imageReader: ImageReader? = null
 
+    @Volatile private var gpuPipeline: GpuPipeline? = null
+
     @Volatile private var jpegImageReader: ImageReader? = null
 
     /** True while a still-capture is in flight; prevents listener overwrites from concurrent calls. */
@@ -196,6 +193,11 @@ class CameraController(
     @Volatile private var previewWidth: Int = 0
 
     @Volatile private var previewHeight: Int = 0
+
+    /** Raw stream dimensions, set during [startCaptureSession] when [enableRawStream] is true. */
+    @Volatile private var rawW: Int = 0
+
+    @Volatile private var rawH: Int = 0
 
     /** Camera ID resolved in [open]; stored for reconnect retries. */
     @Volatile private var resolvedCameraId: String? = null
@@ -278,22 +280,21 @@ class CameraController(
                 }
             },
         )
-        rawSurfaceProducer.setCallback(
+        rawSurfaceProducer?.setCallback(
             object : TextureRegistry.SurfaceProducer.Callback {
                 override fun onSurfaceAvailable() {
-                    val ptr = nativePipelinePtr
-                    if (ptr == 0L) return
-                    val width = previewWidth
-                    val height = previewHeight
-                    if (width > 0 && height > 0) {
-                        rawSurfaceProducer.setSize(width, height)
+                    val w = rawW
+                    val h = rawH
+                    if (w > 0 && h > 0) {
+                        rawSurfaceProducer.setSize(w, h)
                     }
-                    nativeSetRawPreviewWindow(ptr, rawSurfaceProducer.getSurface())
+                    // Rebind the new native window to the GPU renderer so raw preview
+                    // resumes after Flutter recreates the SurfaceProducer surface.
+                    gpuPipeline?.rebindRawSurface(rawSurfaceProducer.getSurface())
                 }
 
                 override fun onSurfaceCleanup() {
-                    val ptr = nativePipelinePtr
-                    if (ptr != 0L) nativeSetRawPreviewWindow(ptr, null)
+                    // No-op: raw surface lifecycle is managed by GpuPipeline (EGL).
                 }
             },
         )
@@ -476,20 +477,6 @@ class CameraController(
             val evRange: Range<Int>? = chars.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_RANGE)
             val evStep: Rational? = chars.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_STEP)
 
-            // Largest 4:3 YUV_420_888 output size — matches resolveStreamFormat selection.
-            val largestYuv = configMap
-                ?.getOutputSizes(ImageFormat.YUV_420_888)
-                ?.filter { it.width * 3 == it.height * 4 }
-                ?.maxByOrNull { it.width.toLong() * it.height }
-            val streamWidth: Int = largestYuv?.width ?: 1280
-            val streamHeight: Int = largestYuv?.height ?: 960
-
-            // Estimate 4 YUV_420_888 ring-buffer slots (1.5 bytes/pixel each) plus
-            // one RGBA texture buffer if the raw preview surface is active.
-            val yuvBytes: Long = streamWidth.toLong() * streamHeight * 3L / 2L * 4L
-            val textureBytes: Long = if (rawSurfaceProducer != null) streamWidth.toLong() * streamHeight * 4L else 0L
-            val estimatedBytes: Long = yuvBytes + textureBytes
-
             val caps =
                 CamCapabilities(
                     supportedSizes = jpegSizes,
@@ -504,10 +491,13 @@ class CameraController(
                     evCompMin = evRange?.lower?.toLong() ?: -6L,
                     evCompMax = evRange?.upper?.toLong() ?: 6L,
                     evCompensationStep = evStep?.toDouble() ?: 0.5,
-                    estimatedMemoryBytes = estimatedBytes,
-                    yuvStreamWidth = streamWidth.toLong(),
-                    yuvStreamHeight = streamHeight.toLong(),
-                    rawStreamTextureId = rawSurfaceProducer.id(),
+                    // Report non-zero raw stream info only when the GPU pipeline is actually
+                    // running with raw enabled; nativeGpuInit may silently disable it.
+                    rawStreamTextureId = if (gpuPipeline?.isRunning == true) rawSurfaceProducer?.id() ?: 0L else 0L,
+                    rawStreamWidth = if (gpuPipeline?.isRunning == true) rawW.toLong() else 0L,
+                    rawStreamHeight = if (gpuPipeline?.isRunning == true) rawH.toLong() else 0L,
+                    streamWidth = previewWidth.toLong(),
+                    streamHeight = previewHeight.toLong(),
                 )
             callback(Result.success(caps))
         } catch (e: CameraAccessException) {
@@ -603,10 +593,10 @@ class CameraController(
         pendingSettings = merged
         val session = captureSession ?: return
         val device = cameraDevice ?: return
-        val targetSurface = repeatingTargetSurface ?: imageReader?.surface ?: return
+        val targetSurface = repeatingTargetSurface ?: gpuPipeline?.cameraSurface ?: return
 
         try {
-            val request = buildCaptureRequest(device, targetSurface, merged)
+            val request = buildCaptureRequest(device, merged)
             repeatingRequest = request
             if (CambrianCameraConfig.verboseDiagnostics) {
                 android.util.Log.d(
@@ -673,24 +663,26 @@ class CameraController(
     }
 
     /**
-     * Forwards processing parameters to the C++ pipeline via JNI (fire-and-forget).
-     * The next frame processed by [nativeDeliverYuv] will pick up the new values.
+     * Forwards processing parameters to the GPU pipeline shader uniforms (fire-and-forget).
+     * The next frame rendered by [GpuPipeline] will pick up the new values.
      *
-     * @param params Image processing parameters (black balance, gamma, saturation, etc.).
+     * @param params Image processing parameters (black balance, brightness, contrast, saturation, etc.).
      */
     fun setProcessingParams(params: CamProcessingParams) {
         lastProcessingParams = params
-        val ptr = nativePipelinePtr
-        if (ptr == 0L) return
-        nativeSetProcessingParams(
-            ptr,
-            params.blackR, params.blackG, params.blackB,
-            params.gamma,
-            params.histBlackPoint, params.histWhitePoint,
-            params.autoStretch,
-            params.autoStretchLow, params.autoStretchHigh,
-            params.brightness,
-            params.saturation,
+        if (CambrianCameraConfig.debugDataFlow) {
+            android.util.Log.d("CambrianCamera", "[DataFlow] Processing params: brightness=${params.brightness} contrast=${params.contrast} saturation=${params.saturation}")
+        }
+        // GPU path: uniforms are updated via GpuPipeline.setAdjustments().
+        // nativeSetProcessingParams is not called — the CPU pipeline is inactive.
+        gpuPipeline?.setAdjustments(
+            brightness = params.brightness,
+            contrast   = params.contrast,
+            saturation = params.saturation,
+            blackR     = params.blackR,
+            blackG     = params.blackG,
+            blackB     = params.blackB,
+            gamma      = params.gamma,
         )
     }
 
@@ -793,10 +785,10 @@ class CameraController(
     /**
      * Starts a Camera2 [CaptureSession] on the already-opened [cameraDevice].
      *
-     * Streams YUV_420_888 at the device's largest supported resolution. A separate JPEG [ImageReader] is pre-allocated for
-     * still capture. Preview is routed via [surfaceProducer] added directly to the session.
+     * Initialises a [GpuPipeline] that wraps a SurfaceTexture (OES) and a GL render thread.
+     * A separate JPEG [ImageReader] is pre-allocated for still capture.
      *
-     * Frame path: Camera2 → YUV ImageReader → C++ pipeline (nativeDeliverYuv) → ANativeWindow (Flutter Texture)
+     * Frame path: Camera2 → GpuPipeline (OES → GL render → PBO readback) → ImagePipeline sinks
      */
     private fun startCaptureSession(openCallback: (Result<Long>) -> Unit) {
         val device =
@@ -816,100 +808,70 @@ class CameraController(
 
         previewWidth = streamWidth
         previewHeight = streamHeight
-        surfaceProducer.setSize(streamWidth, streamHeight)
-        rawSurfaceProducer.setSize(streamWidth, streamHeight)
-        if (CambrianCameraConfig.verboseDiagnostics) {
-            android.util.Log.d(
-                "CambrianCamera",
-                "startCaptureSession format=YUV_420_888 size=${streamWidth}x$streamHeight",
-            )
+        if (CambrianCameraConfig.debugDataFlow) {
+            android.util.Log.i("CambrianCamera", "[DataFlow] Stream resolution: ${streamWidth}x${streamHeight} (4:3=${streamWidth * 3 == streamHeight * 4})")
         }
-
-        // Streaming ImageReader — YUV_420_888 frames are delivered to the C++ pipeline
-        // for post-processing; the pipeline writes processed RGBA frames to the ANativeWindow.
-        val streamReader = ImageReader.newInstance(streamWidth, streamHeight, streamFormat, 2)
-        imageReader = streamReader
+        surfaceProducer.setSize(streamWidth, streamHeight)
+        if (enableRawStream && rawSurfaceProducer != null) {
+            rawW = (streamWidth.toFloat() / streamHeight * rawStreamHeight + 0.5f).toInt() and 1.inv()
+            rawH = rawStreamHeight
+            rawSurfaceProducer.setSize(rawW, rawH)
+        } else {
+            rawW = 0
+            rawH = 0
+        }
+        android.util.Log.i("CambrianCamera", "Camera stream resolution selected: ${streamWidth}x$streamHeight")
 
         // JPEG ImageReader — pre-allocated for still capture (use streaming resolution).
         val jpegReader = ImageReader.newInstance(streamWidth, streamHeight, ImageFormat.JPEG, 1)
         jpegImageReader = jpegReader
 
-        // Initialise native pipeline with the processed-preview surface and stream dims.
-        val previewSurface = surfaceProducer.getSurface()
-        nativePipelinePtr = nativeInit(previewSurface, streamWidth, streamHeight)
+        // Pass null: ImagePipeline is used only for sink dispatch in the GPU path.
+        // GpuRenderer owns the preview surface via EGL.
+        nativePipelinePtr = nativeInit(null, streamWidth, streamHeight)
         if (nativePipelinePtr == 0L) {
             android.util.Log.e("CambrianCamera", "startCaptureSession: nativeInit failed — aborting session startup")
-            imageReader = null
             jpegImageReader = null
-            streamReader.close()
             jpegReader.close()
+            mainHandler.post {
+                openCallback(Result.failure(FlutterError("init_failed", "Native pipeline init failed", null)))
+            }
             return
         }
+
+        // GPU pipeline — SurfaceTexture receives camera frames as an OES texture;
+        // GpuPipeline renders each frame on its GL thread and delivers RGBA to pipeline sinks.
+        val rawPreviewSurface = if (enableRawStream) rawSurfaceProducer?.getSurface() else null
+        val pipeline = GpuPipeline(
+            streamWidth, streamHeight,
+            surfaceProducer.getSurface(),
+            rawPreviewSurface, rawW, rawH,
+            context,
+            nativePipelinePtr
+        )
+        pipeline.start()
+        gpuPipeline = pipeline
 
         // Replay any previously set processing params so they survive pipeline recreation.
         lastProcessingParams?.let { setProcessingParams(it) }
 
-        // Wire the raw (pre-processing) preview surface.
-        nativeSetRawPreviewWindow(nativePipelinePtr, rawSurfaceProducer.getSurface())
-
-        // Deliver YUV frames to the C++ pipeline for post-processing and preview output.
-        streamReader.setOnImageAvailableListener({ reader ->
-            val image = reader.acquireLatestImage() ?: return@setOnImageAvailableListener
-            try {
-                streamFrameCount++
-                if (CambrianCameraConfig.verboseDiagnostics && (streamFrameCount == 1L || streamFrameCount % 60L == 0L)) {
-                    android.util.Log.d(
-                        "CambrianCamera",
-                        "stream frame#$streamFrameCount YUV ${image.width}x${image.height}",
-                    )
-                }
-                // Copy YUV planes into the C++ input ring; image.close() below releases
-                // the camera buffer — the native side has already memcpy'd the data.
-                // pipelineLock serializes this JNI call with teardown's nativeRelease.
-                synchronized(pipelineLock) {
-                    val ptr = nativePipelinePtr
-                    if (ptr != 0L) {
-                        val yPlane = image.planes[0]
-                        val uPlane = image.planes[1]
-                        val vPlane = image.planes[2]
-
-                        // Detect YUV layout from plane strides on the first frame; cache it.
-                        // The layout is a hardware property of the device and never changes
-                        // mid-session, so we lock in the result and assert in debug builds.
-                        if (detectedYuvFormat == YUV_FORMAT_UNKNOWN) {
-                            detectedYuvFormat = detectYuvFormat(image)
-                            android.util.Log.d(
-                                "CambrianCamera",
-                                "Detected YUV format: ${yuvFormatName(detectedYuvFormat)}",
-                            )
-                        }
-
-                        nativeDeliverYuv(
-                            ptr,
-                            yPlane.buffer, yPlane.rowStride,
-                            uPlane.buffer, uPlane.rowStride, uPlane.pixelStride,
-                            vPlane.buffer,
-                            image.width, image.height,
-                            streamFrameCount,
-                            lastKnownIso ?: 0,
-                            lastKnownExposureTimeNs ?: 0L,
-                            image.timestamp,
-                            detectedYuvFormat,
-                        )
-                    }
-                }
-            } finally {
-                image.close()
+        val gpuSurface = pipeline.cameraSurface
+        if (gpuSurface == null) {
+            android.util.Log.e("CambrianCamera", "startCaptureSession: GPU init failed — camera surface is null")
+            gpuPipeline = null
+            pipeline.stop()
+            nativeRelease(nativePipelinePtr)
+            nativePipelinePtr = 0L
+            jpegImageReader = null
+            jpegReader.close()
+            mainHandler.post {
+                openCallback(Result.failure(FlutterError("gpu_init_failed", "GPU pipeline init failed", null)))
             }
-        }, backgroundHandler)
+            return
+        }
+        val surfaces = listOf(gpuSurface, jpegReader.surface)
 
-        // Session surfaces: streaming reader + JPEG reader only.
-        // The SurfaceProducer surface is intentionally excluded: Camera2 would call
-        // connect(NATIVE_WINDOW_API_CAMERA) on it, preventing the C++ pipeline from
-        // also writing to it via ANativeWindow_lock (only one producer allowed per queue).
-        val surfaces = listOf(streamReader.surface, jpegReader.surface)
-
-        repeatingTargetSurface = streamReader.surface
+        repeatingTargetSurface = gpuSurface
 
         val outputs = surfaces.map { OutputConfiguration(it) }
         device.createCaptureSession(
@@ -919,14 +881,15 @@ class CameraController(
                 { command -> backgroundHandler.post(command) },
                 object : CameraCaptureSession.StateCallback() {
                     override fun onConfigured(session: CameraCaptureSession) {
+                        android.util.Log.i("CambrianCamera", "Camera session configured: ${previewWidth}x$previewHeight")
                         captureSession = session
                         try {
                             val settings = pendingSettings
                             val request =
                                 if (settings != null) {
-                                    buildCaptureRequest(device, previewSurface, settings)
+                                    buildCaptureRequest(device, settings)
                                 } else {
-                                    buildDefaultCaptureRequest(device, previewSurface)
+                                    buildDefaultCaptureRequest(device)
                                 }
                             repeatingRequest = request
                             if (CambrianCameraConfig.verboseDiagnostics) {
@@ -998,9 +961,13 @@ class CameraController(
     private fun resolveStreamFormat(device: CameraDevice): Triple<Int, Int, Int> {
         val chars = cameraManager.getCameraCharacteristics(device.id)
         val configMap = chars.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+        // Filter to 4:3: most sensors have a 4:3 active pixel array (SENSOR_INFO_ACTIVE_ARRAY_SIZE).
+        // Non-4:3 output sizes crop that area, discarding live pixels. The largest 4:3 YUV size
+        // = full sensor utilisation. getOutputSizes() is the authoritative valid-size list;
+        // any size from it is guaranteed accepted by createCaptureSession.
         val largest = configMap
             ?.getOutputSizes(ImageFormat.YUV_420_888)
-            ?.filter { it.width * 3 == it.height * 4 } // exact 4:3 check (no floating-point)
+            ?.filter { it.width * 3 == it.height * 4 }
             ?.maxByOrNull { it.width.toLong() * it.height }
         return if (largest != null) {
             Triple(ImageFormat.YUV_420_888, largest.width, largest.height)
@@ -1023,8 +990,8 @@ class CameraController(
      * frame rate (preferring [30, 30]).  Without this, Camera2's AE algorithm is free to
      * ramp exposure time above 1/30 s, which physically caps delivery to well below 30 fps.
      *
-     * The returned builder already has the YUV [imageReader] surface added as target
-     * (so the streaming ImageReader receives frames) and [CaptureRequest.CONTROL_MODE_AUTO]
+     * The returned builder already has [gpuPipeline]?.cameraSurface added as target
+     * (so the GPU OES SurfaceTexture receives camera frames) and [CaptureRequest.CONTROL_MODE_AUTO]
      * applied. The JPEG [jpegImageReader] is intentionally excluded — it is targeted only by the
      * one-shot request in [takePicture].
      */
@@ -1033,10 +1000,9 @@ class CameraController(
     ): CaptureRequest.Builder {
         val builder = device.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW)
 
-        // Camera2 targets only the YUV ImageReader; the C++ pipeline writes processed
-        // frames to the SurfaceProducer via ANativeWindow.  A direct-to-preview mode
-        // would add `surface` as a target here instead.
-        imageReader?.surface?.let { builder.addTarget(it) }
+        // Camera2 targets the GpuPipeline's SurfaceTexture; the GL thread renders
+        // each OES frame and delivers RGBA to pipeline sinks.
+        gpuPipeline?.cameraSurface?.let { builder.addTarget(it) }
         builder.set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
 
         // Lock in the highest available min-fps range so AE can't use long exposures
@@ -1062,7 +1028,6 @@ class CameraController(
      */
     private fun buildDefaultCaptureRequest(
         device: CameraDevice,
-        surface: Surface,
     ): CaptureRequest =
         createRepeatingRequestBuilder(device)
             .apply {
@@ -1082,7 +1047,6 @@ class CameraController(
      */
     private fun buildCaptureRequest(
         device: CameraDevice,
-        surface: Surface,
         settings: CamSettings,
     ): CaptureRequest =
         createRepeatingRequestBuilder(device)
@@ -1244,6 +1208,12 @@ class CameraController(
         imageReader = null
 
         try {
+            gpuPipeline?.stop()
+        } catch (_: Exception) {
+        }
+        gpuPipeline = null
+
+        try {
             jpegImageReader?.close()
         } catch (_: Exception) {
         }
@@ -1255,8 +1225,8 @@ class CameraController(
         lastKnownIso = null
         lastKnownExposureTimeNs = null
 
-        // Release native pipeline; pipelineLock ensures no nativeDeliverYuv call is
-        // in-flight when nativeRelease runs (prevents use-after-free).
+        // Release native pipeline; pipelineLock guards nativeRelease against concurrent
+        // startup/shutdown (nativeDeliverYuv is not called in the GPU path).
         synchronized(pipelineLock) {
             val ptr = nativePipelinePtr
             if (ptr != 0L) {
@@ -1437,10 +1407,10 @@ class CameraController(
         }
 
     private fun describeTargetSurface(surface: Surface?): String {
-        val imageSurface = imageReader?.surface
+        val gpuSurface = gpuPipeline?.cameraSurface
         return when {
             surface == null -> "null"
-            imageSurface != null && surface === imageSurface -> "imageReader"
+            gpuSurface != null && surface === gpuSurface -> "gpuPipeline"
             else -> "surfaceProducer"
         }
     }

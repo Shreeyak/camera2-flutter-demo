@@ -3,6 +3,7 @@ package com.cambrian.camera
 
 import android.app.Activity
 import android.content.Context
+import android.view.Surface
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.embedding.engine.plugins.activity.ActivityAware
 import io.flutter.embedding.engine.plugins.activity.ActivityPluginBinding
@@ -21,7 +22,7 @@ import io.flutter.view.TextureRegistry
  */
 data class CameraSession(
     val producer: TextureRegistry.SurfaceProducer,
-    val rawSurfaceProducer: TextureRegistry.SurfaceProducer,
+    val rawSurfaceProducer: TextureRegistry.SurfaceProducer?,
     val controller: CameraController,
 )
 
@@ -91,7 +92,7 @@ class CambrianCameraPlugin : FlutterPlugin, ActivityAware, CameraHostApi {
         sessions.values.forEach { session ->
             try { session.controller.release() } catch (_: Exception) {}
             try { session.producer.release() } catch (_: Exception) {}
-            try { session.rawSurfaceProducer.release() } catch (_: Exception) {}
+            try { session.rawSurfaceProducer?.release() } catch (_: Exception) {}
         }
         sessions.clear()
         flutterApi = null
@@ -149,10 +150,12 @@ class CambrianCameraPlugin : FlutterPlugin, ActivityAware, CameraHostApi {
             return
         }
 
+        val enableRawStream = settings?.enableRawStream ?: false
+        val rawStreamHeight = settings?.rawStreamHeight ?: 0L
         val producer = registry.createSurfaceProducer()
-        val rawSurfaceProducer = registry.createSurfaceProducer()
+        val rawSurfaceProducer = if (enableRawStream) registry.createSurfaceProducer() else null
         val handle = producer.id()
-        val controller = CameraController(ctx, producer, rawSurfaceProducer, api, handle)
+        val controller = CameraController(ctx, producer, rawSurfaceProducer, enableRawStream, rawStreamHeight.toInt(), api, handle)
 
         // Register the session immediately so that close() can tear it down even if open()
         // hasn't returned yet.  On failure, remove the session and release resources.
@@ -162,7 +165,7 @@ class CambrianCameraPlugin : FlutterPlugin, ActivityAware, CameraHostApi {
                 sessions.remove(handle)
                 try { controller.release() } catch (_: Exception) {}
                 try { producer.release() } catch (_: Exception) {}
-                try { rawSurfaceProducer.release() } catch (_: Exception) {}
+                try { rawSurfaceProducer?.release() } catch (_: Exception) {}
             }
             callback(result)
         }
@@ -236,6 +239,23 @@ class CambrianCameraPlugin : FlutterPlugin, ActivityAware, CameraHostApi {
     }
 
     /**
+     * Returns the current display rotation in degrees CW from portrait: 0, 90, 180, or 270.
+     *
+     * Used by Dart preview widgets to select the correct [RotatedBox.quarterTurns] for
+     * all four device orientations. Falls back to 0 (portrait) if activity is unavailable.
+     */
+    @Suppress("DEPRECATION")
+    override fun getDisplayRotation(): Long {
+        val rot = activity?.windowManager?.defaultDisplay?.rotation ?: return 0L
+        return when (rot) {
+            Surface.ROTATION_90  ->  90L
+            Surface.ROTATION_180 -> 180L
+            Surface.ROTATION_270 -> 270L
+            else                 ->   0L
+        }
+    }
+
+    /**
      * Closes the camera session identified by [handle].
      *
      * Delegates teardown to [CameraController.close], then releases the
@@ -253,7 +273,7 @@ class CambrianCameraPlugin : FlutterPlugin, ActivityAware, CameraHostApi {
         }
         session.controller.close { result ->
             session.producer.release()
-            session.rawSurfaceProducer.release()
+            session.rawSurfaceProducer?.release()
             callback(result)
         }
     }

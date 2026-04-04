@@ -133,7 +133,11 @@ data class CamSettings (
    * NOTE: has no effect when isoMode == "manual" or exposureMode == "manual"
    * because CONTROL_AE_MODE is set to OFF in that case.
    */
-  val evCompensation: Long? = null
+  val evCompensation: Long? = null,
+  /** Enable GPU raw (passthrough) stream. Null = don't change. */
+  val enableRawStream: Boolean? = null,
+  /** Requested height of the GPU raw stream in pixels. Null = don't change. 0 = use default. */
+  val rawStreamHeight: Long? = null
 )
  {
   companion object {
@@ -152,7 +156,9 @@ data class CamSettings (
       val noiseReductionMode = pigeonVar_list[11] as Long?
       val edgeMode = pigeonVar_list[12] as Long?
       val evCompensation = pigeonVar_list[13] as Long?
-      return CamSettings(isoMode, iso, exposureMode, exposureTimeNs, focusMode, focusDistanceDiopters, wbMode, wbGainR, wbGainG, wbGainB, zoomRatio, noiseReductionMode, edgeMode, evCompensation)
+      val enableRawStream = pigeonVar_list[14] as Boolean?
+      val rawStreamHeight = pigeonVar_list[15] as Long?
+      return CamSettings(isoMode, iso, exposureMode, exposureTimeNs, focusMode, focusDistanceDiopters, wbMode, wbGainR, wbGainG, wbGainB, zoomRatio, noiseReductionMode, edgeMode, evCompensation, enableRawStream, rawStreamHeight)
     }
   }
   fun toList(): List<Any?> {
@@ -171,6 +177,8 @@ data class CamSettings (
       noiseReductionMode,
       edgeMode,
       evCompensation,
+      enableRawStream,
+      rawStreamHeight,
     )
   }
 }
@@ -181,12 +189,8 @@ data class CamProcessingParams (
   val blackG: Double,
   val blackB: Double,
   val gamma: Double,
-  val histBlackPoint: Double,
-  val histWhitePoint: Double,
-  val autoStretch: Boolean,
-  val autoStretchLow: Double,
-  val autoStretchHigh: Double,
   val brightness: Double,
+  val contrast: Double,
   val saturation: Double
 )
  {
@@ -196,14 +200,10 @@ data class CamProcessingParams (
       val blackG = pigeonVar_list[1] as Double
       val blackB = pigeonVar_list[2] as Double
       val gamma = pigeonVar_list[3] as Double
-      val histBlackPoint = pigeonVar_list[4] as Double
-      val histWhitePoint = pigeonVar_list[5] as Double
-      val autoStretch = pigeonVar_list[6] as Boolean
-      val autoStretchLow = pigeonVar_list[7] as Double
-      val autoStretchHigh = pigeonVar_list[8] as Double
-      val brightness = pigeonVar_list[9] as Double
-      val saturation = pigeonVar_list[10] as Double
-      return CamProcessingParams(blackR, blackG, blackB, gamma, histBlackPoint, histWhitePoint, autoStretch, autoStretchLow, autoStretchHigh, brightness, saturation)
+      val brightness = pigeonVar_list[4] as Double
+      val contrast = pigeonVar_list[5] as Double
+      val saturation = pigeonVar_list[6] as Double
+      return CamProcessingParams(blackR, blackG, blackB, gamma, brightness, contrast, saturation)
     }
   }
   fun toList(): List<Any?> {
@@ -212,12 +212,8 @@ data class CamProcessingParams (
       blackG,
       blackB,
       gamma,
-      histBlackPoint,
-      histWhitePoint,
-      autoStretch,
-      autoStretchLow,
-      autoStretchHigh,
       brightness,
+      contrast,
       saturation,
     )
   }
@@ -237,13 +233,19 @@ data class CamCapabilities (
   val evCompMin: Long,
   val evCompMax: Long,
   val evCompensationStep: Double,
-  val estimatedMemoryBytes: Long,
-  /** Width of the YUV stream used by the C++ pipeline (pixels). */
-  val yuvStreamWidth: Long,
-  /** Height of the YUV stream used by the C++ pipeline (pixels). */
-  val yuvStreamHeight: Long,
-  /** Flutter texture ID for the raw (pre-processing) preview. */
-  val rawStreamTextureId: Long
+  /**
+   * Flutter texture ID for the GPU raw stream (passthrough, no color adjustments).
+   * 0 if raw stream is disabled.
+   */
+  val rawStreamTextureId: Long,
+  /** Actual computed width of the GPU raw stream (pixels). 0 if raw stream is disabled. */
+  val rawStreamWidth: Long,
+  /** Requested height of the GPU raw stream (pixels). 0 if raw stream is disabled. */
+  val rawStreamHeight: Long,
+  /** Width of the GPU processed stream texture (pixels). Matches the largest 4:3 YUV size. */
+  val streamWidth: Long,
+  /** Height of the GPU processed stream texture (pixels). */
+  val streamHeight: Long
 )
  {
   companion object {
@@ -260,11 +262,12 @@ data class CamCapabilities (
       val evCompMin = pigeonVar_list[9] as Long
       val evCompMax = pigeonVar_list[10] as Long
       val evCompensationStep = pigeonVar_list[11] as Double
-      val estimatedMemoryBytes = pigeonVar_list[12] as Long
-      val yuvStreamWidth = pigeonVar_list[13] as Long
-      val yuvStreamHeight = pigeonVar_list[14] as Long
-      val rawStreamTextureId = pigeonVar_list[15] as Long
-      return CamCapabilities(supportedSizes, isoMin, isoMax, exposureTimeMinNs, exposureTimeMaxNs, focusMin, focusMax, zoomMin, zoomMax, evCompMin, evCompMax, evCompensationStep, estimatedMemoryBytes, yuvStreamWidth, yuvStreamHeight, rawStreamTextureId)
+      val rawStreamTextureId = pigeonVar_list[12] as Long
+      val rawStreamWidth = pigeonVar_list[13] as Long
+      val rawStreamHeight = pigeonVar_list[14] as Long
+      val streamWidth = pigeonVar_list[15] as Long
+      val streamHeight = pigeonVar_list[16] as Long
+      return CamCapabilities(supportedSizes, isoMin, isoMax, exposureTimeMinNs, exposureTimeMaxNs, focusMin, focusMax, zoomMin, zoomMax, evCompMin, evCompMax, evCompensationStep, rawStreamTextureId, rawStreamWidth, rawStreamHeight, streamWidth, streamHeight)
     }
   }
   fun toList(): List<Any?> {
@@ -281,10 +284,11 @@ data class CamCapabilities (
       evCompMin,
       evCompMax,
       evCompensationStep,
-      estimatedMemoryBytes,
-      yuvStreamWidth,
-      yuvStreamHeight,
       rawStreamTextureId,
+      rawStreamWidth,
+      rawStreamHeight,
+      streamWidth,
+      streamHeight,
     )
   }
 }
@@ -472,6 +476,14 @@ interface CameraHostApi {
   fun takePicture(handle: Long, callback: (Result<String>) -> Unit)
   fun getNativePipelineHandle(handle: Long, callback: (Result<Long?>) -> Unit)
   fun close(handle: Long, callback: (Result<Unit>) -> Unit)
+  /**
+   * Returns the current display rotation in degrees CW from portrait: 0, 90, 180, or 270.
+   *
+   * Used by Dart preview widgets to select the correct [RotatedBox.quarterTurns]
+   * for all four device orientations, since [MediaQuery.orientation] only
+   * distinguishes portrait from landscape.
+   */
+  fun getDisplayRotation(): Long
 
   companion object {
     /** The codec used by CameraHostApi. */
@@ -615,6 +627,21 @@ interface CameraHostApi {
                 reply.reply(wrapResult(null))
               }
             }
+          }
+        } else {
+          channel.setMessageHandler(null)
+        }
+      }
+      run {
+        val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.cambrian_camera.CameraHostApi.getDisplayRotation$separatedMessageChannelSuffix", codec)
+        if (api != null) {
+          channel.setMessageHandler { _, reply ->
+            val wrapped: List<Any?> = try {
+              listOf(api.getDisplayRotation())
+            } catch (exception: Throwable) {
+              wrapError(exception)
+            }
+            reply.reply(wrapped)
           }
         } else {
           channel.setMessageHandler(null)
