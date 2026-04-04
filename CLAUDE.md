@@ -47,10 +47,17 @@ dart format lib/            # Format code to match Flutter conventions
 - **`pubspec.yaml`** — Flutter dependencies and project metadata
 - **`analysis_options.yaml`** — Linting rules (extends `package:flutter_lints`)
 
-## Development Guidelines
-- Use the `camera2-docs` skill when looking up Camera2 API details while coding. Camera2 API reference is at:
-  `~/work/cambrian/eva-ref/camera2-docs-scrape/output/`
-- Always create a todo list to track progress and remain on track
+## Reference Documentation
+
+Use the `camera2-docs` skill when looking up Camera2 API details while coding.
+
+  Camera2 API reference is at:
+  ~/work/cambrian/eva-ref/camera2-docs-scrape/output/
+
+  - API classes: output/api-reference/camera2/ClassName.md
+  - Params: output/api-reference/camera2-params/ClassName.md
+  - Architecture guides: output/guides/camera/
+  - Search index: output/MANIFEST.json
 
 ## Important Notes
 
@@ -62,6 +69,7 @@ dart format lib/            # Format code to match Flutter conventions
   - **Dart:** use `show`/`hide` (e.g. `import 'package:foo/bar.dart' show MyClass;`)
   - **Kotlin/Java:** no wildcard imports (e.g. avoid `import x.y.*`)
 - Use `flutter pub get` after modifying `pubspec.yaml`
+- Always create a todo list to track progress and remain on track
 
 ## OpenCV (Android)
 
