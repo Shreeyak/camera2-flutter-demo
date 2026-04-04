@@ -358,8 +358,8 @@ class ProcessingParams {
     this.autoStretchLow = 0.01,
     this.autoStretchHigh = 0.99,
     this.brightness = 0.0,
-    this.contrast = 1.0,
-    this.saturation = 1.0,
+    this.contrast = 0.0,
+    this.saturation = 0.0,
   }) {
     _validate();
   }
@@ -387,13 +387,15 @@ class ProcessingParams {
   /// Upper percentile clip for auto-stretch (e.g. 0.99 = 99%).
   final double autoStretchHigh;
 
-  /// Brightness offset in [-1.0, +1.0]. 0.0 = no change.
+  /// Brightness offset in [-1.0, +1.0]. 0.0 = no change (identity).
   final double brightness;
 
-  /// Contrast multiplier in [0.5, 2.0]. 1.0 = identity.
+  /// Contrast adjustment in [-1.0, +1.0]. 0.0 = no change (identity).
+  /// Maps to internal multiplier [0.0, 2.0] where 0.0 = flat grey, 2.0 = maximum contrast.
   final double contrast;
 
-  /// Saturation multiplier in [0, 3]. 1.0 = identity.
+  /// Saturation adjustment in [-1.0, +1.0]. 0.0 = no change (identity/full natural color).
+  /// -1.0 = greyscale (zero saturation), +1.0 = boosted saturation (2x mix factor).
   final double saturation;
 
   void _validate() {
@@ -426,6 +428,15 @@ class ProcessingParams {
       throw ArgumentError.value(saturation, 'saturation', 'must not be NaN');
     }
     // Range checks.
+    if (brightness < -1.0 || brightness > 1.0) {
+      throw ArgumentError.value(brightness, 'brightness', 'must be in [-1.0, 1.0]');
+    }
+    if (contrast < -1.0 || contrast > 1.0) {
+      throw ArgumentError.value(contrast, 'contrast', 'must be in [-1.0, 1.0]');
+    }
+    if (saturation < -1.0 || saturation > 1.0) {
+      throw ArgumentError.value(saturation, 'saturation', 'must be in [-1.0, 1.0]');
+    }
     if (histBlackPoint > histWhitePoint) {
       throw ArgumentError(
         'histBlackPoint ($histBlackPoint) must be <= histWhitePoint ($histWhitePoint)',

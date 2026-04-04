@@ -128,9 +128,7 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
   }
 
   Future<void> _fetchRotation() async {
-    final camera = _camera;
-    if (camera == null) return;
-    final deg = await camera.getDisplayRotation();
+    final deg = await CambrianCamera.getDisplayRotation();
     if (mounted) setState(() => _displayRotationDeg = deg);
   }
 
@@ -146,8 +144,8 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
       final camera = await CambrianCamera.open(
         settings: _kInitialSettings,
       );
-      // High saturation so the processed pane is visually distinct from the raw pane.
-      final initialParams = ProcessingParams(saturation: 3.0);
+      // Default parameters (all identity values).
+      final initialParams = ProcessingParams();
       await camera.setProcessingParams(initialParams);
       final caps = camera.capabilities;
       final ranges = CameraRanges(

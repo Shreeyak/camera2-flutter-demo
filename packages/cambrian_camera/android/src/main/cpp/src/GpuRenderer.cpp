@@ -62,9 +62,9 @@ void main() {
 
     rgb = max(rgb - uBlackBalance, 0.0);
     rgb += uBrightness;
-    rgb = (rgb - 0.5) * uContrast + 0.5;
+    rgb = (rgb - 0.5) * (uContrast + 1.0) + 0.5;
     float luma = dot(rgb, kLuma);
-    rgb = mix(vec3(luma), rgb, uSaturation);
+    rgb = mix(vec3(luma), rgb, uSaturation + 1.0);
 
     fragColor = vec4(clamp(rgb, 0.0, 1.0), 1.0);
 }

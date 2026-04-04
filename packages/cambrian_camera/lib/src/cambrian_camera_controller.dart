@@ -117,6 +117,9 @@ class CambrianCamera {
   /// to avoid a race where the streaming event fires before the widget subscribes.
   CameraState _currentState;
 
+  /// Whether [close] has been called on this camera instance.
+  bool _closed = false;
+
   // ---------------------------------------------------------------------------
   // Factory
   // ---------------------------------------------------------------------------
@@ -238,6 +241,9 @@ class CambrianCamera {
   /// correctly when it is first built after [open] resolves.
   CameraState get state => _currentState;
 
+  /// Whether [close] has been called on this camera instance.
+  bool get isClosed => _closed;
+
   /// Broadcasts camera lifecycle state changes.
   ///
   /// The stream is a broadcast stream; multiple listeners are allowed.
@@ -287,9 +293,9 @@ class CambrianCamera {
 
   /// Returns the current display rotation in degrees CW from portrait: 0, 90, 180, or 270.
   ///
-  /// Used by preview widgets to select the correct [RotatedBox.quarterTurns] for all
-  /// four device orientations.
-  Future<int> getDisplayRotation() => _hostApi.getDisplayRotation();
+  /// This is a device-level query, not a per-camera query. Used by preview widgets
+  /// to select the correct [RotatedBox.quarterTurns] for all four device orientations.
+  static Future<int> getDisplayRotation() => CameraHostApi().getDisplayRotation();
 
   /// Returns the native `IImagePipeline*` pointer as an int64, or null if the
   /// pipeline is not yet initialized.
@@ -303,7 +309,12 @@ class CambrianCamera {
   /// Closes the camera and releases all native resources.
   ///
   /// After this call the instance must not be used again.
+  /// Safe to call multiple times; subsequent calls are no-ops.
   Future<void> close() async {
+    if (_closed) return;
+    // Set before the try block intentionally: prevents concurrent/reentrant second
+    // calls from reaching the native layer even if _hostApi.close() throws.
+    _closed = true;
     try {
       await _hostApi.close(_handle);
     } finally {
