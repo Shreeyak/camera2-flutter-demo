@@ -288,6 +288,9 @@ class CameraController(
                     if (w > 0 && h > 0) {
                         rawSurfaceProducer.setSize(w, h)
                     }
+                    // Rebind the new native window to the GPU renderer so raw preview
+                    // resumes after Flutter recreates the SurfaceProducer surface.
+                    gpuPipeline?.rebindRawSurface(rawSurfaceProducer.getSurface())
                 }
 
                 override fun onSurfaceCleanup() {
@@ -488,9 +491,11 @@ class CameraController(
                     evCompMin = evRange?.lower?.toLong() ?: -6L,
                     evCompMax = evRange?.upper?.toLong() ?: 6L,
                     evCompensationStep = evStep?.toDouble() ?: 0.5,
-                    rawStreamTextureId = rawSurfaceProducer?.id() ?: 0L,
-                    rawStreamWidth = rawW.toLong(),
-                    rawStreamHeight = rawH.toLong(),
+                    // Report non-zero raw stream info only when the GPU pipeline is actually
+                    // running with raw enabled; nativeGpuInit may silently disable it.
+                    rawStreamTextureId = if (gpuPipeline?.isRunning == true) rawSurfaceProducer?.id() ?: 0L else 0L,
+                    rawStreamWidth = if (gpuPipeline?.isRunning == true) rawW.toLong() else 0L,
+                    rawStreamHeight = if (gpuPipeline?.isRunning == true) rawH.toLong() else 0L,
                     streamWidth = previewWidth.toLong(),
                     streamHeight = previewHeight.toLong(),
                 )
@@ -828,6 +833,9 @@ class CameraController(
             android.util.Log.e("CambrianCamera", "startCaptureSession: nativeInit failed — aborting session startup")
             jpegImageReader = null
             jpegReader.close()
+            mainHandler.post {
+                openCallback(Result.failure(FlutterError("init_failed", "Native pipeline init failed", null)))
+            }
             return
         }
 
@@ -847,7 +855,20 @@ class CameraController(
         // Replay any previously set processing params so they survive pipeline recreation.
         lastProcessingParams?.let { setProcessingParams(it) }
 
-        val gpuSurface = gpuPipeline!!.cameraSurface!!
+        val gpuSurface = pipeline.cameraSurface
+        if (gpuSurface == null) {
+            android.util.Log.e("CambrianCamera", "startCaptureSession: GPU init failed — camera surface is null")
+            gpuPipeline = null
+            pipeline.stop()
+            nativeRelease(nativePipelinePtr)
+            nativePipelinePtr = 0L
+            jpegImageReader = null
+            jpegReader.close()
+            mainHandler.post {
+                openCallback(Result.failure(FlutterError("gpu_init_failed", "GPU pipeline init failed", null)))
+            }
+            return
+        }
         val surfaces = listOf(gpuSurface, jpegReader.surface)
 
         repeatingTargetSurface = gpuSurface

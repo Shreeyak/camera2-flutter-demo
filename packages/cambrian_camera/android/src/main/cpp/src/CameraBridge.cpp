@@ -395,6 +395,39 @@ Java_com_cambrian_camera_GpuPipeline_nativeGpuRelease(
 }
 
 // ---------------------------------------------------------------------------
+// nativeGpuRebindRawSurface
+//
+// Replaces the raw preview EGL window surface with one created from newRawSurface.
+// Must be called on the GL thread (post to glHandler) after Flutter recreates the
+// raw SurfaceProducer surface.
+//
+// @param gpuHandle      Handle returned by nativeGpuInit.
+// @param newRawSurface  New Android Surface for raw preview; may be null to detach.
+// ---------------------------------------------------------------------------
+JNIEXPORT void JNICALL
+Java_com_cambrian_camera_GpuPipeline_nativeGpuRebindRawSurface(
+        JNIEnv* env, jclass /*clazz*/,
+        jlong gpuHandle,
+        jobject newRawSurface) {
+    if (!gpuHandle) {
+        LOGE("nativeGpuRebindRawSurface: null renderer handle");
+        return;
+    }
+    cam::GpuRenderer* renderer = rendererFromHandle(gpuHandle);
+
+    ANativeWindow* window = nullptr;
+    if (newRawSurface) {
+        window = ANativeWindow_fromSurface(env, newRawSurface);
+        if (!window) {
+            LOGE("nativeGpuRebindRawSurface: ANativeWindow_fromSurface returned null");
+            return;
+        }
+    }
+    renderer->rebindRawSurface(window);
+    if (window) ANativeWindow_release(window);
+}
+
+// ---------------------------------------------------------------------------
 // nativeGpuSetAdjustments
 //
 // Updates the shader uniform values used during rendering.  Thread-safe;

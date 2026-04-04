@@ -62,6 +62,9 @@ open class GpuPipeline(
     var cameraSurface: Surface? = null
         private set
 
+    /** True if the GPU renderer is initialized and ready to process frames. */
+    val isRunning: Boolean get() = gpuHandle != 0L
+
     /** Tracker output height (fixed at 480p). */
     val trackerHeight: Int get() = 480
 
@@ -133,6 +136,18 @@ open class GpuPipeline(
         }
         glThread.quitSafely()
         glThread.join()
+    }
+
+    /**
+     * Rebind the raw preview EGL surface to a new [Surface] after Flutter recreates it.
+     * Posts the native call to the GL thread so EGL state is updated safely.
+     */
+    fun rebindRawSurface(surface: Surface?) {
+        val handle = gpuHandle
+        if (handle == 0L) return
+        glHandler.post {
+            nativeGpuRebindRawSurface(gpuHandle, surface)
+        }
     }
 
     /**
@@ -215,6 +230,9 @@ open class GpuPipeline(
 
         @JvmStatic
         external fun nativeGpuRelease(gpuHandle: Long)
+
+        @JvmStatic
+        external fun nativeGpuRebindRawSurface(gpuHandle: Long, newRawSurface: Surface?)
 
         @JvmStatic
         external fun nativeGpuSetAdjustments(

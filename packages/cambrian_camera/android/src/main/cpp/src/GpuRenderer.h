@@ -90,11 +90,16 @@ public:
 
     /// Update shader uniforms. Thread-safe; changes take effect on the next drawAndReadback().
     /// @param brightness   Additive brightness offset [-1, 1]; 0 = identity
-    /// @param contrast     Contrast multiplier [0, ∞]; 1 = identity
-    /// @param saturation   Saturation multiplier [0, 3]; 1 = identity
+    /// @param contrast     Contrast adjustment [-1, 1]; 0 = identity (shader applies uContrast + 1.0)
+    /// @param saturation   Saturation adjustment [-1, 1]; 0 = identity (shader applies uSaturation + 1.0)
     /// @param blackR/G/B   Per-channel black-level subtraction [0, 0.5]; 0 = identity
     void setAdjustments(float brightness, float contrast, float saturation,
                         float blackR, float blackG, float blackB, float gamma);
+
+    /// Rebind the raw preview EGL window surface to a new ANativeWindow.
+    /// Call this on the GL thread when Flutter recreates the raw SurfaceProducer surface.
+    /// @param newWindow  New ANativeWindow, or null to detach without rebinding.
+    void rebindRawSurface(ANativeWindow* newWindow);
 
     int trackerWidth()  const { return trackerWidth_; }
     int trackerHeight() const { return trackerHeight_; }
@@ -106,10 +111,11 @@ private:
     int trackerHeight_;
 
     // EGL objects
-    EGLDisplay eglDisplay_       = EGL_NO_DISPLAY;
-    EGLContext eglContext_        = EGL_NO_CONTEXT;
-    EGLSurface eglWindowSurface_ = EGL_NO_SURFACE;   // preview window; may stay NO_SURFACE
-    EGLSurface eglPbufferSurface_ = EGL_NO_SURFACE;  // 1×1 fallback; always created
+    EGLDisplay eglDisplay_        = EGL_NO_DISPLAY;
+    EGLContext eglContext_         = EGL_NO_CONTEXT;
+    EGLConfig  eglConfig_          = nullptr;          // stored for surface recreation
+    EGLSurface eglWindowSurface_  = EGL_NO_SURFACE;   // preview window; may stay NO_SURFACE
+    EGLSurface eglPbufferSurface_ = EGL_NO_SURFACE;   // 1×1 fallback; always created
 
     // GL program + geometry
     GLuint program_ = 0;
@@ -126,8 +132,9 @@ private:
     // Double-buffered PBOs for async readback
     GLuint fullResPbo_[2] = {0, 0};
     GLuint trackerPbo_[2] = {0, 0};
-    int    pboIndex_  = 0;    // index being written this frame; read = 1 - pboIndex_
-    bool   firstFrame_ = true; // skip readback on frame 0 (no previous write)
+    int    pboIndex_        = 0;     // index being written this frame; read = 1 - pboIndex_
+    bool   firstFrame_      = true;  // skip readback on frame 0 (no previous write)
+    bool   loggedFirstFrame_ = true; // one-time first-frame log flag (per instance)
 
     // Metadata stored alongside each PBO write to avoid off-by-one delivery
     struct PboMeta { uint64_t frameId; cam::FrameMetadata meta; };

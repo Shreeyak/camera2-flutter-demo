@@ -152,6 +152,17 @@ bool GpuRenderer::init(EGLNativeWindowType windowSurface,
 }
 
 void GpuRenderer::release() {
+    // Bind the EGL context before GL teardown so all glDelete* calls have a valid context.
+    // The destructor can be invoked off the GL thread during exception handling or unexpected
+    // object destruction; eglMakeCurrent ensures GL resources are freed safely.
+    if (eglDisplay_ != EGL_NO_DISPLAY &&
+        eglContext_ != EGL_NO_CONTEXT &&
+        eglPbufferSurface_ != EGL_NO_SURFACE) {
+        if (!eglMakeCurrent(eglDisplay_, eglPbufferSurface_, eglPbufferSurface_, eglContext_)) {
+            LOGE("release: eglMakeCurrent failed (0x%x) — GL teardown may be incomplete",
+                 eglGetError());
+        }
+    }
     releaseGl();
     releaseEgl();
 }
@@ -171,10 +182,9 @@ void GpuRenderer::drawAndReadback(
                        uint64_t frameId, const cam::FrameMetadata&)> trackerCb,
     RawCallback rawCb)
 {
-    static bool firstFrame = true;
-    if (firstFrame) {
+    if (loggedFirstFrame_) {
         LOGI("GpuRenderer: first frame rendered successfully (%dx%d)", width_, height_);
-        firstFrame = false;
+        loggedFirstFrame_ = false;
     }
 
     // -----------------------------------------------------------------------
@@ -256,7 +266,9 @@ void GpuRenderer::drawAndReadback(
             GL_COLOR_BUFFER_BIT, GL_NEAREST);
         checkGlError("blit to window");
 
-        eglSwapBuffers(eglDisplay_, eglWindowSurface_);
+        if (!eglSwapBuffers(eglDisplay_, eglWindowSurface_)) {
+            LOGE("drawAndReadback: eglSwapBuffers (processed) failed (0x%x)", eglGetError());
+        }
 
         // Switch back to pbuffer so GL state is consistent for readback
         eglMakeCurrent(eglDisplay_, eglPbufferSurface_, eglPbufferSurface_, eglContext_);
@@ -365,7 +377,9 @@ void GpuRenderer::drawAndReadback(
             glBlitFramebuffer(0, 0, rawW_, rawH_,
                               0, 0, rawW_, rawH_,
                               GL_COLOR_BUFFER_BIT, GL_NEAREST);
-            eglSwapBuffers(eglDisplay_, rawEGLSurface_);
+            if (!eglSwapBuffers(eglDisplay_, rawEGLSurface_)) {
+                LOGE("drawAndReadback: eglSwapBuffers (raw) failed (0x%x)", eglGetError());
+            }
             eglMakeCurrent(eglDisplay_, eglPbufferSurface_, eglPbufferSurface_, eglContext_);
             checkGlError("raw preview blit");
         }
@@ -420,6 +434,29 @@ void GpuRenderer::setAdjustments(float brightness, float contrast, float saturat
 }
 
 // ---------------------------------------------------------------------------
+// Public: raw surface rebind
+// ---------------------------------------------------------------------------
+
+void GpuRenderer::rebindRawSurface(ANativeWindow* newWindow) {
+    if (eglDisplay_ == EGL_NO_DISPLAY) {
+        LOGE("rebindRawSurface: EGL not initialized");
+        return;
+    }
+    if (rawEGLSurface_ != EGL_NO_SURFACE) {
+        eglDestroySurface(eglDisplay_, rawEGLSurface_);
+        rawEGLSurface_ = EGL_NO_SURFACE;
+    }
+    if (newWindow != nullptr && rawW_ > 0) {
+        rawEGLSurface_ = eglCreateWindowSurface(eglDisplay_, eglConfig_, newWindow, nullptr);
+        if (rawEGLSurface_ == EGL_NO_SURFACE) {
+            LOGE("rebindRawSurface: eglCreateWindowSurface failed (0x%x)", eglGetError());
+        } else {
+            LOGI("rebindRawSurface: raw EGL surface rebound");
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Private: EGL setup
 // ---------------------------------------------------------------------------
 
@@ -456,6 +493,7 @@ bool GpuRenderer::initEgl(EGLNativeWindowType windowSurface,
         LOGE("initEgl: eglChooseConfig failed (numConfigs=%d)", numConfigs);
         return false;
     }
+    eglConfig_ = config;
 
     const EGLint contextAttribs[] = {
         EGL_CONTEXT_CLIENT_VERSION, 3,

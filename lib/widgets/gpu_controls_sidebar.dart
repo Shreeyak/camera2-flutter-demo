@@ -1,4 +1,34 @@
-import 'package:flutter/material.dart';
+import 'package:flutter/material.dart'
+    show
+    BuildContext,
+    Color,
+    Colors,
+    Column,
+    Container,
+    CrossAxisAlignment,
+    Divider,
+    EdgeInsets,
+    FontFeature,
+    FontWeight,
+    GestureDetector,
+    Icon,
+    Icons,
+    ListView,
+    MainAxisAlignment,
+    OutlinedButton,
+    Padding,
+    Row,
+    RoundSliderOverlayShape,
+    RoundSliderThumbShape,
+    SafeArea,
+    SizedBox,
+    Slider,
+    SliderTheme,
+    StatelessWidget,
+    Text,
+    Theme,
+    ValueChanged,
+    Widget;
 import 'package:cambrian_camera/cambrian_camera.dart' show ProcessingParams;
 
 /// Right-side panel with Material3 sliders for each GPU shader uniform.

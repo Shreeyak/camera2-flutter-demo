@@ -465,6 +465,10 @@ void ImagePipeline::publishToRawConsumers(SharedFrame frame) {
 
 void ImagePipeline::deliverFullResRgba(const uint8_t* rgba, int w, int h, int stride,
                                         uint64_t frameId, const FrameMetadata& meta) {
+    {
+        std::lock_guard<std::mutex> lock(fullResConsumersMu_);
+        if (fullResConsumers_.empty()) return;
+    }
     auto frame    = std::make_shared<Frame>();
     frame->id     = frameId;
     frame->meta   = meta;
@@ -483,6 +487,10 @@ void ImagePipeline::deliverFullResRgba(const uint8_t* rgba, int w, int h, int st
 
 void ImagePipeline::deliverTrackerRgba(const uint8_t* rgba, int w, int h, int stride,
                                         uint64_t frameId, const FrameMetadata& meta) {
+    {
+        std::lock_guard<std::mutex> lock(trackerConsumersMu_);
+        if (trackerConsumers_.empty()) return;
+    }
     auto frame    = std::make_shared<Frame>();
     frame->id     = frameId;
     frame->meta   = meta;
