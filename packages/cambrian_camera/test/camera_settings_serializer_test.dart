@@ -180,7 +180,6 @@ void main() {
       expect(p.contrast, 1.0);
       expect(p.saturation, 1.0);
       expect(p.blackR, 0.0);
-      expect(p.autoStretch, false);
     });
 
     test('copyWith overrides only specified fields', () {
@@ -196,11 +195,6 @@ void main() {
         blackG: 0.04,
         blackB: 0.06,
         gamma: 2.2,
-        histBlackPoint: 0.02,
-        histWhitePoint: 0.98,
-        autoStretch: true,
-        autoStretchLow: 0.01,
-        autoStretchHigh: 0.99,
         brightness: 0.1,
         saturation: 1.2,
         contrast: 1.5,
@@ -208,7 +202,6 @@ void main() {
       final cam = p.toCam();
       expect(cam.blackR, 0.05);
       expect(cam.gamma, 2.2);
-      expect(cam.autoStretch, true);
       expect(cam.saturation, 1.2);
       expect(cam.contrast, 1.5);
     });

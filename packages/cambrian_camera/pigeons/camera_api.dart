@@ -98,11 +98,6 @@ class CamProcessingParams {
     required this.blackG,
     required this.blackB,
     required this.gamma,
-    required this.histBlackPoint,
-    required this.histWhitePoint,
-    required this.autoStretch,
-    required this.autoStretchLow,
-    required this.autoStretchHigh,
     required this.brightness,
     required this.contrast,
     required this.saturation,
@@ -112,11 +107,6 @@ class CamProcessingParams {
   double blackG;
   double blackB;
   double gamma;
-  double histBlackPoint;
-  double histWhitePoint;
-  bool autoStretch;
-  double autoStretchLow;
-  double autoStretchHigh;
   double brightness;
   double contrast;
   double saturation;

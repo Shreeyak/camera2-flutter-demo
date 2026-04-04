@@ -89,11 +89,6 @@ class CamProcessingParams {
     required this.blackG,
     required this.blackB,
     required this.gamma,
-    required this.histBlackPoint,
-    required this.histWhitePoint,
-    required this.autoStretch,
-    required this.autoStretchLow,
-    required this.autoStretchHigh,
     required this.brightness,
     required this.contrast,    // ← add this
     required this.saturation,
@@ -103,11 +98,6 @@ class CamProcessingParams {
   double blackG;
   double blackB;
   double gamma;
-  double histBlackPoint;
-  double histWhitePoint;
-  bool autoStretch;
-  double autoStretchLow;
-  double autoStretchHigh;
   double brightness;
   double contrast;             // ← add this
   double saturation;
@@ -132,11 +122,6 @@ ProcessingParams({
   this.blackG = 0.0,
   this.blackB = 0.0,
   this.gamma = 1.0,
-  this.histBlackPoint = 0.0,
-  this.histWhitePoint = 1.0,
-  this.autoStretch = false,
-  this.autoStretchLow = 0.01,
-  this.autoStretchHigh = 0.99,
   this.brightness = 0.0,
   this.contrast = 1.0,        // ← add
   this.saturation = 1.0,
@@ -163,11 +148,6 @@ CamProcessingParams toCam() => CamProcessingParams(
       blackG: blackG,
       blackB: blackB,
       gamma: gamma,
-      histBlackPoint: histBlackPoint,
-      histWhitePoint: histWhitePoint,
-      autoStretch: autoStretch,
-      autoStretchLow: autoStretchLow,
-      autoStretchHigh: autoStretchHigh,
       brightness: brightness,
       contrast: contrast,       // ← add
       saturation: saturation,

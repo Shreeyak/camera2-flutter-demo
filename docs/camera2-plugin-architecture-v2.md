@@ -179,11 +179,6 @@ Maps to C++ pipeline controls:
 class ProcessingParams {
   final double blackR, blackG, blackB;   // [0.0, 0.5] per-channel black level
   final double gamma;                     // [0.1, 4.0], 1.0 = identity
-  final double histBlackPoint;            // [0, 1] manual stretch
-  final double histWhitePoint;            // [0, 1] manual stretch
-  final bool autoStretch;                 // auto histogram stretch
-  final double autoStretchLow;            // percentile for auto clip low
-  final double autoStretchHigh;           // percentile for auto clip high
   final double brightness;               // [-1.0, +1.0]
   final double saturation;               // [0, 3], 1.0 = identity
 }
@@ -464,11 +459,6 @@ class PigeonProcessingParams {
   double blackG = 0;
   double blackB = 0;
   double gamma = 1.0;
-  double histBlackPoint = 0;
-  double histWhitePoint = 1;
-  bool autoStretch = false;
-  double autoStretchLow = 0.01;
-  double autoStretchHigh = 0.99;
   double brightness = 0;
   double saturation = 1.0;
 }
@@ -674,7 +664,6 @@ Stages 2-4 are fused into the LUT where possible. The LUT is rebuilt atomically 
 void rebuildLUT(const ProcessingParams& p) {
     for (int i = 0; i < 256; ++i) {
         float v = i / 255.0f;
-        v = clamp((v - histBlackPoint) / (histWhitePoint - histBlackPoint), 0, 1);
         v = pow(v, 1.0f / p.gamma);
         v = clamp(v + p.brightness, 0, 1);
         lut_[i] = static_cast<uint8_t>(v * 255);

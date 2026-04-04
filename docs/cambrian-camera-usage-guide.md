@@ -363,11 +363,6 @@ All fields have sensible defaults (identity/no-op).
 | `blackG` | `double` | 0.0 | [0.0, 0.5] | Green channel black level subtraction |
 | `blackB` | `double` | 0.0 | [0.0, 0.5] | Blue channel black level subtraction |
 | `gamma` | `double` | 1.0 | [0.1, 4.0] | Gamma correction (1.0 = identity) |
-| `histBlackPoint` | `double` | 0.0 | [0, 1] | Manual histogram black point |
-| `histWhitePoint` | `double` | 1.0 | [0, 1] | Manual histogram white point |
-| `autoStretch` | `bool` | false | | Auto-compute histogram stretch per-frame |
-| `autoStretchLow` | `double` | 0.01 | [0, 1] | Lower percentile clip for auto-stretch |
-| `autoStretchHigh` | `double` | 0.99 | [0, 1] | Upper percentile clip for auto-stretch |
 | `brightness` | `double` | 0.0 | [-1.0, 1.0] | Brightness offset |
 | `saturation` | `double` | 1.0 | [0, 3] | Saturation multiplier (1.0 = identity) |
 

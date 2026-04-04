@@ -193,11 +193,6 @@ class CamProcessingParams {
     required this.blackG,
     required this.blackB,
     required this.gamma,
-    required this.histBlackPoint,
-    required this.histWhitePoint,
-    required this.autoStretch,
-    required this.autoStretchLow,
-    required this.autoStretchHigh,
     required this.brightness,
     required this.contrast,
     required this.saturation,
@@ -211,16 +206,6 @@ class CamProcessingParams {
 
   double gamma;
 
-  double histBlackPoint;
-
-  double histWhitePoint;
-
-  bool autoStretch;
-
-  double autoStretchLow;
-
-  double autoStretchHigh;
-
   double brightness;
 
   double contrast;
@@ -233,11 +218,6 @@ class CamProcessingParams {
       blackG,
       blackB,
       gamma,
-      histBlackPoint,
-      histWhitePoint,
-      autoStretch,
-      autoStretchLow,
-      autoStretchHigh,
       brightness,
       contrast,
       saturation,
@@ -251,14 +231,9 @@ class CamProcessingParams {
       blackG: result[1]! as double,
       blackB: result[2]! as double,
       gamma: result[3]! as double,
-      histBlackPoint: result[4]! as double,
-      histWhitePoint: result[5]! as double,
-      autoStretch: result[6]! as bool,
-      autoStretchLow: result[7]! as double,
-      autoStretchHigh: result[8]! as double,
-      brightness: result[9]! as double,
-      contrast: result[10]! as double,
-      saturation: result[11]! as double,
+      brightness: result[4]! as double,
+      contrast: result[5]! as double,
+      saturation: result[6]! as double,
     );
   }
 }

@@ -80,9 +80,6 @@ class CameraControllerGpuTest {
     ) = CamProcessingParams(
         blackR = blackR, blackG = blackG, blackB = blackB,
         gamma = 1.0,
-        histBlackPoint = 0.0, histWhitePoint = 1.0,
-        autoStretch = false,
-        autoStretchLow = 0.0, autoStretchHigh = 1.0,
         brightness = brightness,
         contrast = contrast,
         saturation = saturation,

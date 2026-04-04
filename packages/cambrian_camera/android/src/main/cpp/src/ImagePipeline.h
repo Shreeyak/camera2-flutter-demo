@@ -33,18 +33,11 @@ namespace cam {
 
 /// User-adjustable processing parameters. All fields have identity defaults.
 /// setParams() is thread-safe; the processing loop reads a snapshot under paramsMu_.
-/// Currently only saturation is applied; remaining fields are stored and will be
-/// wired incrementally.
 struct ProcessingParams {
     float blackR = 0.f, blackG = 0.f, blackB = 0.f;  ///< [0, 0.5] per-channel black level
-    float gamma           = 1.f;                       ///< [0.1, 4.0]; 1.0 = identity
-    float histBlackPoint  = 0.f;                       ///< [0, 1]
-    float histWhitePoint  = 1.f;                       ///< [0, 1]
-    bool  autoStretch     = false;
-    float autoStretchLow  = 0.01f;
-    float autoStretchHigh = 0.99f;
-    float brightness      = 0.f;                       ///< [-1, 1]; 0.0 = identity
-    float saturation      = 1.f;                       ///< [0, 3]; 1.0 = identity
+    float gamma      = 1.f;                            ///< [0.1, 4.0]; 1.0 = identity
+    float brightness = 0.f;                            ///< [-1, 1]; 0.0 = identity
+    float saturation = 1.f;                            ///< [0, 3]; 1.0 = identity
 };
 
 /// Internal shared frame distributed to all consumers. cv::Mat is kept out of

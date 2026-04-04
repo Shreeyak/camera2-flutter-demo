@@ -136,14 +136,6 @@ saturation     float   [-1, 1]    luminance-preserving mix:
                                    rgb = mix(luma, rgb, saturation + 1.0)
 ```
 
-**CPU pipeline — inactive (ImagePipeline.h only, not reached in GPU mode):**
-```
-gamma          float   [0.1, 4.0] not yet ported to GPU renderer
-histBlackPoint float   [0, 1]     not yet ported to GPU renderer
-histWhitePoint float   [0, 1]     not yet ported to GPU renderer
-autoStretch    bool               not yet ported to GPU renderer
-```
-
 ---
 
 ## 3. Thread Model

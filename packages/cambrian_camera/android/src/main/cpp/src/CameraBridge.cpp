@@ -286,9 +286,6 @@ Java_com_cambrian_camera_CameraController_nativeSetProcessingParams(
         jlong pipelinePtr,
         jdouble blackR,  jdouble blackG,  jdouble blackB,
         jdouble gamma,
-        jdouble histBlackPoint, jdouble histWhitePoint,
-        jboolean autoStretch,
-        jdouble autoStretchLow, jdouble autoStretchHigh,
         jdouble brightness,
         jdouble saturation) {
     if (!pipelinePtr) {
@@ -301,11 +298,6 @@ Java_com_cambrian_camera_CameraController_nativeSetProcessingParams(
     p.blackG          = static_cast<float>(blackG);
     p.blackB          = static_cast<float>(blackB);
     p.gamma           = static_cast<float>(gamma);
-    p.histBlackPoint  = static_cast<float>(histBlackPoint);
-    p.histWhitePoint  = static_cast<float>(histWhitePoint);
-    p.autoStretch     = static_cast<bool>(autoStretch);
-    p.autoStretchLow  = static_cast<float>(autoStretchLow);
-    p.autoStretchHigh = static_cast<float>(autoStretchHigh);
     p.brightness      = static_cast<float>(brightness);
     p.saturation      = static_cast<float>(saturation);
 

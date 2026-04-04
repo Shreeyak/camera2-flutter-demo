@@ -218,11 +218,6 @@ struct CamProcessingParams {
   var blackG: Double
   var blackB: Double
   var gamma: Double
-  var histBlackPoint: Double
-  var histWhitePoint: Double
-  var autoStretch: Bool
-  var autoStretchLow: Double
-  var autoStretchHigh: Double
   var brightness: Double
   var contrast: Double
   var saturation: Double
@@ -234,25 +229,15 @@ struct CamProcessingParams {
     let blackG = pigeonVar_list[1] as! Double
     let blackB = pigeonVar_list[2] as! Double
     let gamma = pigeonVar_list[3] as! Double
-    let histBlackPoint = pigeonVar_list[4] as! Double
-    let histWhitePoint = pigeonVar_list[5] as! Double
-    let autoStretch = pigeonVar_list[6] as! Bool
-    let autoStretchLow = pigeonVar_list[7] as! Double
-    let autoStretchHigh = pigeonVar_list[8] as! Double
-    let brightness = pigeonVar_list[9] as! Double
-    let contrast = pigeonVar_list[10] as! Double
-    let saturation = pigeonVar_list[11] as! Double
+    let brightness = pigeonVar_list[4] as! Double
+    let contrast = pigeonVar_list[5] as! Double
+    let saturation = pigeonVar_list[6] as! Double
 
     return CamProcessingParams(
       blackR: blackR,
       blackG: blackG,
       blackB: blackB,
       gamma: gamma,
-      histBlackPoint: histBlackPoint,
-      histWhitePoint: histWhitePoint,
-      autoStretch: autoStretch,
-      autoStretchLow: autoStretchLow,
-      autoStretchHigh: autoStretchHigh,
       brightness: brightness,
       contrast: contrast,
       saturation: saturation
@@ -264,11 +249,6 @@ struct CamProcessingParams {
       blackG,
       blackB,
       gamma,
-      histBlackPoint,
-      histWhitePoint,
-      autoStretch,
-      autoStretchLow,
-      autoStretchHigh,
       brightness,
       contrast,
       saturation,

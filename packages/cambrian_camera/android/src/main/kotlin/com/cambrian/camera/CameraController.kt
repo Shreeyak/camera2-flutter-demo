@@ -132,9 +132,6 @@ class CameraController(
             pipelinePtr: Long,
             blackR: Double, blackG: Double, blackB: Double,
             gamma: Double,
-            histBlackPoint: Double, histWhitePoint: Double,
-            autoStretch: Boolean,
-            autoStretchLow: Double, autoStretchHigh: Double,
             brightness: Double,
             saturation: Double,
         )

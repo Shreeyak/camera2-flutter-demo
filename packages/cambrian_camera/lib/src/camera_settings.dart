@@ -352,11 +352,6 @@ class ProcessingParams {
     this.blackG = 0.0,
     this.blackB = 0.0,
     this.gamma = 1.0,
-    this.histBlackPoint = 0.0,
-    this.histWhitePoint = 1.0,
-    this.autoStretch = false,
-    this.autoStretchLow = 0.01,
-    this.autoStretchHigh = 0.99,
     this.brightness = 0.0,
     this.contrast = 0.0,
     this.saturation = 0.0,
@@ -371,21 +366,6 @@ class ProcessingParams {
 
   /// Gamma correction exponent in [0.1, 4.0]. 1.0 = identity.
   final double gamma;
-
-  /// Manual histogram stretch: black point fraction in [0, 1].
-  final double histBlackPoint;
-
-  /// Manual histogram stretch: white point fraction in [0, 1].
-  final double histWhitePoint;
-
-  /// If true, auto-compute histogram stretch per-frame.
-  final bool autoStretch;
-
-  /// Lower percentile clip for auto-stretch (e.g. 0.01 = 1%).
-  final double autoStretchLow;
-
-  /// Upper percentile clip for auto-stretch (e.g. 0.99 = 99%).
-  final double autoStretchHigh;
 
   /// Brightness offset in [-1.0, +1.0]. 0.0 = no change (identity).
   final double brightness;
@@ -406,18 +386,6 @@ class ProcessingParams {
     if (gamma.isNaN || gamma <= 0) {
       throw ArgumentError.value(gamma, 'gamma', 'must be > 0 and not NaN');
     }
-    if (histBlackPoint.isNaN) {
-      throw ArgumentError.value(histBlackPoint, 'histBlackPoint', 'must not be NaN');
-    }
-    if (histWhitePoint.isNaN) {
-      throw ArgumentError.value(histWhitePoint, 'histWhitePoint', 'must not be NaN');
-    }
-    if (autoStretchLow.isNaN) {
-      throw ArgumentError.value(autoStretchLow, 'autoStretchLow', 'must not be NaN');
-    }
-    if (autoStretchHigh.isNaN) {
-      throw ArgumentError.value(autoStretchHigh, 'autoStretchHigh', 'must not be NaN');
-    }
     if (brightness.isNaN) {
       throw ArgumentError.value(brightness, 'brightness', 'must not be NaN');
     }
@@ -437,17 +405,6 @@ class ProcessingParams {
     if (saturation < -1.0 || saturation > 1.0) {
       throw ArgumentError.value(saturation, 'saturation', 'must be in [-1.0, 1.0]');
     }
-    if (histBlackPoint > histWhitePoint) {
-      throw ArgumentError(
-        'histBlackPoint ($histBlackPoint) must be <= histWhitePoint ($histWhitePoint)',
-      );
-    }
-    if (autoStretch && autoStretchLow >= autoStretchHigh) {
-      throw ArgumentError(
-        'autoStretchLow ($autoStretchLow) must be < autoStretchHigh ($autoStretchHigh) '
-        'when autoStretch is true',
-      );
-    }
   }
 
   CamProcessingParams toCam() => CamProcessingParams(
@@ -455,11 +412,6 @@ class ProcessingParams {
         blackG: blackG,
         blackB: blackB,
         gamma: gamma,
-        histBlackPoint: histBlackPoint,
-        histWhitePoint: histWhitePoint,
-        autoStretch: autoStretch,
-        autoStretchLow: autoStretchLow,
-        autoStretchHigh: autoStretchHigh,
         brightness: brightness,
         contrast: contrast,
         saturation: saturation,
@@ -470,11 +422,6 @@ class ProcessingParams {
     double? blackG,
     double? blackB,
     double? gamma,
-    double? histBlackPoint,
-    double? histWhitePoint,
-    bool? autoStretch,
-    double? autoStretchLow,
-    double? autoStretchHigh,
     double? brightness,
     double? contrast,
     double? saturation,
@@ -484,11 +431,6 @@ class ProcessingParams {
         blackG: blackG ?? this.blackG,
         blackB: blackB ?? this.blackB,
         gamma: gamma ?? this.gamma,
-        histBlackPoint: histBlackPoint ?? this.histBlackPoint,
-        histWhitePoint: histWhitePoint ?? this.histWhitePoint,
-        autoStretch: autoStretch ?? this.autoStretch,
-        autoStretchLow: autoStretchLow ?? this.autoStretchLow,
-        autoStretchHigh: autoStretchHigh ?? this.autoStretchHigh,
         brightness: brightness ?? this.brightness,
         contrast: contrast ?? this.contrast,
         saturation: saturation ?? this.saturation,
