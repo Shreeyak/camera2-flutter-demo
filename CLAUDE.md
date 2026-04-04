@@ -59,6 +59,15 @@ Use the `camera2-docs` skill when looking up Camera2 API details while coding.
   - Architecture guides: output/guides/camera/
   - Search index: output/MANIFEST.json
 
+## Living Documents
+
+These two files must be kept up to date whenever the architecture or public API changes:
+
+- **`docs/architecture.md`** — plugin architecture, data flow, component relationships. Update when adding/removing components, changing how data flows between Kotlin/C++/Dart layers, or restructuring the pipeline.
+- **`docs/usage-guide.md`** — public API and usage patterns for consumers of the library. Update when the Dart API changes, new streams or parameters are added, or usage patterns change.
+
+After implementing any architectural change, review both files and update any sections that are no longer accurate.
+
 ## Important Notes
 
 - This is a Flutter demo project for the camera2 library

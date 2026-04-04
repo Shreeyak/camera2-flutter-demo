@@ -1,9 +1,24 @@
-{                                                                       
-    "permissions": {                                                      
+{
+    "permissions": {
         "allow": [
             "Bash(adb -s * logcat*)",
             "Bash(adb logcat*)"
-        ],              
-        "deny": []          
-    }                             
-} 
+        ],
+        "deny": []
+    },
+    "hooks": {
+        "PreToolUse": [
+            {
+                "matcher": "Bash",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "if": "Bash(git commit*)",
+                        "command": "echo '{\"hookSpecificOutput\": {\"hookEventName\": \"PreToolUse\", \"additionalContext\": \"REMINDER: Before committing, check if this change affects plugin architecture or public API. If so, update docs/architecture.md and/or docs/usage-guide.md.\"}}'",
+                        "statusMessage": "Checking living docs..."
+                    }
+                ]
+            }
+        ]
+    }
+}

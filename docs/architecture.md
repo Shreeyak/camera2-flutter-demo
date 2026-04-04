@@ -627,6 +627,72 @@ Camera2 → SurfaceTexture → OES texture
 
 Raw resources are released when the pipeline is torn down or when raw init fails.
 
+### Frame delivery code flow (post-GPU readback)
+
+```mermaid
+sequenceDiagram
+    participant Cam as Camera2
+    participant GP as GpuPipeline.kt<br/>(GL thread)
+    participant GR as GpuRenderer<br/>::drawAndReadback
+    participant CB as fullResCb<br/>lambda
+    participant IP as ImagePipeline<br/>::deliverFullResRgba
+    participant PS as ProcessingStage<br/>(hook thread)
+    participant PUB as publishTo<br/>FullResConsumers
+    participant CD as Consumer<br/>dispatch thread
+    participant UC as SinkCallback<br/>(user code)
+
+    Cam->>GP: onFrameAvailable(SurfaceTexture)
+    GP->>GR: nativeGpuDrawAndReadback(oesTexture, texMatrix, ...)
+    Note over GR: Render OES→FBO, blit preview,<br/>PBO readback, map previous PBO
+    GR->>CB: fullResCb(mapped_ptr, w, h, stride, frameId, meta)
+    CB->>IP: deliverFullResRgba(mapped_ptr, w, h, stride, frameId, meta)
+    Note over IP: memcpy mapped_ptr →<br/>std::vector in SharedFrame
+
+    alt No hook set (fast path)
+        IP->>PUB: publishToFullResConsumers(frame)
+    else Hook set
+        IP->>PS: post SharedFrame to 1-slot mailbox
+        Note over PS: hook(rgba, w, h, stride)<br/>modifies data in-place
+        PS->>PUB: publishToFullResConsumers(frame)
+    end
+
+    PUB->>CD: post SharedFrame to consumer mailbox (1-slot, drop-on-busy)
+    CD->>UC: SinkFrame{data, w, h, stride, format, frameId, meta}
+    Note over UC: shared_ptr ref keeps<br/>vector alive during callback
+```
+
+The same pattern applies for tracker (480p) and raw (passthrough) streams via `deliverTrackerRgba` / `deliverRawRgba`.
+
+### Buffer ownership and memory flow
+
+```mermaid
+flowchart TD
+    PBO["GPU PBO[readIdx]<br/><i>mapped GPU mem, ephemeral</i><br/><i>valid only during callback</i>"]
+    SF["SharedFrame<br/><code>shared_ptr&lt;Frame&gt;</code><br/><code>Frame.data = std::vector&lt;uint8_t&gt;</code><br/><i>heap-allocated, ref-counted</i>"]
+    PSM["ProcessingStage mailbox<br/><i>1-slot, drop-on-busy</i><br/><i>shared_ptr copy (no data copy)</i>"]
+    HOOK["Hook runs in-place<br/><code>hook(data.data(), w, h, stride)</code><br/><i>mutates same buffer</i>"]
+    CM["Consumer mailboxes<br/><i>1 per registered sink</i><br/><i>shared_ptr copy (no data copy)</i>"]
+    DT["Consumer dispatch thread<br/><code>frame = std::move(pending)</code><br/><i>local ref keeps data alive</i>"]
+    SCB["SinkCallback scope<br/><code>SinkFrame.data = frame-&gt;data.data()</code><br/><i>raw pointer, valid during callback</i>"]
+
+    PBO -->|"memcpy<br/>(1 copy, unavoidable)"| SF
+    SF -->|"hook set?"| PSM
+    SF -->|"no hook<br/>(fast path)"| CM
+    PSM --> HOOK
+    HOOK -->|"same SharedFrame"| CM
+    CM -->|"dispatch thread wakes"| DT
+    DT --> SCB
+
+    style PBO fill:#f9f,stroke:#333
+    style SF fill:#bbf,stroke:#333
+    style HOOK fill:#fdb,stroke:#333
+    style CM fill:#bfb,stroke:#333
+```
+
+**Total memcopies:** 1 (PBO → vector). The processing hook and consumer dispatch add only `shared_ptr` copies — pointer copy, no data copy.
+
+**Concurrency guarantee:** When a consumer's dispatch thread does `frame = std::move(pending)`, it takes ownership of the `shared_ptr`. New frames overwrite the mailbox slot but do NOT affect the local ref. The consumer processes its frame safely while newer frames accumulate (and get dropped) in the slot.
+
 ### Processing stages (applied to every frame on the processed path)
 
 1. **Black balance** — per-channel level subtraction: `pixel[ch] = max(0, pixel[ch] - blackLevel[ch])`

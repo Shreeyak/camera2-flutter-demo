@@ -9,6 +9,9 @@ tmp_files/*
 **/android/.cxx
 **/android/opencv
 **/.venv
+!docs/redundant/.gitkeep
+docs/redundant
+
 
 # Miscellaneous
 pubspec.lock
