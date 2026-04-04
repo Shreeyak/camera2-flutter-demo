@@ -45,6 +45,7 @@ dependencies:
 ```dart
 import 'package:cambrian_camera/cambrian_camera.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:flutter/material.dart';
 
 // 1. Request permission
 await Permission.camera.request();
@@ -52,8 +53,22 @@ await Permission.camera.request();
 // 2. Open camera (returns when streaming is active)
 final camera = await CambrianCamera.open();
 
-// 3. Show preview — use the returned Widget in your widget tree
-child: camera.buildPreview(fit: BoxFit.cover),
+// 3. Show preview — build your own widget from the texture stream
+child: StreamBuilder<CameraTextureInfo>(
+  stream: camera.toneMappedTexture,
+  builder: (context, snap) {
+    if (!snap.hasData) return const ColoredBox(color: Colors.black);
+    final t = snap.data!;
+    return FittedBox(
+      fit: BoxFit.cover,
+      child: SizedBox(
+        width: t.width.toDouble(),
+        height: t.height.toDouble(),
+        child: Texture(textureId: t.textureId),
+      ),
+    );
+  },
+),
 
 // 4. Adjust settings
 camera.updateSettings(CameraSettings(
@@ -115,54 +130,103 @@ Closes the camera and releases all native resources. The instance must not be us
 
 ---
 
-### Preview
+### Preview Streams
 
-#### `camera.buildPreview()`
+The library exposes texture streams as data primitives. Your app builds widgets from these primitives, giving you full control over layout, rotation, and display logic.
+
+#### `camera.toneMappedTexture`
 
 ```dart
-Widget buildPreview({BoxFit fit = BoxFit.contain, Widget? placeholder})
+Stream<CameraTextureInfo> get toneMappedTexture
 ```
 
-Returns a widget that displays the live camera preview.
+Emits a `CameraTextureInfo` describing the processed (color-corrected) preview stream each time the camera transitions to `streaming` state.
 
-- `fit` — how the preview inscribes into available space (default: `BoxFit.contain`).
-- `placeholder` — widget shown while not streaming (during opening, recovery, or error). Defaults to an empty `SizedBox`.
+`CameraTextureInfo` contains:
+- `textureId` — Flutter texture ID (pass to `Texture` widget)
+- `width`, `height` — native pixel dimensions
 
 ```dart
-// Full-screen preview
-Expanded(
-  child: camera.buildPreview(
-    fit: BoxFit.cover,
-    placeholder: Center(child: CircularProgressIndicator()),
-  ),
+StreamBuilder<CameraTextureInfo>(
+  stream: camera.toneMappedTexture,
+  builder: (context, snap) {
+    if (!snap.hasData) {
+      return const ColoredBox(color: Colors.black);
+    }
+    final t = snap.data!;
+    return FittedBox(
+      fit: BoxFit.cover,
+      child: SizedBox(
+        width: t.width.toDouble(),
+        height: t.height.toDouble(),
+        child: Texture(textureId: t.textureId),
+      ),
+    );
+  },
 )
 ```
 
-The preview automatically:
-- Shows the placeholder during `opening`, `recovering`, and `error` states
-- Switches to the live `Texture` when `streaming`
-- Preserves the correct aspect ratio via `FittedBox`
-
-#### `camera.buildRawPreview()`
+#### `camera.rawTexture`
 
 ```dart
-Widget buildRawPreview({BoxFit fit = BoxFit.contain, Widget? placeholder})
+Stream<CameraTextureInfo> get rawTexture
 ```
 
-Returns a widget displaying the raw (passthrough) camera preview — no color processing is applied. The output is bit-exact RGBA from the sensor.
+Emits a `CameraTextureInfo` describing the raw (passthrough, unprocessed) preview stream. Only emits if `enableRawStream: true` was passed to `open()`.
 
-Throws `StateError` if `enableRawStream` was `false` at `open()` time.
+The raw stream is useful for side-by-side debugging or for apps that need unprocessed sensor data. Most apps only need `toneMappedTexture`.
 
 ```dart
-// Raw preview (passthrough, no color processing)
-camera.buildRawPreview(
-  fit: BoxFit.cover,
-  placeholder: const ColoredBox(color: Colors.black),
+// Only available if enableRawStream: true
+StreamBuilder<CameraTextureInfo>(
+  stream: camera.rawTexture,
+  builder: (context, snap) {
+    if (!snap.hasData) return const SizedBox.shrink();
+    final t = snap.data!;
+    return Texture(textureId: t.textureId);
+  },
 )
-// Throws StateError if enableRawStream was false at open() time.
 ```
 
-Use alongside `buildPreview()` to show both processed and unprocessed views simultaneously (e.g., a side-by-side comparison pane).
+#### Device Rotation
+
+Handle rotation via `WidgetsBindingObserver` and `getDisplayRotation()`. Use the `quarterTurnsFromDisplayRotation()` helper to convert degrees to `RotatedBox.quarterTurns`:
+
+```dart
+import 'package:cambrian_camera/cambrian_camera.dart' 
+    show quarterTurnsFromDisplayRotation;
+
+class _MyState extends State<MyWidget> with WidgetsBindingObserver {
+  int _displayRotationDeg = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _fetchRotation();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeMetrics() {
+    _fetchRotation();
+  }
+
+  Future<void> _fetchRotation() async {
+    final deg = await camera.getDisplayRotation();
+    if (mounted) setState(() => _displayRotationDeg = deg);
+  }
+
+  int get _quarterTurns => quarterTurnsFromDisplayRotation(_displayRotationDeg);
+
+  // Use _quarterTurns in RotatedBox wrapping your texture
+}
+```
 
 ---
 
@@ -538,7 +602,7 @@ print('Resolutions: ${caps.supportedSizes}');
 | `evCompMin` / `evCompMax` | `int` | EV compensation range (in steps) |
 | `evCompensationStep` | `double` | Size of one EV step |
 | `yuvStreamWidth` / `yuvStreamHeight` | `int` | YUV stream dimensions delivered to the C++ pipeline (pixels). Used by the preview widget for correct aspect ratio. |
-| `rawStreamTextureId` | `int` | Flutter texture ID for the raw (passthrough) preview stream. `0` when raw is disabled. Pass to `Texture(textureId: caps.rawStreamTextureId)` to render a manual raw pane; prefer `buildRawPreview()` instead. |
+| `rawStreamTextureId` | `int` | Flutter texture ID for the raw (passthrough) preview stream. `0` when raw is disabled. Available via `rawTexture` stream. |
 | `rawStreamWidth` / `rawStreamHeight` | `int` | Raw stream dimensions in pixels. Both are `0` when raw is disabled (either `enableRawStream` was `false`, or raw init failed). Width is auto-computed from aspect ratio; height matches the `rawStreamHeight` passed to `open()`. |
 | `estimatedMemoryBytes` | `int` | Estimated native memory usage |
 
@@ -805,7 +869,23 @@ class _MyCameraScreenState extends State<MyCameraScreen> {
       children: [
         // Live preview
         Expanded(
-          child: camera.buildPreview(fit: BoxFit.contain),
+          child: StreamBuilder<CameraTextureInfo>(
+            stream: camera.toneMappedTexture,
+            builder: (context, snap) {
+              if (!snap.hasData) {
+                return const Center(child: CircularProgressIndicator());
+              }
+              final t = snap.data!;
+              return FittedBox(
+                fit: BoxFit.contain,
+                child: SizedBox(
+                  width: t.width.toDouble(),
+                  height: t.height.toDouble(),
+                  child: Texture(textureId: t.textureId),
+                ),
+              );
+            },
+          ),
         ),
 
         // Controls

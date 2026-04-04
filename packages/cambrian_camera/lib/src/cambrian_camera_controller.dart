@@ -1,15 +1,12 @@
 import 'dart:async';
 
-import 'package:flutter/material.dart' show Colors;
 import 'package:flutter/widgets.dart';
 
 import 'camera_settings.dart';
 import 'camera_settings_serializer.dart';
 import 'camera_state.dart';
-import 'cambrian_camera_preview.dart';
 import 'frame_result.dart' show FrameResult;
 import 'messages.g.dart';
-import 'rotation_observer_mixin.dart';
 
 /// The main entry point for the Cambrian camera library.
 ///
@@ -167,10 +164,56 @@ class CambrianCamera {
   // Public API
   // ---------------------------------------------------------------------------
 
-  /// Flutter texture ID for the processed (post-pipeline) preview stream.
+  /// Emits a [CameraTextureInfo] each time the tone-mapped (color-processed)
+  /// stream becomes ready for display.
   ///
-  /// Prefer [buildPreview] over constructing a [Texture] widget manually.
-  int get processedStreamTextureId => _handle;
+  /// Emits the current state immediately if already streaming, then continues
+  /// with future state changes. This ensures late subscribers don't miss the
+  /// streaming transition event.
+  Stream<CameraTextureInfo> get toneMappedTexture => _toneMappedTextureStream();
+
+  Stream<CameraTextureInfo> _toneMappedTextureStream() async* {
+    if (_currentState == CameraState.streaming) {
+      yield CameraTextureInfo(
+        textureId: _handle,
+        width: _capabilities.streamWidth,
+        height: _capabilities.streamHeight,
+      );
+    }
+    yield* stateStream
+        .where((s) => s == CameraState.streaming)
+        .map((_) => CameraTextureInfo(
+              textureId: _handle,
+              width: _capabilities.streamWidth,
+              height: _capabilities.streamHeight,
+            ));
+  }
+
+  /// Emits a [CameraTextureInfo] each time the raw (unprocessed) stream
+  /// becomes ready for display. Only emits if [enableRawStream] was true
+  /// when [open] was called.
+  ///
+  /// Emits the current state immediately if already streaming, then continues
+  /// with future state changes. This ensures late subscribers don't miss the
+  /// streaming transition event.
+  Stream<CameraTextureInfo> get rawTexture => _rawTextureStream();
+
+  Stream<CameraTextureInfo> _rawTextureStream() async* {
+    if (_currentState == CameraState.streaming && _enableRawStream) {
+      yield CameraTextureInfo(
+        textureId: _capabilities.rawStreamTextureId,
+        width: _capabilities.rawStreamWidth,
+        height: _capabilities.rawStreamHeight,
+      );
+    }
+    yield* stateStream
+        .where((s) => s == CameraState.streaming && _enableRawStream)
+        .map((_) => CameraTextureInfo(
+              textureId: _capabilities.rawStreamTextureId,
+              width: _capabilities.rawStreamWidth,
+              height: _capabilities.rawStreamHeight,
+            ));
+  }
 
   /// Device capabilities (resolution list, ISO/exposure ranges, etc.).
   CameraCapabilities get capabilities => _capabilities;
@@ -242,35 +285,6 @@ class CambrianCamera {
   Future<int?> getNativePipelineHandle() =>
       _hostApi.getNativePipelineHandle(_handle);
 
-  /// Returns a widget that displays the camera preview.
-  ///
-  /// Internally wraps a Flutter [Texture] widget. Shows [placeholder] while
-  /// the camera is not yet streaming (e.g. during opening or recovery).
-  Widget buildPreview({BoxFit fit = BoxFit.contain, Widget? placeholder}) =>
-      CambrianCameraPreview(camera: this, fit: fit, placeholder: placeholder);
-
-  /// Returns a widget that displays the raw (pre-processing) GPU preview stream.
-  ///
-  /// The raw stream shows the camera output before any color adjustments or
-  /// post-processing are applied. It is only available when [open] was called
-  /// with [enableRawStream] set to true.
-  ///
-  /// Throws [StateError] if the camera was opened without [enableRawStream: true].
-  ///
-  /// Shows [placeholder] (defaults to a black box) while the texture ID is not
-  /// yet available (i.e. [CameraCapabilities.rawStreamTextureId] == 0).
-  Widget buildRawPreview({BoxFit fit = BoxFit.contain, Widget? placeholder}) {
-    if (!_enableRawStream) {
-      throw StateError(
-        'Raw stream not enabled. Pass enableRawStream: true to open().',
-      );
-    }
-    final texId = _capabilities.rawStreamTextureId;
-    if (texId == 0) {
-      return placeholder ?? const ColoredBox(color: Colors.black);
-    }
-    return _RawPreviewWidget(camera: this, fit: fit, placeholder: placeholder);
-  }
 
   /// Closes the camera and releases all native resources.
   ///
@@ -338,58 +352,3 @@ class _FlutterApiDispatcher extends CameraFlutterApi {
   }
 }
 
-/// Internal widget that displays the raw GPU preview stream with 4-way rotation.
-///
-/// Uses [WidgetsBindingObserver.didChangeMetrics] to re-fetch the exact display
-/// rotation degrees (0/90/180/270) from the platform on every device rotation,
-/// including landscape-left ↔ landscape-right which [MediaQuery.orientation]
-/// cannot distinguish (both report [Orientation.landscape]).
-class _RawPreviewWidget extends StatefulWidget {
-  const _RawPreviewWidget({
-    required this.camera,
-    required this.fit,
-    this.placeholder,
-  });
-
-  final CambrianCamera camera;
-  final BoxFit fit;
-  final Widget? placeholder;
-
-  @override
-  State<_RawPreviewWidget> createState() => _RawPreviewWidgetState();
-}
-
-class _RawPreviewWidgetState extends State<_RawPreviewWidget>
-    with WidgetsBindingObserver, CameraRotationObserverMixin<_RawPreviewWidget> {
-  @override
-  CambrianCamera get rotationCamera => widget.camera;
-
-  @override
-  Widget build(BuildContext context) {
-    return StreamBuilder<CameraState>(
-      stream: widget.camera.stateStream,
-      initialData: widget.camera.state,
-      builder: (BuildContext context, AsyncSnapshot<CameraState> snapshot) {
-        if (snapshot.data == CameraState.streaming) {
-          return _buildTexture();
-        }
-        return widget.placeholder ?? const SizedBox.expand();
-      },
-    );
-  }
-
-  Widget _buildTexture() {
-    final caps = widget.camera.capabilities;
-    return FittedBox(
-      fit: widget.fit,
-      child: RotatedBox(
-        quarterTurns: quarterTurns,
-        child: SizedBox(
-          width: caps.rawStreamWidth.toDouble(),
-          height: caps.rawStreamHeight.toDouble(),
-          child: Texture(textureId: caps.rawStreamTextureId),
-        ),
-      ),
-    );
-  }
-}

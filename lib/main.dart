@@ -8,8 +8,10 @@ import 'package:cambrian_camera/cambrian_camera.dart'
         CameraError,
         CameraErrorCode,
         CameraSettings,
+        CameraTextureInfo,
         FrameResult,
         ProcessingParams,
+        quarterTurnsFromDisplayRotation,
         WhiteBalance;
 import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -65,7 +67,7 @@ class CameraScreen extends StatefulWidget {
   State<CameraScreen> createState() => _CameraScreenState();
 }
 
-class _CameraScreenState extends State<CameraScreen> {
+class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver {
   // ── Camera state
   late CameraSettingsValues _values;
   CameraRanges _ranges = const CameraRanges();
@@ -84,9 +86,13 @@ class _CameraScreenState extends State<CameraScreen> {
   /// Guards manual ISO/exposure changes to prevent a settingsConflict on open.
   bool _aeSeeded = false;
 
+  /// Display rotation in degrees CW from portrait: 0, 90, 180, or 270.
+  int _displayRotationDeg = 0;
+
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _values = CameraSettingsValues.fromSettings(_kInitialSettings, _ranges);
     _openCamera();
     _callbacks = CameraCallbacks(
@@ -97,7 +103,36 @@ class _CameraScreenState extends State<CameraScreen> {
       onWbLockChanged: _setWbLocked,
       onToggleAf: _toggleAf,
     );
+    _fetchRotation();
   }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _frameResultSub?.cancel();
+    _errorSub?.cancel();
+    final camera = _camera;
+    if (camera != null) {
+      camera.close().catchError((Object e) {
+        debugPrint('CambrianCamera.close failed during dispose: $e');
+      });
+    }
+    super.dispose();
+  }
+
+  @override
+  void didChangeMetrics() {
+    _fetchRotation();
+  }
+
+  Future<void> _fetchRotation() async {
+    final camera = _camera;
+    if (camera == null) return;
+    final deg = await camera.getDisplayRotation();
+    if (mounted) setState(() => _displayRotationDeg = deg);
+  }
+
+  int get _quarterTurns => quarterTurnsFromDisplayRotation(_displayRotationDeg);
 
   Future<void> _openCamera() async {
     final status = await Permission.camera.request();
@@ -138,6 +173,7 @@ class _CameraScreenState extends State<CameraScreen> {
       });
       _frameResultSub = camera.frameResultStream.listen(_onFrameResult);
       _errorSub = camera.errorStream.listen(_onCameraError);
+      _fetchRotation();
     } catch (e) {
       // Camera may not be available in all environments (e.g. emulators).
       // The UI degrades gracefully to a black placeholder.
@@ -145,18 +181,6 @@ class _CameraScreenState extends State<CameraScreen> {
     }
   }
 
-  @override
-  void dispose() {
-    _frameResultSub?.cancel();
-    _errorSub?.cancel();
-    final camera = _camera;
-    if (camera != null) {
-      camera.close().catchError((Object e) {
-        debugPrint('CambrianCamera.close failed during dispose: $e');
-      });
-    }
-    super.dispose();
-  }
 
   // ── Camera setting callbacks
 
@@ -363,13 +387,15 @@ class _CameraScreenState extends State<CameraScreen> {
                       duration: const Duration(milliseconds: 250),
                       curve: Curves.easeInOutCubic,
                       width: _sidebarOpen ? 270 : 0,
-                      child: OverflowBox(
-                        alignment: Alignment.centerLeft,
-                        minWidth: 270,
-                        maxWidth: 270,
-                        child: GpuControlsSidebar(
-                          params: _processingParams,
-                          onChanged: _applyProcessingParams,
+                      child: ClipRect(
+                        child: OverflowBox(
+                          alignment: Alignment.centerLeft,
+                          minWidth: 270,
+                          maxWidth: 270,
+                          child: GpuControlsSidebar(
+                            params: _processingParams,
+                            onChanged: _applyProcessingParams,
+                          ),
                         ),
                       ),
                     ),
@@ -449,9 +475,23 @@ class _CameraScreenState extends State<CameraScreen> {
     if (camera == null) {
       return const ColoredBox(color: Colors.black);
     }
-    return camera.buildPreview(
-      fit: BoxFit.cover,
-      placeholder: const ColoredBox(color: Colors.black),
+    return StreamBuilder<CameraTextureInfo>(
+      stream: camera.toneMappedTexture,
+      builder: (context, snap) {
+        if (!snap.hasData) return const ColoredBox(color: Colors.black);
+        final t = snap.data!;
+        return FittedBox(
+          fit: BoxFit.cover,
+          child: RotatedBox(
+            quarterTurns: _quarterTurns,
+            child: SizedBox(
+              width: t.width.toDouble(),
+              height: t.height.toDouble(),
+              child: Texture(textureId: t.textureId),
+            ),
+          ),
+        );
+      },
     );
   }
 
@@ -461,9 +501,23 @@ class _CameraScreenState extends State<CameraScreen> {
     if (camera == null) {
       return const ColoredBox(color: Colors.black);
     }
-    return camera.buildRawPreview(
-      fit: BoxFit.cover,
-      placeholder: const ColoredBox(color: Colors.black),
+    return StreamBuilder<CameraTextureInfo>(
+      stream: camera.rawTexture,
+      builder: (context, snap) {
+        if (!snap.hasData) return const ColoredBox(color: Colors.black);
+        final t = snap.data!;
+        return FittedBox(
+          fit: BoxFit.cover,
+          child: RotatedBox(
+            quarterTurns: _quarterTurns,
+            child: SizedBox(
+              width: t.width.toDouble(),
+              height: t.height.toDouble(),
+              child: Texture(textureId: t.textureId),
+            ),
+          ),
+        );
+      },
     );
   }
 }
