@@ -360,8 +360,8 @@ class _CameraScreenState extends State<CameraScreen> {
                   children: [
                     Row(
                       children: [
-                        Expanded(child: _buildRawPreview()),
-                        Expanded(child: _buildCameraPreview()),
+                        Expanded(child: Center(child: _buildRawPreview())),
+                        Expanded(child: Center(child: _buildCameraPreview())),
                       ],
                     ),
                     // Sidebar toggle button — top right corner
