@@ -18,7 +18,7 @@ void main() {
         ),
       );
 
-      expect(find.text('Color Controls'), findsOneWidget);
+      expect(find.text('Calibrate Color'), findsOneWidget);
       expect(find.text('Brightness'), findsOneWidget);
       expect(find.text('Contrast'), findsOneWidget);
       expect(find.text('Saturation'), findsOneWidget);
@@ -70,7 +70,7 @@ void main() {
         await tester.pump();
 
         expect(received, isNotNull);
-        expect(received!.contrast, isNot(1.0));
+        expect(received!.contrast, isNot(0.0));
       },
     );
 
@@ -93,7 +93,99 @@ void main() {
         await tester.pump();
 
         expect(received, isNotNull);
-        expect(received!.saturation, isNot(1.0));
+        expect(received!.saturation, isNot(0.0));
+      },
+    );
+
+    testWidgets(
+      'gamma slider calls onChanged with updated gamma',
+      (WidgetTester tester) async {
+        ProcessingParams? received;
+
+        await tester.pumpWidget(
+          _wrap(
+            GpuControlsSidebar(
+              params: ProcessingParams(),
+              onChanged: (p) => received = p,
+            ),
+          ),
+        );
+
+        // Gamma is the fourth Slider.
+        await tester.drag(find.byType(Slider).at(3), const Offset(20, 0));
+        await tester.pump();
+
+        expect(received, isNotNull);
+        expect(received!.gamma, isNot(1.0));
+      },
+    );
+
+    testWidgets(
+      'black R slider calls onChanged with updated blackR',
+      (WidgetTester tester) async {
+        ProcessingParams? received;
+
+        await tester.pumpWidget(
+          _wrap(
+            GpuControlsSidebar(
+              params: ProcessingParams(),
+              onChanged: (p) => received = p,
+            ),
+          ),
+        );
+
+        // Black R is the fifth Slider.
+        await tester.drag(find.byType(Slider).at(4), const Offset(20, 0));
+        await tester.pump();
+
+        expect(received, isNotNull);
+        expect(received!.blackR, isNot(0.0));
+      },
+    );
+
+    testWidgets(
+      'black G slider calls onChanged with updated blackG',
+      (WidgetTester tester) async {
+        ProcessingParams? received;
+
+        await tester.pumpWidget(
+          _wrap(
+            GpuControlsSidebar(
+              params: ProcessingParams(),
+              onChanged: (p) => received = p,
+            ),
+          ),
+        );
+
+        // Black G is the sixth Slider.
+        await tester.drag(find.byType(Slider).at(5), const Offset(20, 0));
+        await tester.pump();
+
+        expect(received, isNotNull);
+        expect(received!.blackG, isNot(0.0));
+      },
+    );
+
+    testWidgets(
+      'black B slider calls onChanged with updated blackB',
+      (WidgetTester tester) async {
+        ProcessingParams? received;
+
+        await tester.pumpWidget(
+          _wrap(
+            GpuControlsSidebar(
+              params: ProcessingParams(),
+              onChanged: (p) => received = p,
+            ),
+          ),
+        );
+
+        // Black B is the seventh Slider.
+        await tester.drag(find.byType(Slider).at(6), const Offset(20, 0));
+        await tester.pump();
+
+        expect(received, isNotNull);
+        expect(received!.blackB, isNot(0.0));
       },
     );
 
@@ -101,7 +193,7 @@ void main() {
       'reset button calls onChanged with default ProcessingParams',
       (WidgetTester tester) async {
         ProcessingParams? received;
-        final initial = ProcessingParams(brightness: 0.5, contrast: 1.5);
+        final initial = ProcessingParams(brightness: 0.5, contrast: 0.5);
 
         await tester.pumpWidget(
           _wrap(
@@ -117,8 +209,8 @@ void main() {
 
         expect(received, isNotNull);
         expect(received!.brightness, 0.0);
-        expect(received!.contrast, 1.0);
-        expect(received!.saturation, 1.0);
+        expect(received!.contrast, 0.0);
+        expect(received!.saturation, 0.0);
         expect(received!.blackR, 0.0);
         expect(received!.blackG, 0.0);
         expect(received!.blackB, 0.0);

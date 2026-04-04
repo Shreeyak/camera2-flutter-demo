@@ -177,8 +177,8 @@ void main() {
       final p = ProcessingParams();
       expect(p.gamma, 1.0);
       expect(p.brightness, 0.0);
-      expect(p.contrast, 1.0);
-      expect(p.saturation, 1.0);
+      expect(p.contrast, 0.0);
+      expect(p.saturation, 0.0);
       expect(p.blackR, 0.0);
     });
 
@@ -196,26 +196,26 @@ void main() {
         blackB: 0.06,
         gamma: 2.2,
         brightness: 0.1,
-        saturation: 1.2,
-        contrast: 1.5,
+        saturation: 0.8,
+        contrast: 0.5,
       );
       final cam = p.toCam();
       expect(cam.blackR, 0.05);
       expect(cam.gamma, 2.2);
-      expect(cam.saturation, 1.2);
-      expect(cam.contrast, 1.5);
+      expect(cam.saturation, 0.8);
+      expect(cam.contrast, 0.5);
     });
 
-    test('contrast defaults to 1.0', () {
-      expect(ProcessingParams().contrast, 1.0);
+    test('contrast defaults to 0.0', () {
+      expect(ProcessingParams().contrast, 0.0);
     });
 
     test('copyWith overrides contrast', () {
-      expect(ProcessingParams().copyWith(contrast: 1.5).contrast, 1.5);
+      expect(ProcessingParams().copyWith(contrast: 0.5).contrast, 0.5);
     });
 
     test('toCam includes contrast', () {
-      expect(ProcessingParams(contrast: 1.5).toCam().contrast, 1.5);
+      expect(ProcessingParams(contrast: 0.5).toCam().contrast, 0.5);
     });
 
     test('contrast NaN throws', () {
@@ -223,6 +223,69 @@ void main() {
         () => ProcessingParams(contrast: double.nan),
         throwsA(isA<ArgumentError>()),
       );
+    });
+
+    test('NaN throws for all fields', () {
+      for (final ctor in <Function>[
+        () => ProcessingParams(brightness: double.nan),
+        () => ProcessingParams(saturation: double.nan),
+        () => ProcessingParams(gamma: double.nan),
+        () => ProcessingParams(blackR: double.nan),
+        () => ProcessingParams(blackG: double.nan),
+        () => ProcessingParams(blackB: double.nan),
+      ]) {
+        expect(ctor, throwsA(isA<ArgumentError>()));
+      }
+    });
+
+    test('boundary values are accepted', () {
+      // All at their documented min/max — must not throw.
+      expect(ProcessingParams(brightness: -1.0).brightness, -1.0);
+      expect(ProcessingParams(brightness: 1.0).brightness, 1.0);
+      expect(ProcessingParams(contrast: -1.0).contrast, -1.0);
+      expect(ProcessingParams(contrast: 1.0).contrast, 1.0);
+      expect(ProcessingParams(saturation: -1.0).saturation, -1.0);
+      expect(ProcessingParams(saturation: 1.0).saturation, 1.0);
+      expect(ProcessingParams(gamma: 0.1).gamma, 0.1);
+      expect(ProcessingParams(gamma: 4.0).gamma, 4.0);
+      expect(ProcessingParams(blackR: 0.0).blackR, 0.0);
+      expect(ProcessingParams(blackR: 0.5).blackR, 0.5);
+      expect(ProcessingParams(blackG: 0.0).blackG, 0.0);
+      expect(ProcessingParams(blackG: 0.5).blackG, 0.5);
+      expect(ProcessingParams(blackB: 0.0).blackB, 0.0);
+      expect(ProcessingParams(blackB: 0.5).blackB, 0.5);
+    });
+
+    test('out-of-range values throw', () {
+      for (final ctor in <Function>[
+        () => ProcessingParams(brightness: -1.001),
+        () => ProcessingParams(brightness: 1.001),
+        () => ProcessingParams(contrast: -1.001),
+        () => ProcessingParams(contrast: 1.001),
+        () => ProcessingParams(saturation: -1.001),
+        () => ProcessingParams(saturation: 1.001),
+        () => ProcessingParams(gamma: 0.09),
+        () => ProcessingParams(gamma: 4.01),
+        () => ProcessingParams(blackR: -0.01),
+        () => ProcessingParams(blackR: 0.51),
+        () => ProcessingParams(blackG: -0.01),
+        () => ProcessingParams(blackG: 0.51),
+        () => ProcessingParams(blackB: -0.01),
+        () => ProcessingParams(blackB: 0.51),
+      ]) {
+        expect(ctor, throwsA(isA<ArgumentError>()));
+      }
+    });
+
+    test('identity roundtrip through toCam', () {
+      final cam = ProcessingParams().toCam();
+      expect(cam.brightness, 0.0);
+      expect(cam.contrast, 0.0);
+      expect(cam.saturation, 0.0);
+      expect(cam.gamma, 1.0);
+      expect(cam.blackR, 0.0);
+      expect(cam.blackG, 0.0);
+      expect(cam.blackB, 0.0);
     });
   });
 

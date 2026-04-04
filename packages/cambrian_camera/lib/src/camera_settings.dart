@@ -383,8 +383,8 @@ class ProcessingParams {
     if (blackR.isNaN) throw ArgumentError.value(blackR, 'blackR', 'must not be NaN');
     if (blackG.isNaN) throw ArgumentError.value(blackG, 'blackG', 'must not be NaN');
     if (blackB.isNaN) throw ArgumentError.value(blackB, 'blackB', 'must not be NaN');
-    if (gamma.isNaN || gamma <= 0) {
-      throw ArgumentError.value(gamma, 'gamma', 'must be > 0 and not NaN');
+    if (gamma.isNaN || gamma < 0.1 || gamma > 4.0) {
+      throw ArgumentError.value(gamma, 'gamma', 'must be in [0.1, 4.0]');
     }
     if (brightness.isNaN) {
       throw ArgumentError.value(brightness, 'brightness', 'must not be NaN');
@@ -396,6 +396,15 @@ class ProcessingParams {
       throw ArgumentError.value(saturation, 'saturation', 'must not be NaN');
     }
     // Range checks.
+    if (blackR < 0.0 || blackR > 0.5) {
+      throw ArgumentError.value(blackR, 'blackR', 'must be in [0.0, 0.5]');
+    }
+    if (blackG < 0.0 || blackG > 0.5) {
+      throw ArgumentError.value(blackG, 'blackG', 'must be in [0.0, 0.5]');
+    }
+    if (blackB < 0.0 || blackB > 0.5) {
+      throw ArgumentError.value(blackB, 'blackB', 'must be in [0.0, 0.5]');
+    }
     if (brightness < -1.0 || brightness > 1.0) {
       throw ArgumentError.value(brightness, 'brightness', 'must be in [-1.0, 1.0]');
     }
