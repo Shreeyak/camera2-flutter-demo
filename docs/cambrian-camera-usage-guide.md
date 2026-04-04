@@ -174,7 +174,7 @@ Stream<CameraTextureInfo> get rawTexture
 
 Emits a `CameraTextureInfo` describing the raw (passthrough, unprocessed) preview stream. Only emits if `enableRawStream: true` was passed to `open()`.
 
-The raw stream is useful for side-by-side debugging or for apps that need unprocessed sensor data. Most apps only need `toneMappedTexture`.
+The raw stream provides the camera image before any GPU shader adjustments (brightness, contrast, saturation, etc.). It is not Bayer RAW sensor data — it is the Camera2/SurfaceTexture output as-is, in RGBA. Useful for side-by-side debugging. Most apps only need `toneMappedTexture`.
 
 ```dart
 // Only available if enableRawStream: true
@@ -218,7 +218,7 @@ class _MyState extends State<MyWidget> with WidgetsBindingObserver {
   }
 
   Future<void> _fetchRotation() async {
-    final deg = await camera.getDisplayRotation();
+    final deg = await CambrianCamera.getDisplayRotation();
     if (mounted) setState(() => _displayRotationDeg = deg);
   }
 
@@ -717,7 +717,7 @@ Sinks are routed by role, controlling which frame path they receive. Pass `role`
 |------|----------|-------------|--------------|-------------|
 | `SinkRole::FULL_RES` | yes | processedFBO | RGBA | Full-resolution color-processed frames (default for all sinks) |
 | `SinkRole::TRACKER` | — | processedFBO | RGBA | Same processed frames, typically registered at lower resolution |
-| `SinkRole::RAW` | — | rawFBO | RGBA | Passthrough frames — no color math, bit-exact sensor output. Only available when `enableRawStream: true`. |
+| `SinkRole::RAW` | — | rawFBO | RGBA | Passthrough frames — no shader adjustments applied. Camera2/SurfaceTexture output as-is in RGBA. Only available when `enableRawStream: true`. |
 
 `SinkRole::RAW` sinks receive frames from the raw render path at `rawStreamHeight` resolution. Register a `RAW` sink only when the raw stream is enabled; frames will not be delivered if raw was disabled at `open()` time.
 

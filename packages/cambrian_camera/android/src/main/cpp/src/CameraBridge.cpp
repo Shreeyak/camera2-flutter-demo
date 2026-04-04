@@ -435,11 +435,12 @@ Java_com_cambrian_camera_GpuPipeline_nativeGpuRebindRawSurface(
 //
 // @param gpuHandle   Handle returned by nativeGpuInit.
 // @param brightness  Additive brightness offset [-1, 1]; 0 = identity.
-// @param contrast    Contrast multiplier [0, ∞]; 1 = identity.
-// @param saturation  Saturation multiplier [0, 3]; 1 = identity.
+// @param contrast    Contrast adjustment [-1, 1]; 0 = identity (shader applies uContrast + 1.0).
+// @param saturation  Saturation adjustment [-1, 1]; 0 = identity (shader applies uSaturation + 1.0).
 // @param blackR      Per-channel black-level subtraction for red [0, 0.5].
 // @param blackG      Per-channel black-level subtraction for green [0, 0.5].
 // @param blackB      Per-channel black-level subtraction for blue [0, 0.5].
+// @param gamma       Gamma correction exponent [0.1, 4.0]; 1.0 = identity (shader applies 1/gamma).
 // ---------------------------------------------------------------------------
 JNIEXPORT void JNICALL
 Java_com_cambrian_camera_GpuPipeline_nativeGpuSetAdjustments(

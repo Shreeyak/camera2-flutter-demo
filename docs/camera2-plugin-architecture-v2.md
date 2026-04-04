@@ -110,13 +110,13 @@ class CambrianCamera {
   /// Closes camera and releases all resources.
   Future<void> close();
 
-  /// Returns a Widget displaying the camera preview (color-processed).
-  /// Handles Texture lifecycle, aspect ratio, and placeholder internally.
-  Widget buildPreview({BoxFit fit = BoxFit.contain});
+  /// Emits the Flutter texture ID for the color-processed preview.
+  /// Apps render it with Flutter's Texture widget.
+  Stream<CameraTextureInfo> get toneMappedTexture;
 
-  /// Returns a Widget displaying the raw (passthrough) preview.
-  /// Throws StateError if enableRawStream was false at open() time.
-  Widget buildRawPreview({BoxFit fit = BoxFit.contain});
+  /// Emits the Flutter texture ID for the raw (passthrough) preview.
+  /// Only emits if enableRawStream: true was passed to open().
+  Stream<CameraTextureInfo> get rawTexture;
 
   /// Camera state transitions (ready, streaming, recovering, error).
   Stream<CameraState> get stateStream;
@@ -362,47 +362,26 @@ IImagePipeline* getPipeline();
 #include <cambrian_camera_native.h>
 
 static int g_stitchSinkId = -1;
-static int g_trackSinkId = -1;
-
 void registerConsumers() {
     auto* pipeline = cam::getPipeline();
     if (!pipeline) return;
 
     // Full-res RGBA for stitching
-    cam::SinkConfig stitchCfg;
-    stitchCfg.name = "stitcher";
-    stitchCfg.ringSize = 4;
-    stitchCfg.dropOnFull = false;  // log warning = backpressure signal
-    g_stitchSinkId = pipeline->addSink(stitchCfg, [](cam::SinkFrame& frame) {
-        // Process frame for stitching...
-        frame.release();  // return ring slot
+    pipeline->addSink({"stitcher", cam::SinkRole::FULL_RES},
+                      [](const cam::SinkFrame& frame) {
+        // frame.data = full-res RGBA, valid for duration of this callback
     });
 
-    // 480p green channel for tracking
-    cam::SinkConfig trackCfg;
-    trackCfg.name = "tracker";
-    trackCfg.role = cam::SinkRole::TRACKER;
-    trackCfg.width = 960;
-    trackCfg.height = 540;
-    trackCfg.channels = 1;
-    trackCfg.channelIndex = 1;     // green
-    trackCfg.ringSize = 8;
-    trackCfg.dropOnFull = true;    // tracker only needs latest
-    g_trackSinkId = pipeline->addSink(trackCfg, [](cam::SinkFrame& frame) {
-        // Process frame for tracking...
-        frame.release();
+    // 480p downscaled RGBA for tracking
+    pipeline->addSink({"tracker", cam::SinkRole::TRACKER},
+                      [](const cam::SinkFrame& frame) {
+        // frame.data = 480p-height RGBA
     });
 
     // Raw passthrough sink (only when enableRawStream: true was passed to open())
-    cam::SinkConfig rawCfg;
-    rawCfg.name = "raw_writer";
-    rawCfg.role = cam::SinkRole::RAW;  // bit-exact RGBA, no color processing
-    rawCfg.ringSize = 2;
-    rawCfg.dropOnFull = true;
-    g_rawSinkId = pipeline->addSink(rawCfg, [](cam::SinkFrame& frame) {
-        // frame.width/height = rawStreamWidth/rawStreamHeight
-        // frame.data = passthrough RGBA from rawFBO
-        frame.release();
+    pipeline->addSink({"raw_writer", cam::SinkRole::RAW},
+                      [](const cam::SinkFrame& frame) {
+        // frame.data = passthrough RGBA from rawFBO, no shader adjustments
     });
 }
 ```
@@ -632,9 +611,9 @@ Camera2 → SurfaceTexture → OES texture
   └── [passthrough shader] → rawFBO(rawH) → raw preview surface + RAW sinks
 ```
 
-**Processed path** (always active): The color shader applies all `ProcessingParams` (black balance, white balance, gamma, histogram stretch, brightness, saturation) and renders into `processedFBO`. The preview surface and all `FULL_RES`/`TRACKER` sinks receive this output.
+**Processed path** (always active): The color shader applies all `ProcessingParams` (black balance, brightness, contrast, saturation, gamma) and renders into `processedFBO`. The preview surface and all `FULL_RES`/`TRACKER` sinks receive this output.
 
-**Raw path** (optional, enabled by `rawW_ > 0`): The passthrough shader performs no color math — output is a bit-exact copy of the OES texture in RGBA. Rendered into `rawFBO` at `rawStreamHeight` resolution. The raw preview surface and all `RAW` sinks receive this output.
+**Raw path** (optional, enabled by `rawW_ > 0`): The passthrough shader applies no shader adjustments — output is the Camera2/SurfaceTexture image as-is in RGBA. Rendered into `rawFBO` at `rawStreamHeight` resolution. The raw preview surface and all `RAW` sinks receive this output.
 
 **Failure handling:** If raw initialization fails (EGL surface creation, FBO setup, shader compilation), the failure is logged, `rawW_` is set to `0`, and the processed pipeline continues normally. Callers can confirm raw is active by checking `capabilities.rawStreamWidth > 0` after `open()`.
 
