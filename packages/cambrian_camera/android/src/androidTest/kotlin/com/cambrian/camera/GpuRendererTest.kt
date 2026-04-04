@@ -1,6 +1,7 @@
 package com.cambrian.camera
 
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.platform.app.InstrumentationRegistry
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
 import org.junit.Test
@@ -9,10 +10,12 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class GpuRendererSmokeTest {
 
+    private val ctx get() = InstrumentationRegistry.getInstrumentation().targetContext
+
     /** Tracker width/height are pure Kotlin math — no GL context needed. */
     @Test
     fun trackerDimensionsAreCorrect() {
-        val pipeline = GpuPipeline(3840, 2160, null, null, 0, 0, 0L)
+        val pipeline = GpuPipeline(3840, 2160, null, null, 0, 0, ctx, 0L)
         assertEquals(854, pipeline.trackerWidth)
         assertEquals(480, pipeline.trackerHeight)
     }
@@ -20,7 +23,7 @@ class GpuRendererSmokeTest {
     /** Same check for a 4:3 sensor resolution. */
     @Test
     fun trackerDimensionsFor4x3CameraAreCorrect() {
-        val pipeline = GpuPipeline(4160, 3120, null, null, 0, 0, 0L)
+        val pipeline = GpuPipeline(4160, 3120, null, null, 0, 0, ctx, 0L)
         assertEquals(640, pipeline.trackerWidth)
         assertEquals(480, pipeline.trackerHeight)
     }
@@ -47,7 +50,7 @@ class GpuRendererSmokeTest {
     fun setAdjustmentsDoesNotCrash() {
         val handle = GpuPipeline.nativeGpuInit(null, 640, 480, null, 0, 0)
         if (handle != 0L) {
-            GpuPipeline.nativeGpuSetAdjustments(handle, 0.1, 1.2, 0.8, 0.0, 0.0, 0.0)
+            GpuPipeline.nativeGpuSetAdjustments(handle, 0.1, 1.2, 0.8, 0.0, 0.0, 0.0, 1.0)
             GpuPipeline.nativeGpuRelease(handle)
         }
     }

@@ -104,6 +104,7 @@ class CameraControllerGpuTest {
             blackR = 0.05,
             blackG = 0.06,
             blackB = 0.07,
+            gamma = 1.0,
         )
 
         val stored = lastParamsField.get(controller) as CamProcessingParams?
@@ -122,7 +123,7 @@ class CameraControllerGpuTest {
         controller.setProcessingParams(params)
 
         // No interaction with any mock GPU pipeline.
-        verify(mockGpuPipeline, never()).setAdjustments(any(), any(), any(), any(), any(), any())
+        verify(mockGpuPipeline, never()).setAdjustments(any(), any(), any(), any(), any(), any(), any())
 
         val stored = lastParamsField.get(controller) as CamProcessingParams?
         assertEquals(params, stored)
@@ -165,6 +166,7 @@ class CameraControllerGpuTest {
             blackR = params.blackR,
             blackG = params.blackG,
             blackB = params.blackB,
+            gamma = params.gamma,
         )
         // No other interactions — GpuPipeline has no separate raw adjustment path.
         verifyNoMoreInteractions(mockGpuPipeline)
@@ -213,7 +215,7 @@ class CameraControllerGpuTest {
             handle = 2L,
         )
 
-        // Simulate a completed session start by injecting rawW and rawH.
+        // Simulate a completed session start by injecting rawW, rawH, and a running gpuPipeline.
         val rawWField = CameraController::class.java.getDeclaredField("rawW")
         rawWField.isAccessible = true
         rawWField.set(rawController, 640)
@@ -221,6 +223,14 @@ class CameraControllerGpuTest {
         val rawHField = CameraController::class.java.getDeclaredField("rawH")
         rawHField.isAccessible = true
         rawHField.set(rawController, 480)
+
+        // Inject a mock GpuPipeline so isRunning returns true — capabilities
+        // gate raw stream fields on pipeline readiness.
+        val mockPipeline: GpuPipeline = mock()
+        whenever(mockPipeline.isRunning).thenReturn(true)
+        val gpuField = CameraController::class.java.getDeclaredField("gpuPipeline")
+        gpuField.isAccessible = true
+        gpuField.set(rawController, mockPipeline)
 
         // Set resolvedCameraId so getCapabilities skips selectDefaultCameraId().
         val resolvedCameraIdField = CameraController::class.java.getDeclaredField("resolvedCameraId")
