@@ -169,6 +169,12 @@ void GpuRenderer::drawAndReadback(
                        uint64_t frameId, const cam::FrameMetadata&)> trackerCb,
     RawCallback rawCb)
 {
+    static bool firstFrame = true;
+    if (firstFrame) {
+        LOGI("GpuRenderer: first frame rendered successfully (%dx%d)", width_, height_);
+        firstFrame = false;
+    }
+
     // -----------------------------------------------------------------------
     // 1. Snapshot uniforms under the lock so the GL thread gets a consistent copy.
     // -----------------------------------------------------------------------

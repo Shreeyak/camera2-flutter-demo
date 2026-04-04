@@ -356,46 +356,43 @@ class _CameraScreenState extends State<CameraScreen> {
             children: [
               // Two preview panes side by side: raw (left) vs processed (right).
               Expanded(
-                child: Row(
+                child: Stack(
                   children: [
-                    Expanded(child: _buildRawPreview()),
-                    Expanded(
-                      child: Stack(
-                        fit: StackFit.expand,
-                        children: [
-                          _buildCameraPreview(),
-                          // Sidebar toggle button — top right corner
-                          Positioned(
-                            top: 8,
-                            right: _sidebarOpen ? 268 : 8,
-                            child: AnimatedSwitcher(
-                              duration: const Duration(milliseconds: 200),
-                              child: FloatingActionButton.small(
-                                key: ValueKey(_sidebarOpen),
-                                heroTag: 'sidebarToggle',
-                                onPressed: () =>
-                                    setState(() => _sidebarOpen = !_sidebarOpen),
-                                child: Icon(
-                                  _sidebarOpen
-                                      ? Icons.tune_outlined
-                                      : Icons.tune,
-                                ),
-                              ),
-                            ),
+                    Row(
+                      children: [
+                        Expanded(child: _buildRawPreview()),
+                        Expanded(child: _buildCameraPreview()),
+                      ],
+                    ),
+                    // Sidebar toggle button — top right corner
+                    Positioned(
+                      top: 8,
+                      right: _sidebarOpen ? 268 : 8,
+                      child: AnimatedSwitcher(
+                        duration: const Duration(milliseconds: 200),
+                        child: FloatingActionButton.small(
+                          key: ValueKey(_sidebarOpen),
+                          heroTag: 'sidebarToggle',
+                          onPressed: () =>
+                              setState(() => _sidebarOpen = !_sidebarOpen),
+                          child: Icon(
+                            _sidebarOpen
+                                ? Icons.tune_outlined
+                                : Icons.tune,
                           ),
-                          // Sidebar slides in from right
-                          AnimatedPositioned(
-                            duration: const Duration(milliseconds: 250),
-                            curve: Curves.easeInOutCubic,
-                            top: 0,
-                            bottom: 0,
-                            right: _sidebarOpen ? 0 : -270,
-                            child: GpuControlsSidebar(
-                              params: _processingParams,
-                              onChanged: _applyProcessingParams,
-                            ),
-                          ),
-                        ],
+                        ),
+                      ),
+                    ),
+                    // Sidebar slides in from right
+                    AnimatedPositioned(
+                      duration: const Duration(milliseconds: 250),
+                      curve: Curves.easeInOutCubic,
+                      top: 0,
+                      bottom: 0,
+                      right: _sidebarOpen ? 0 : -270,
+                      child: GpuControlsSidebar(
+                        params: _processingParams,
+                        onChanged: _applyProcessingParams,
                       ),
                     ),
                   ],

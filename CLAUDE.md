@@ -55,6 +55,7 @@ dart format lib/            # Format code to match Flutter conventions
 ## Important Notes
 
 - This is a Flutter demo project for the camera2 library
+- **Preview layout**: The app shows dual previews (raw + processed) for debugging. Most users will need only the processed stream; remove the raw preview by deleting it from the `Row` in `main.dart`. Use `Stack(fit: StackFit.loose)` with `Positioned` overlays to avoid tight constraints that resize native surfaces.
 - Platform-specific implementations belong in `android/` and `ios/` directories
 - Follow Flutter style conventions enforced by `flutter_lints`
 - Do not use wildcard imports; always import explicit symbols

@@ -677,6 +677,9 @@ class CameraController(
      */
     fun setProcessingParams(params: CamProcessingParams) {
         lastProcessingParams = params
+        if (CambrianCameraConfig.debugDataFlow) {
+            android.util.Log.d("CambrianCamera", "[DataFlow] Processing params: brightness=${params.brightness} contrast=${params.contrast} saturation=${params.saturation}")
+        }
         // GPU path: uniforms are updated via GpuPipeline.setAdjustments().
         // nativeSetProcessingParams is not called — the CPU pipeline is inactive.
         gpuPipeline?.setAdjustments(
@@ -811,6 +814,9 @@ class CameraController(
 
         previewWidth = streamWidth
         previewHeight = streamHeight
+        if (CambrianCameraConfig.debugDataFlow) {
+            android.util.Log.i("CambrianCamera", "[DataFlow] Stream resolution: ${streamWidth}x${streamHeight} (4:3=${streamWidth * 3 == streamHeight * 4})")
+        }
         surfaceProducer.setSize(streamWidth, streamHeight)
         if (enableRawStream && rawSurfaceProducer != null) {
             rawW = (streamWidth.toFloat() / streamHeight * rawStreamHeight + 0.5f).toInt() and 1.inv()

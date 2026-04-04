@@ -76,11 +76,17 @@ open class GpuPipeline(
         val latch = CountDownLatch(1)
         glHandler.post {
             // 1. Initialize GpuRenderer (creates EGL context, FBOs, PBOs, shader).
+            if (CambrianCameraConfig.debugDataFlow) {
+                Log.i(TAG, "[DataFlow] Initializing GpuPipeline: ${width}x${height}, raw: ${rawW}x${rawH}")
+            }
             gpuHandle = nativeGpuInit(previewSurface, width, height, rawPreviewSurface, rawW, rawH)
             if (gpuHandle == 0L) {
                 Log.e(TAG, "nativeGpuInit failed")
                 latch.countDown()
                 return@post
+            }
+            if (CambrianCameraConfig.debugDataFlow) {
+                Log.i(TAG, "[DataFlow] GpuPipeline initialized successfully")
             }
 
             // 2. Generate an OES texture name in the now-active GL context.
