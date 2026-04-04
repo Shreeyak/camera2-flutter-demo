@@ -60,6 +60,15 @@ class GpuControlsSidebar extends StatelessWidget {
               valueLabel: params.saturation.toStringAsFixed(2),
               onChanged: (v) => onChanged(params.copyWith(saturation: v)),
             ),
+            _ShaderSlider(
+              label: 'Gamma',
+              value: params.gamma,
+              min: 0.1,
+              max: 4.0,
+              defaultValue: 1.0,
+              valueLabel: params.gamma.toStringAsFixed(2),
+              onChanged: (v) => onChanged(params.copyWith(gamma: v)),
+            ),
             const Divider(height: 24),
             Text(
               'Black Balance',

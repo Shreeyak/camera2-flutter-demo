@@ -689,6 +689,7 @@ class CameraController(
             blackR     = params.blackR,
             blackG     = params.blackG,
             blackB     = params.blackB,
+            gamma      = params.gamma,
         )
     }
 

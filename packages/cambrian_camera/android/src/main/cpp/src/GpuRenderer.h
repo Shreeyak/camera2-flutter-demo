@@ -94,7 +94,7 @@ public:
     /// @param saturation   Saturation multiplier [0, 3]; 1 = identity
     /// @param blackR/G/B   Per-channel black-level subtraction [0, 0.5]; 0 = identity
     void setAdjustments(float brightness, float contrast, float saturation,
-                        float blackR, float blackG, float blackB);
+                        float blackR, float blackG, float blackB, float gamma);
 
     int trackerWidth()  const { return trackerWidth_; }
     int trackerHeight() const { return trackerHeight_; }
@@ -154,6 +154,7 @@ private:
     float contrast_        = 1.f;
     float saturation_      = 1.f;
     float blackBalance_[3] = {0.f, 0.f, 0.f};
+    float gamma_           = 1.f;
 
     // Cached uniform locations
     GLint uTexture_      = -1;
@@ -162,6 +163,7 @@ private:
     GLint uContrast_     = -1;
     GLint uSaturation_   = -1;
     GLint uBlackBalance_ = -1;
+    GLint uGamma_        = -1;
     GLint uCropScale_    = -1;
     GLint uCropOffset_   = -1;
 

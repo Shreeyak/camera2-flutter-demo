@@ -47,6 +47,7 @@ uniform float uBrightness;
 uniform float uContrast;
 uniform float uSaturation;
 uniform vec3  uBlackBalance;
+uniform float uGamma;
 uniform vec2  uCropScale;
 uniform vec2  uCropOffset;
 
@@ -65,6 +66,7 @@ void main() {
     rgb = (rgb - 0.5) * (uContrast + 1.0) + 0.5;
     float luma = dot(rgb, kLuma);
     rgb = mix(vec3(luma), rgb, uSaturation + 1.0);
+    rgb = pow(max(rgb, 0.0), vec3(1.0 / uGamma));
 
     fragColor = vec4(clamp(rgb, 0.0, 1.0), 1.0);
 }
@@ -178,12 +180,13 @@ void GpuRenderer::drawAndReadback(
     // -----------------------------------------------------------------------
     // 1. Snapshot uniforms under the lock so the GL thread gets a consistent copy.
     // -----------------------------------------------------------------------
-    float brightness, contrast, saturation, blackBalance[3];
+    float brightness, contrast, saturation, blackBalance[3], gamma;
     {
         std::lock_guard<std::mutex> lk(uniformMu_);
         brightness       = brightness_;
         contrast         = contrast_;
         saturation       = saturation_;
+        gamma            = gamma_;
         blackBalance[0]  = blackBalance_[0];
         blackBalance[1]  = blackBalance_[1];
         blackBalance[2]  = blackBalance_[2];
@@ -206,6 +209,7 @@ void GpuRenderer::drawAndReadback(
     glUniform1f(uContrast_,     contrast);
     glUniform1f(uSaturation_,   saturation);
     glUniform3f(uBlackBalance_, blackBalance[0], blackBalance[1], blackBalance[2]);
+    glUniform1f(uGamma_,        gamma);
     // Default crop = identity (full sensor field of view)
     glUniform2f(uCropScale_,  1.f, 1.f);
     glUniform2f(uCropOffset_, 0.f, 0.f);
@@ -403,7 +407,7 @@ void GpuRenderer::drawAndReadback(
 // ---------------------------------------------------------------------------
 
 void GpuRenderer::setAdjustments(float brightness, float contrast, float saturation,
-                                  float blackR, float blackG, float blackB)
+                                  float blackR, float blackG, float blackB, float gamma)
 {
     std::lock_guard<std::mutex> lk(uniformMu_);
     brightness_      = brightness;
@@ -412,6 +416,7 @@ void GpuRenderer::setAdjustments(float brightness, float contrast, float saturat
     blackBalance_[0] = blackR;
     blackBalance_[1] = blackG;
     blackBalance_[2] = blackB;
+    gamma_           = gamma;
 }
 
 // ---------------------------------------------------------------------------
@@ -535,6 +540,7 @@ bool GpuRenderer::initGl() {
     uContrast_     = glGetUniformLocation(program_, "uContrast");
     uSaturation_   = glGetUniformLocation(program_, "uSaturation");
     uBlackBalance_ = glGetUniformLocation(program_, "uBlackBalance");
+    uGamma_        = glGetUniformLocation(program_, "uGamma");
     uCropScale_    = glGetUniformLocation(program_, "uCropScale");
     uCropOffset_   = glGetUniformLocation(program_, "uCropOffset");
 

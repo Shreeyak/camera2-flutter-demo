@@ -144,12 +144,13 @@ open class GpuPipeline(
         saturation: Double,
         blackR: Double,
         blackG: Double,
-        blackB: Double
+        blackB: Double,
+        gamma: Double
     ) {
         if (gpuHandle != 0L) {
             nativeGpuSetAdjustments(
                 gpuHandle, brightness, contrast, saturation,
-                blackR, blackG, blackB
+                blackR, blackG, blackB, gamma
             )
         }
     }
@@ -223,7 +224,8 @@ open class GpuPipeline(
             saturation: Double,
             blackR: Double,
             blackG: Double,
-            blackB: Double
+            blackB: Double,
+            gamma: Double
         )
 
         @JvmStatic

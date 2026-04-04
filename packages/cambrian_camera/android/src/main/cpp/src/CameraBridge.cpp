@@ -421,7 +421,7 @@ Java_com_cambrian_camera_GpuPipeline_nativeGpuSetAdjustments(
         JNIEnv* /*env*/, jclass /*clazz*/,
         jlong gpuHandle,
         jdouble brightness, jdouble contrast, jdouble saturation,
-        jdouble blackR, jdouble blackG, jdouble blackB) {
+        jdouble blackR, jdouble blackG, jdouble blackB, jdouble gamma) {
     if (!gpuHandle) {
         LOGE("nativeGpuSetAdjustments: null renderer handle");
         return;
@@ -433,7 +433,8 @@ Java_com_cambrian_camera_GpuPipeline_nativeGpuSetAdjustments(
             static_cast<float>(saturation),
             static_cast<float>(blackR),
             static_cast<float>(blackG),
-            static_cast<float>(blackB));
+            static_cast<float>(blackB),
+            static_cast<float>(gamma));
 }
 
 // ---------------------------------------------------------------------------

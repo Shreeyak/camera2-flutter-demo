@@ -139,7 +139,7 @@ class CambrianCameraPlugin : FlutterPlugin, ActivityAware, CameraHostApi {
      * @param settings Optional initial capture settings.
      * @param callback Invoked with [Result.success] containing the handle, or [Result.failure].
      */
-    override fun open(cameraId: String?, settings: CamSettings?, enableRawStream: Boolean, rawStreamHeight: Long, callback: (Result<Long>) -> Unit) {
+    override fun open(cameraId: String?, settings: CamSettings?, callback: (Result<Long>) -> Unit) {
         val registry = textureRegistry
         val api = flutterApi
         // Prefer the activity context for permission checks; fall back to application context.
@@ -150,6 +150,8 @@ class CambrianCameraPlugin : FlutterPlugin, ActivityAware, CameraHostApi {
             return
         }
 
+        val enableRawStream = settings?.enableRawStream ?: false
+        val rawStreamHeight = settings?.rawStreamHeight ?: 0L
         val producer = registry.createSurfaceProducer()
         val rawSurfaceProducer = if (enableRawStream) registry.createSurfaceProducer() else null
         val handle = producer.id()
