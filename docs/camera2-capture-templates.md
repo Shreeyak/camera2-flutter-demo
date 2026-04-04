@@ -34,7 +34,7 @@ These are the most similar templates. The only differences are:
 - `CAPTURE_INTENT`: `PREVIEW` → `ZERO_SHUTTER_LAG`
 - All post-processing modes (`NOISE_REDUCTION`, `EDGE`, `HOT_PIXEL`, `COLOR_ABERRATION`): `FAST` → `ZERO_SHUTTER_LAG`
 
-`ZERO_SHUTTER_LAG` mode is **not** "no processing" — it means *reprocessing-compatible* processing. The HAL keeps output in a state that can be fed back into a reprocess request (`ImageWriter` + `CameraConstrainedHighSpeedCaptureSession`), rather than optimizing purely for display latency.
+`ZERO_SHUTTER_LAG` mode is **not** "no processing" — it means *reprocessing-compatible* processing. The HAL keeps output in a state that can be fed back into a reprocess request (via `ImageWriter` with `InputConfiguration` and `createReprocessableCaptureSession()`), rather than optimizing purely for display latency.
 
 ### `STILL_CAPTURE`
 All post-processing modes flip to `HIGH_QUALITY`. This can stall the pipeline but produces the best image quality. AF mode switches to `AUTO` (single-shot) rather than continuous.

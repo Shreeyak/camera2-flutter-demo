@@ -239,16 +239,6 @@ class CambrianCameraPlugin : FlutterPlugin, ActivityAware, CameraHostApi {
     }
 
     /**
-     * Closes the camera session identified by [handle].
-     *
-     * Delegates teardown to [CameraController.close], then releases the
-     * [TextureRegistry.SurfaceProducer] and removes the session from the map.
-     *
-     * @param handle   The camera handle previously returned by [open].
-     * @param callback Invoked with [Result.success] on success, or [Result.failure] if the
-     *   handle is not found.
-     */
-    /**
      * Returns the current display rotation in degrees CW from portrait: 0, 90, 180, or 270.
      *
      * Used by Dart preview widgets to select the correct [RotatedBox.quarterTurns] for
@@ -265,6 +255,16 @@ class CambrianCameraPlugin : FlutterPlugin, ActivityAware, CameraHostApi {
         }
     }
 
+    /**
+     * Closes the camera session identified by [handle].
+     *
+     * Delegates teardown to [CameraController.close], then releases the
+     * [TextureRegistry.SurfaceProducer] and removes the session from the map.
+     *
+     * @param handle   The camera handle previously returned by [open].
+     * @param callback Invoked with [Result.success] on success, or [Result.failure] if the
+     *   handle is not found.
+     */
     override fun close(handle: Long, callback: (Result<Unit>) -> Unit) {
         val session = sessions.remove(handle)
         if (session == null) {

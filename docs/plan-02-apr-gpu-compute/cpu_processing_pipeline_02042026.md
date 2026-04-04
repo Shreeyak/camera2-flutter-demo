@@ -149,7 +149,7 @@ saturation     float   [0, 3]     ACTIVE — luminance-preserving formula
 │                  │   │                      │   │  [user sinks...]     │
 └──────────────────┘   └──────────────────────┘   └──────────────────────┘
 
-   Appliction/JNI
+   Application/JNI
    ┌──────────────────┐
    │  Dart/JNI thread │
    │                  │

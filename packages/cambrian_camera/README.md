@@ -49,8 +49,9 @@ class _MyState extends State<MyWidget> with WidgetsBindingObserver {
 
   @override
   void didChangeMetrics() {
-    final deg = await CambrianCamera.getDisplayRotation();
-    setState(() => _displayRotationDeg = deg);
+    CambrianCamera.getDisplayRotation().then((deg) {
+      setState(() => _displayRotationDeg = deg);
+    });
   }
 
   int get quarterTurns => quarterTurnsFromDisplayRotation(_displayRotationDeg);
