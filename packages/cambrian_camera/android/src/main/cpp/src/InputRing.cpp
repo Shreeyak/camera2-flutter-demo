@@ -30,6 +30,11 @@ void InputRing::push(const uint8_t* y,  int yRowStride,
                      int yuvFormat,
                      uint64_t frameId, const FrameMetadata& meta) {
     std::lock_guard<std::mutex> lock(mu_);
+    if (width != width_ || height != height_) {
+        LOGD("InputRing::push: dimension mismatch (%dx%d vs %dx%d), dropping frame",
+             width, height, width_, height_);
+        return;
+    }
     if (count_ >= static_cast<int>(slots_.size())) {
         // Ring full — drop frame silently; camera thread must not block.
         return;

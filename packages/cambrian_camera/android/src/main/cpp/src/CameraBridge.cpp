@@ -482,6 +482,10 @@ Java_com_cambrian_camera_GpuPipeline_nativeGpuDrawAndReadback(
     meta.displayRotation   = static_cast<int32_t>(displayRotation);
 
     jfloat* texMatrixPtr = env->GetFloatArrayElements(texMatrix, nullptr);
+    if (!texMatrixPtr) {
+        LOGE("nativeGpuDrawAndReadback: GetFloatArrayElements returned NULL");
+        return;
+    }
 
     renderer->drawAndReadback(
             static_cast<GLuint>(oesTexture),
@@ -567,10 +571,15 @@ Java_com_cambrian_camera_GpuPipelineTestBridge_nativeAddDeliveryCountSink(
     cfg.role = static_cast<cam::SinkRole>(role);
     pipeline->addSink(cfg, [state](const cam::SinkFrame& f) {
         const size_t bytes = static_cast<size_t>(f.width) * f.height * 4;
-        *state.lastPixels = std::vector<uint8_t>(f.data, f.data + bytes);
-        *state.lastW = f.width;
-        *state.lastH = f.height;
-        state.counter->fetch_add(1, std::memory_order_relaxed);
+        {
+            std::lock_guard<std::mutex> lk(gTestSinkMu);
+            *state.lastPixels = std::vector<uint8_t>(f.data, f.data + bytes);
+            *state.lastW = f.width;
+            *state.lastH = f.height;
+        }
+        // Release ordering so readers that acquire-load counter > 0 are
+        // guaranteed to see the pixel data written above.
+        state.counter->fetch_add(1, std::memory_order_release);
     });
 
     LOGD("nativeAddDeliveryCountSink: registered sink '%s' role=%d on pipeline %p",
@@ -609,7 +618,7 @@ Java_com_cambrian_camera_GpuPipelineTestBridge_nativeGetDeliveryCount(
              name.c_str(), pipeline);
         return -1;
     }
-    return static_cast<jint>(it->second.counter->load(std::memory_order_relaxed));
+    return static_cast<jint>(it->second.counter->load(std::memory_order_acquire));
 }
 
 // nativeGetLastDeliveredRgba
@@ -637,7 +646,9 @@ Java_com_cambrian_camera_GpuPipelineTestBridge_nativeGetLastDeliveredRgba(
 
     cam::ImagePipeline* pipeline = pipelineFromHandle(pipelinePtr);
 
-    std::shared_ptr<std::vector<uint8_t>> pixels;
+    // Deep-copy pixel data under the mutex so we don't race with the sink
+    // lambda that writes *lastPixels while also holding gTestSinkMu.
+    std::vector<uint8_t> pixelsCopy;
     {
         std::lock_guard<std::mutex> lk(gTestSinkMu);
         auto it = gTestSinkCounters.find({pipeline, name});
@@ -646,20 +657,20 @@ Java_com_cambrian_camera_GpuPipelineTestBridge_nativeGetLastDeliveredRgba(
                  name.c_str(), pipeline);
             return nullptr;
         }
-        pixels = it->second.lastPixels;
+        const auto& px = it->second.lastPixels;
+        if (!px || px->empty()) {
+            return nullptr;
+        }
+        pixelsCopy = *px;
     }
 
-    if (!pixels || pixels->empty()) {
-        return nullptr;
-    }
-
-    jbyteArray result = env->NewByteArray(static_cast<jsize>(pixels->size()));
+    jbyteArray result = env->NewByteArray(static_cast<jsize>(pixelsCopy.size()));
     if (!result) {
         LOGE("nativeGetLastDeliveredRgba: NewByteArray failed");
         return nullptr;
     }
-    env->SetByteArrayRegion(result, 0, static_cast<jsize>(pixels->size()),
-                            reinterpret_cast<const jbyte*>(pixels->data()));
+    env->SetByteArrayRegion(result, 0, static_cast<jsize>(pixelsCopy.size()),
+                            reinterpret_cast<const jbyte*>(pixelsCopy.data()));
     return result;
 }
 
