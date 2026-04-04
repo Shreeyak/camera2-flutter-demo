@@ -11,11 +11,11 @@ import 'package:flutter/widgets.dart'
         StreamBuilder,
         Texture,
         Widget,
-        WidgetsBinding,
         WidgetsBindingObserver;
 
 import 'cambrian_camera_controller.dart';
 import 'camera_state.dart';
+import 'rotation_observer_mixin.dart';
 
 /// Displays the camera preview using a Flutter [Texture] widget.
 ///
@@ -51,50 +51,9 @@ class CambrianCameraPreview extends StatefulWidget {
 }
 
 class _CambrianCameraPreviewState extends State<CambrianCameraPreview>
-    with WidgetsBindingObserver {
-  /// Display rotation in degrees CW from portrait: 0, 90, 180, or 270.
-  int _displayRotationDeg = 0;
-
+    with WidgetsBindingObserver, CameraRotationObserverMixin<CambrianCameraPreview> {
   @override
-  void initState() {
-    super.initState();
-    WidgetsBinding.instance.addObserver(this);
-    _fetchRotation();
-  }
-
-  @override
-  void dispose() {
-    WidgetsBinding.instance.removeObserver(this);
-    super.dispose();
-  }
-
-  /// Re-fetches display rotation on every metrics change (fires for all four
-  /// rotation transitions, including landscape-left ↔ landscape-right which
-  /// [MediaQuery.orientation] cannot distinguish).
-  @override
-  void didChangeMetrics() {
-    _fetchRotation();
-  }
-
-  Future<void> _fetchRotation() async {
-    final deg = await widget.camera.getDisplayRotation();
-    if (mounted) setState(() => _displayRotationDeg = deg);
-  }
-
-  /// Maps display rotation degrees to [RotatedBox.quarterTurns].
-  ///
-  /// GPU pipeline always outputs landscape-right frames (ROTATION_270
-  /// perspective). Display#getRotation() is CCW from natural (portrait), so:
-  ///   0°  (portrait)         → 3 turns (90° CCW)
-  ///   90° (landscape-left)   → 2 turns (180°)
-  ///   180° (reverse-portrait)→ 1 turn  (90° CW)
-  ///   270° (landscape-right) → 0 turns (no rotation — matches GPU output)
-  int get _quarterTurns => switch (_displayRotationDeg) {
-    90  => 2,   // ROTATION_90  = landscape-left  (device rotated 90° CCW)
-    180 => 1,   // ROTATION_180 = reverse-portrait
-    270 => 0,   // ROTATION_270 = landscape-right (device rotated 90° CW)
-    _   => 3,   // ROTATION_0   = portrait
-  };
+  CambrianCamera get rotationCamera => widget.camera;
 
   @override
   Widget build(BuildContext context) {
@@ -120,7 +79,7 @@ class _CambrianCameraPreviewState extends State<CambrianCameraPreview>
     return FittedBox(
       fit: widget.fit,
       child: RotatedBox(
-        quarterTurns: _quarterTurns,
+        quarterTurns: quarterTurns,
         child: SizedBox(
           width: caps.streamWidth.toDouble(),
           height: caps.streamHeight.toDouble(),

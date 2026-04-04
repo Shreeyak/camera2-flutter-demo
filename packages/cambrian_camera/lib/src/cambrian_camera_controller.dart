@@ -9,6 +9,7 @@ import 'camera_state.dart';
 import 'cambrian_camera_preview.dart';
 import 'frame_result.dart' show FrameResult;
 import 'messages.g.dart';
+import 'rotation_observer_mixin.dart';
 
 /// The main entry point for the Cambrian camera library.
 ///
@@ -359,48 +360,30 @@ class _RawPreviewWidget extends StatefulWidget {
 }
 
 class _RawPreviewWidgetState extends State<_RawPreviewWidget>
-    with WidgetsBindingObserver {
-  int _displayRotationDeg = 0;
-
+    with WidgetsBindingObserver, CameraRotationObserverMixin<_RawPreviewWidget> {
   @override
-  void initState() {
-    super.initState();
-    WidgetsBinding.instance.addObserver(this);
-    _fetchRotation();
-  }
-
-  @override
-  void dispose() {
-    WidgetsBinding.instance.removeObserver(this);
-    super.dispose();
-  }
-
-  @override
-  void didChangeMetrics() {
-    _fetchRotation();
-  }
-
-  Future<void> _fetchRotation() async {
-    final deg = await widget.camera.getDisplayRotation();
-    if (mounted) setState(() => _displayRotationDeg = deg);
-  }
-
-  // ROTATION_90 = landscape-left (device rotated 90° CCW), ROTATION_270 = landscape-right.
-  // GPU always outputs landscape-right, so ROTATION_270 needs 0 turns and ROTATION_90 needs 2.
-  int get _quarterTurns => switch (_displayRotationDeg) {
-    90  => 2,   // landscape-left
-    180 => 1,   // reverse-portrait
-    270 => 0,   // landscape-right — matches GPU output
-    _   => 3,   // portrait
-  };
+  CambrianCamera get rotationCamera => widget.camera;
 
   @override
   Widget build(BuildContext context) {
+    return StreamBuilder<CameraState>(
+      stream: widget.camera.stateStream,
+      initialData: widget.camera.state,
+      builder: (BuildContext context, AsyncSnapshot<CameraState> snapshot) {
+        if (snapshot.data == CameraState.streaming) {
+          return _buildTexture();
+        }
+        return widget.placeholder ?? const SizedBox.expand();
+      },
+    );
+  }
+
+  Widget _buildTexture() {
     final caps = widget.camera.capabilities;
     return FittedBox(
       fit: widget.fit,
       child: RotatedBox(
-        quarterTurns: _quarterTurns,
+        quarterTurns: quarterTurns,
         child: SizedBox(
           width: caps.rawStreamWidth.toDouble(),
           height: caps.rawStreamHeight.toDouble(),

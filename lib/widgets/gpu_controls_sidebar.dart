@@ -26,7 +26,7 @@ class GpuControlsSidebar extends StatelessWidget {
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
           children: [
             Text(
-              'Color Controls',
+              'Calibrate Color',
               style: theme.textTheme.titleSmall?.copyWith(
                 color: theme.colorScheme.onSurface,
                 fontWeight: FontWeight.w600,

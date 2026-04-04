@@ -355,25 +355,30 @@ class _CameraScreenState extends State<CameraScreen> {
           child: Column(
             children: [
               // Two preview panes side by side: raw (left) vs processed (right).
+              // GPU controls sidebar pushes content from the left.
               Expanded(
-                child: Stack(
+                child: Row(
                   children: [
-                    Row(
-                      children: [
-                        Expanded(child: Center(child: _buildRawPreview())),
-                        Expanded(child: Center(child: _buildCameraPreview())),
-                      ],
-                    ),
-                    // GPU Controls sidebar — slides in from left
-                    AnimatedPositioned(
+                    AnimatedContainer(
                       duration: const Duration(milliseconds: 250),
                       curve: Curves.easeInOutCubic,
-                      top: 0,
-                      bottom: 0,
-                      left: _sidebarOpen ? 0 : -270,
-                      child: GpuControlsSidebar(
-                        params: _processingParams,
-                        onChanged: _applyProcessingParams,
+                      width: _sidebarOpen ? 270 : 0,
+                      child: OverflowBox(
+                        alignment: Alignment.centerLeft,
+                        minWidth: 270,
+                        maxWidth: 270,
+                        child: GpuControlsSidebar(
+                          params: _processingParams,
+                          onChanged: _applyProcessingParams,
+                        ),
+                      ),
+                    ),
+                    Expanded(
+                      child: Row(
+                        children: [
+                          Expanded(child: Center(child: _buildRawPreview())),
+                          Expanded(child: Center(child: _buildCameraPreview())),
+                        ],
                       ),
                     ),
                   ],
