@@ -784,6 +784,26 @@ class CameraController(
      *
      * @param callback Invoked with the content URI string on success, or a failure.
      */
+    /**
+     * Rebuilds and resubmits the repeating capture request using the current [appliedSettings]
+     * and [isRecording] state. Call after toggling [isRecording] so Camera2 switches between
+     * [CameraDevice.TEMPLATE_PREVIEW] and [CameraDevice.TEMPLATE_RECORD].
+     */
+    private fun rebuildRepeatingRequest() {
+        val session = captureSession ?: return
+        val device = cameraDevice ?: return
+        if (repeatingTargetSurface == null && gpuPipeline?.cameraSurface == null) return
+        try {
+            val request = buildCaptureRequest(device, appliedSettings)
+            repeatingRequest = request
+            session.setRepeatingRequest(request, repeatingCaptureCallback, backgroundHandler)
+        } catch (e: CameraAccessException) {
+            android.util.Log.w("CameraController", "rebuildRepeatingRequest failed: ${e.message}")
+        } catch (e: IllegalStateException) {
+            android.util.Log.w("CameraController", "rebuildRepeatingRequest: session already closed")
+        }
+    }
+
     fun startRecording(outputDirectory: String? = null, fileName: String? = null, callback: (Result<String>) -> Unit) {
         backgroundHandler.post {
             if (state != State.STREAMING || isRecording) {
@@ -804,6 +824,8 @@ class CameraController(
                 gpuPipeline?.setEncoderSurface(surface)
                 // isRecording guards startRecording/stopRecording re-entry.
                 isRecording = true
+                // Switch Camera2 to TEMPLATE_RECORD for video-optimised settings.
+                rebuildRepeatingRequest()
                 mainHandler.post { callback(Result.success(uri)) }
             } catch (e: Exception) {
                 mainHandler.post {
@@ -838,6 +860,8 @@ class CameraController(
                 return@post
             }
             isRecording = false
+            // Revert Camera2 to TEMPLATE_PREVIEW now that recording has stopped.
+            rebuildRepeatingRequest()
             // Detach encoder surface from GPU pipeline before stopping the codec.
             gpuPipeline?.setEncoderSurface(null)
             val uri = try {

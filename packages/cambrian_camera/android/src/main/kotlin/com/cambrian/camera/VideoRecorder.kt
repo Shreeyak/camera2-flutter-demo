@@ -287,11 +287,16 @@ class VideoRecorder(private val context: Context) {
         var muxerFinalized = false
         val currentMuxer = muxer
         if (currentMuxer != null) {
-            try {
-                currentMuxer.stop()
-                muxerFinalized = true
-            } catch (e: Exception) {
-                Log.e(TAG, "stop: muxer.stop() threw an exception", e)
+            if (muxerStarted) {
+                try {
+                    currentMuxer.stop()
+                    muxerFinalized = true
+                } catch (e: Exception) {
+                    Log.e(TAG, "stop: muxer.stop() threw an exception", e)
+                    try { context.contentResolver.delete(uri, null, null) } catch (_: Exception) {}
+                }
+            } else {
+                Log.w(TAG, "stop: muxer was never started (no frames encoded), deleting pending entry")
                 try { context.contentResolver.delete(uri, null, null) } catch (_: Exception) {}
             }
             // Release the muxer in its own try block so a release() failure does not

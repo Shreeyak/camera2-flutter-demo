@@ -107,6 +107,12 @@ Replace the existing `glMapBufferRange` calls with a fence wait + unsynchronized
 static bool waitFence(GLsync& fence, const char* label) {
     if (!fence) return true;  // no fence yet (first frame)
     GLenum result = glClientWaitSync(fence, GL_SYNC_FLUSH_COMMANDS_BIT, 0);
+    if (result == GL_WAIT_FAILED) {
+        LOGE("PBO fence wait failed: %s — skipping readback", label);
+        glDeleteSync(fence);
+        fence = nullptr;
+        return false;
+    }
     if (result == GL_TIMEOUT_EXPIRED) {
         // DMA not done — wait with a real timeout
         LOGW("PBO fence stall: %s — waiting up to 8ms", label);
@@ -114,6 +120,12 @@ static bool waitFence(GLsync& fence, const char* label) {
         if (result == GL_TIMEOUT_EXPIRED) {
             LOGE("PBO fence timeout after 8ms: %s — skipping readback", label);
             return false;  // caller skips this frame's callbacks
+        }
+        if (result == GL_WAIT_FAILED) {
+            LOGE("PBO fence wait failed (retry): %s — skipping readback", label);
+            glDeleteSync(fence);
+            fence = nullptr;
+            return false;
         }
     }
     glDeleteSync(fence);
@@ -182,8 +194,7 @@ if (!firstFrame_) {
     // Read timing query result from readIdx (non-blocking: GPU has had a full
     // frame to complete it)
     GLuint64 dmaEnqueueNs = 0;
-    glGetQueryObjectui64v(timeQuery_[readIdx],
-                          GL_QUERY_RESULT_AVAILABLE, nullptr);  // optional check
+    // readIdx is one full frame behind writeIdx, so the query is guaranteed available.
     glGetQueryObjectui64v(timeQuery_[readIdx], GL_QUERY_RESULT, &dmaEnqueueNs);
 
     frameCount_++;

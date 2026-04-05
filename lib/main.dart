@@ -182,7 +182,12 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
       _errorSub = camera.errorStream.listen(_onCameraError);
       _recordingStateSub = camera.recordingStateStream.listen((state) {
         if (!mounted) return;
-        setState(() => _isRecording = state == RecordingState.recording);
+        // Only update _isRecording for idle/error — the recording=true case is
+        // batched with _recordingDisplayName in _toggleRecording to avoid a
+        // frame where _isRecording is true but displayName is still empty.
+        if (state != RecordingState.recording) {
+          setState(() => _isRecording = false);
+        }
       });
       _fetchRotation();
     } catch (e) {
@@ -318,7 +323,10 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
         await camera.stopRecording();
       } else {
         final (_, displayName) = await camera.startRecording();
-        if (mounted) setState(() => _recordingDisplayName = displayName);
+        if (mounted) setState(() {
+          _isRecording = true;
+          _recordingDisplayName = displayName;
+        });
       }
     } catch (e) {
       if (mounted) {

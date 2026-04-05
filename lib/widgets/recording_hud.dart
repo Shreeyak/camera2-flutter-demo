@@ -1,7 +1,38 @@
 import 'dart:async' show StreamSubscription, Timer;
 
 import 'package:cambrian_camera/cambrian_camera.dart' show RecordingState;
-import 'package:flutter/material.dart';
+import 'package:flutter/material.dart'
+    show
+        AnimatedSwitcher,
+        AnimationController,
+        BorderRadius,
+        BoxDecoration,
+        BoxShape,
+        BuildContext,
+        CircularProgressIndicator,
+        Color,
+        Colors,
+        Column,
+        Container,
+        CrossAxisAlignment,
+        Curves,
+        DecoratedBox,
+        EdgeInsets,
+        FadeTransition,
+        FontWeight,
+        Key,
+        MainAxisSize,
+        Padding,
+        Row,
+        SingleTickerProviderStateMixin,
+        SizedBox,
+        State,
+        StatefulWidget,
+        StatelessWidget,
+        Text,
+        TextStyle,
+        ValueKey,
+        Widget;
 
 String _formatElapsed(Duration d) {
   final h = d.inHours;
@@ -96,7 +127,9 @@ class _RecordingHudState extends State<RecordingHud> {
           _ticker = null;
           setState(() => _phase = _HudPhase.saving);
           Future.delayed(const Duration(seconds: 2), () {
-            if (mounted) setState(() => _phase = _HudPhase.hidden);
+            if (mounted && _phase == _HudPhase.saving) {
+              setState(() => _phase = _HudPhase.hidden);
+            }
           });
         }
       case RecordingState.error:
