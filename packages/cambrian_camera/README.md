@@ -126,8 +126,16 @@ await camera.stopRecording();
 ```
 
 While recording is active, Camera2 switches from `TEMPLATE_PREVIEW` to `TEMPLATE_RECORD`
-for stable frame rate and video-optimised capture settings. It reverts to `TEMPLATE_PREVIEW`
-automatically when recording stops.
+for video-optimised capture settings, and the AE target fps range changes from a fixed
+`[30, 30]` (preview) to `[15, 30]` (recording). The variable lower bound gives AE
+headroom to extend exposure in dark scenes rather than underexposing, while the upper
+bound keeps the container frame rate at 30 fps. It reverts to `TEMPLATE_PREVIEW` and
+`[30, 30]` automatically when recording stops.
+
+`CONTROL_AE_ANTIBANDING_MODE_AUTO` is set on all capture requests to protect against the
+moving horizontal band artifact caused by rolling shutter interacting with artificial light
+flicker (50/60 Hz mains). AE constrains its exposure choices to safe multiples of the
+detected flicker period.
 
 Monitor recording state changes via the stream:
 

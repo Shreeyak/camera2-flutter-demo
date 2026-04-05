@@ -816,7 +816,9 @@ class CameraController(
                 if (videoRecorder == null) {
                     videoRecorder = VideoRecorder(context)
                 }
-                videoRecorder!!.prepare(previewWidth, previewHeight)
+                // fps hint = upper bound of the recording range (30); matches KEY_FRAME_RATE
+                // in the encoder so bitrate-per-frame allocation is correct.
+                videoRecorder!!.prepare(previewWidth, previewHeight, fps = 30)
                 val surface = videoRecorder!!.inputSurface
                     ?: throw IllegalStateException("VideoRecorder.inputSurface is null after prepare()")
                 val uri = videoRecorder!!.start(outputDirectory, fileName)
@@ -1117,19 +1119,29 @@ class CameraController(
         gpuPipeline?.cameraSurface?.let { builder.addTarget(it) }
         builder.set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
 
-        // Lock in the highest available min-fps range so AE can't use long exposures
-        // that would cap delivery below 30 fps.  Without this, devices in low light
-        // routinely drop to 12–15 fps even though the sensor supports 30 fps at this size.
+        // Anti-banding: constrain AE exposure choices to safe multiples of the mains
+        // flicker period to prevent a moving horizontal band artifact under artificial
+        // lighting (rolling shutter × light flicker mismatch).
+        builder.set(CaptureRequest.CONTROL_AE_ANTIBANDING_MODE, CaptureRequest.CONTROL_AE_ANTIBANDING_MODE_AUTO)
+
         val chars = cameraManager.getCameraCharacteristics(device.id)
         val fpsRanges = chars.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)
         if (fpsRanges != null && fpsRanges.isNotEmpty()) {
-            // Prefer the range whose lower bound is highest (forces max sustained fps).
-            // Among ties, prefer a fixed range (upper == lower) to avoid jitter.
-            val best = fpsRanges.maxWithOrNull(
-                compareBy({ it.lower }, { if (it.lower == it.upper) 1 else 0 })
-            )!!
+            val best = if (isRecording) {
+                // Recording: use [15, 30] so AE can lower fps in dark scenes rather than
+                // blowing out exposure. The variable lower bound gives AE headroom to extend
+                // exposure up to ~66 ms while the upper bound keeps the container framerate
+                // at 30 fps. Falls back to the widest available range if [15, 30] isn't listed.
+                fpsRanges.firstOrNull { it.lower == 15 && it.upper == 30 }
+                    ?: fpsRanges.minWithOrNull(compareBy({ it.lower }, { it.upper }))!!
+            } else {
+                // Preview: lock to the highest sustained fps so the live feed doesn't stutter.
+                fpsRanges.maxWithOrNull(
+                    compareBy({ it.lower }, { if (it.lower == it.upper) 1 else 0 })
+                )!!
+            }
             builder.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, best)
-            android.util.Log.d("CambrianCamera", "AE fps range: [${best.lower}, ${best.upper}]")
+            android.util.Log.d("CambrianCamera", "AE fps range: [${best.lower}, ${best.upper}] (recording=$isRecording)")
         }
 
         return builder
