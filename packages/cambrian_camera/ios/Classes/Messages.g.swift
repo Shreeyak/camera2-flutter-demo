@@ -530,7 +530,7 @@ protocol CameraHostApi {
   func setProcessingParams(handle: Int64, params: CamProcessingParams) throws
   func takePicture(handle: Int64, completion: @escaping (Result<String, Error>) -> Void)
   func getNativePipelineHandle(handle: Int64, completion: @escaping (Result<Int64?, Error>) -> Void)
-  func startRecording(handle: Int64, completion: @escaping (Result<String, Error>) -> Void)
+  func startRecording(handle: Int64, outputDirectory: String?, completion: @escaping (Result<String, Error>) -> Void)
   func stopRecording(handle: Int64, completion: @escaping (Result<String, Error>) -> Void)
   func close(handle: Int64, completion: @escaping (Result<Void, Error>) -> Void)
   /// Returns the current display rotation in degrees CW from portrait: 0, 90, 180, or 270.
@@ -653,7 +653,8 @@ class CameraHostApiSetup {
       startRecordingChannel.setMessageHandler { message, reply in
         let args = message as! [Any?]
         let handleArg = args[0] as! Int64
-        api.startRecording(handle: handleArg) { result in
+        let outputDirectoryArg: String? = nilOrValue(args[1])
+        api.startRecording(handle: handleArg, outputDirectory: outputDirectoryArg) { result in
           switch result {
           case .success(let res):
             reply(wrapResult(res))
@@ -749,7 +750,7 @@ class CameraFlutterApi: CameraFlutterApiProtocol {
       if listResponse.count > 1 {
         let code: String = listResponse[0] as! String
         let message: String? = nilOrValue(listResponse[1])
-        let details: Any? = nilOrValue(listResponse[2])
+        let details: String? = nilOrValue(listResponse[2])
         completion(.failure(PigeonError(code: code, message: message, details: details)))
       } else {
         completion(.success(Void()))
@@ -767,7 +768,7 @@ class CameraFlutterApi: CameraFlutterApiProtocol {
       if listResponse.count > 1 {
         let code: String = listResponse[0] as! String
         let message: String? = nilOrValue(listResponse[1])
-        let details: Any? = nilOrValue(listResponse[2])
+        let details: String? = nilOrValue(listResponse[2])
         completion(.failure(PigeonError(code: code, message: message, details: details)))
       } else {
         completion(.success(Void()))
@@ -785,7 +786,7 @@ class CameraFlutterApi: CameraFlutterApiProtocol {
       if listResponse.count > 1 {
         let code: String = listResponse[0] as! String
         let message: String? = nilOrValue(listResponse[1])
-        let details: Any? = nilOrValue(listResponse[2])
+        let details: String? = nilOrValue(listResponse[2])
         completion(.failure(PigeonError(code: code, message: message, details: details)))
       } else {
         completion(.success(Void()))
@@ -805,7 +806,7 @@ class CameraFlutterApi: CameraFlutterApiProtocol {
       if listResponse.count > 1 {
         let code: String = listResponse[0] as! String
         let message: String? = nilOrValue(listResponse[1])
-        let details: Any? = nilOrValue(listResponse[2])
+        let details: String? = nilOrValue(listResponse[2])
         completion(.failure(PigeonError(code: code, message: message, details: details)))
       } else {
         completion(.success(Void()))

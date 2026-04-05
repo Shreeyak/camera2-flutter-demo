@@ -677,7 +677,7 @@ class CameraHostApi {
     }
   }
 
-  Future<String> startRecording(int handle) async {
+  Future<String> startRecording(int handle, String? outputDirectory) async {
     final String pigeonVar_channelName = 'dev.flutter.pigeon.cambrian_camera.CameraHostApi.startRecording$pigeonVar_messageChannelSuffix';
     final BasicMessageChannel<Object?> pigeonVar_channel = BasicMessageChannel<Object?>(
       pigeonVar_channelName,
@@ -685,7 +685,7 @@ class CameraHostApi {
       binaryMessenger: pigeonVar_binaryMessenger,
     );
     final List<Object?>? pigeonVar_replyList =
-        await pigeonVar_channel.send(<Object?>[handle]) as List<Object?>?;
+        await pigeonVar_channel.send(<Object?>[handle, outputDirectory]) as List<Object?>?;
     if (pigeonVar_replyList == null) {
       throw _createConnectionError(pigeonVar_channelName);
     } else if (pigeonVar_replyList.length > 1) {

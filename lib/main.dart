@@ -12,6 +12,7 @@ import 'package:cambrian_camera/cambrian_camera.dart'
         FrameResult,
         ProcessingParams,
         quarterTurnsFromDisplayRotation,
+        RecordingState,
         WhiteBalance;
 import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -25,6 +26,7 @@ import 'widgets/bottom_bar_buttons.dart';
 import 'widgets/camera_control_overlay.dart'
     show CameraControlOverlay, kCameraDialMaxWidth;
 import 'widgets/gpu_controls_sidebar.dart' show GpuControlsSidebar;
+import 'widgets/recording_hud.dart' show RecordingHud;
 
 /// Horizontal offset from the left edge of the dial to the auto-toggle button.
 const _kAutoToggleOffset = 60.0;
@@ -83,7 +85,12 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
   CameraSettingType? _activeSetting;
   ProcessingParams _processingParams = ProcessingParams();
   bool _sidebarOpen = false;
+
+  // ── Recording state
   bool _isRecording = false;
+  String _recordingDisplayName = '';
+  static const String _recordingOutputDir = 'Movies/CambrianCamera';
+  StreamSubscription<RecordingState>? _recordingStateSub;
 
   /// True once the first frame result with real AE values has arrived.
   /// Guards manual ISO/exposure changes to prevent a settingsConflict on open.
@@ -114,6 +121,7 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
     WidgetsBinding.instance.removeObserver(this);
     _frameResultSub?.cancel();
     _errorSub?.cancel();
+    _recordingStateSub?.cancel();
     final camera = _camera;
     if (camera != null) {
       camera.close().catchError((Object e) {
@@ -172,6 +180,10 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
       });
       _frameResultSub = camera.frameResultStream.listen(_onFrameResult);
       _errorSub = camera.errorStream.listen(_onCameraError);
+      _recordingStateSub = camera.recordingStateStream.listen((state) {
+        if (!mounted) return;
+        setState(() => _isRecording = state == RecordingState.recording);
+      });
       _fetchRotation();
     } catch (e) {
       // Camera may not be available in all environments (e.g. emulators).
@@ -234,9 +246,7 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
     if (!mounted) return;
     if (error.code == CameraErrorCode.settingsConflict) {
       setState(() => _values = _values.copyWith(isoAuto: true, exposureAuto: true));
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Camera not ready — settings reverted to auto')),
-      );
+      _showError('Camera not ready — settings reverted to auto');
     }
   }
 
@@ -306,18 +316,44 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
     try {
       if (_isRecording) {
         await camera.stopRecording();
-        setState(() => _isRecording = false);
       } else {
-        await camera.startRecording();
-        setState(() => _isRecording = true);
+        final (_, displayName) = await camera.startRecording();
+        if (mounted) setState(() => _recordingDisplayName = displayName);
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Recording error: $e')),
-        );
+        _showError('Recording error: $e');
       }
     }
+  }
+
+  void _showError(String message) {
+    if (!mounted) return;
+    final cs = Theme.of(context).colorScheme;
+    ScaffoldMessenger.of(context)
+      ..clearSnackBars()
+      ..showSnackBar(
+        SnackBar(
+          content: Row(
+            children: [
+              Icon(Icons.error_outline, color: cs.onError, size: 18),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(message, style: TextStyle(color: cs.onError)),
+              ),
+            ],
+          ),
+          backgroundColor: cs.error,
+          behavior: SnackBarBehavior.floating,
+          margin: EdgeInsets.only(
+            left: 16,
+            right: 16,
+            bottom: MediaQuery.of(context).padding.bottom + 72,
+          ),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          duration: const Duration(seconds: 5),
+        ),
+      );
   }
 
   // ── UI actions
@@ -402,7 +438,9 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
               // Two preview panes side by side: raw (left) vs processed (right).
               // GPU controls sidebar pushes content from the left.
               Expanded(
-                child: Row(
+                child: Stack(
+                  children: [
+                    Row(
                   children: [
                     AnimatedContainer(
                       duration: const Duration(milliseconds: 250),
@@ -426,6 +464,21 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
                           Expanded(child: Center(child: _buildRawPreview())),
                           Expanded(child: Center(child: _buildCameraPreview())),
                         ],
+                      ),
+                    ),
+                  ],
+                ),
+                    // Recording HUD — floats over preview, centered above bottom bar
+                    Positioned(
+                      bottom: 12,
+                      left: 0,
+                      right: 0,
+                      child: Center(
+                        child: RecordingHud(
+                          stateStream: _camera?.recordingStateStream ?? const Stream.empty(),
+                          displayName: _recordingDisplayName,
+                          outputDir: _recordingOutputDir,
+                        ),
                       ),
                     ),
                   ],

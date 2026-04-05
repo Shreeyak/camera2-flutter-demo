@@ -160,17 +160,21 @@ class VideoRecorder(private val context: Context) {
      * @return Content URI string of the output file (still pending until [stop]).
      * @throws IllegalStateException if called before [prepare].
      */
-    fun start(): String {
+    fun start(outputDirectory: String? = null): String {
         check(state == State.PREPARING) { "start() called in wrong state: $state" }
 
         val resolver = context.contentResolver
         val timestamp = System.currentTimeMillis()
         val displayName = "cambrian_$timestamp.mp4"
+        val relPath = if (outputDirectory != null)
+            outputDirectory.trimEnd('/') + "/"
+        else
+            android.os.Environment.DIRECTORY_MOVIES + "/CambrianCamera/"
 
         val contentValues = ContentValues().apply {
             put(MediaStore.Video.Media.DISPLAY_NAME, displayName)
             put(MediaStore.Video.Media.MIME_TYPE, "video/mp4")
-            put(MediaStore.Video.Media.RELATIVE_PATH, "Movies/CambrianCamera")
+            put(MediaStore.Video.Media.RELATIVE_PATH, relPath)
             put(MediaStore.Video.Media.IS_PENDING, 1)
         }
 
@@ -231,7 +235,7 @@ class VideoRecorder(private val context: Context) {
 
         state = State.RECORDING
         Log.d(TAG, "start: recording to $uri")
-        return uri.toString()
+        return "${uri}|${displayName}"
     }
 
     /**

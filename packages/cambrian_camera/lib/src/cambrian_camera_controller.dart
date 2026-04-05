@@ -306,11 +306,18 @@ class CambrianCamera {
   /// to select the correct [RotatedBox.quarterTurns] for all four device orientations.
   static Future<int> getDisplayRotation() => CameraHostApi().getDisplayRotation();
 
-  /// Starts recording to an MP4 file. Returns the content URI of the output file.
+  /// Starts recording to an MP4 file. Returns (contentUri, displayName).
+  ///
+  /// [outputDirectory] is a MediaStore RELATIVE_PATH (e.g. "Movies/MyApp/").
+  /// If null, defaults to "Movies/CambrianCamera/".
   ///
   /// Recording state changes are delivered via [recordingStateStream].
   /// Throws [PlatformException] if recording cannot be started.
-  Future<String> startRecording() => _hostApi.startRecording(_handle);
+  Future<(String, String)> startRecording({String? outputDirectory}) async {
+    final raw = await _hostApi.startRecording(_handle, outputDirectory);
+    final parts = raw.split('|');
+    return (parts[0], parts.length > 1 ? parts[1] : '');
+  }
 
   /// Stops recording and finalizes the MP4. Returns the content URI of the finalized file.
   ///
