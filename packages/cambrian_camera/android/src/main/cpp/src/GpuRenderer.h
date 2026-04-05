@@ -101,6 +101,11 @@ public:
     /// @param newWindow  New ANativeWindow, or null to detach without rebinding.
     void rebindRawSurface(ANativeWindow* newWindow);
 
+    /// Rebind the processed preview EGL window surface to a new ANativeWindow.
+    /// Call this on the GL thread when Flutter recreates the SurfaceProducer surface.
+    /// @param newWindow  New ANativeWindow, or null to detach without rebinding.
+    void rebindPreviewSurface(ANativeWindow* newWindow);
+
     int trackerWidth()  const { return trackerWidth_; }
     int trackerHeight() const { return trackerHeight_; }
 
@@ -158,8 +163,8 @@ private:
     // Pending uniforms — written by setAdjustments(), read under uniformMu_ at draw time
     std::mutex uniformMu_;
     float brightness_      = 0.f;
-    float contrast_        = 1.f;
-    float saturation_      = 1.f;
+    float contrast_        = 0.f;   // 0 = identity; shader applies uContrast + 1.0
+    float saturation_      = 0.f;   // 0 = identity; shader applies uSaturation + 1.0
     float blackBalance_[3] = {0.f, 0.f, 0.f};
     float gamma_           = 1.f;
 
