@@ -9,6 +9,7 @@ tmp_files/*
 **/android/.cxx
 **/android/opencv
 **/.venv
+**/docs/superpowers
 
 # Miscellaneous
 pubspec.lock
