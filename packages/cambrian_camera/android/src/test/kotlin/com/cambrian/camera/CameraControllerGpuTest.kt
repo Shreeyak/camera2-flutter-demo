@@ -4,11 +4,13 @@ import android.content.Context
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
 import io.flutter.view.TextureRegistry
+import android.view.Surface
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Before
 import org.junit.Test
 import org.mockito.kotlin.any
+import org.mockito.kotlin.argumentCaptor
 import org.mockito.kotlin.mock
 import org.mockito.kotlin.never
 import org.mockito.kotlin.verify
@@ -32,6 +34,7 @@ class CameraControllerGpuTest {
     private lateinit var gpuPipelineField: Field
     private lateinit var lastParamsField: Field
     private lateinit var mockCameraManager: CameraManager
+    private lateinit var mockSurfaceProducer: TextureRegistry.SurfaceProducer
     private lateinit var mockRawSurfaceProducer: TextureRegistry.SurfaceProducer
 
     @Before
@@ -41,7 +44,7 @@ class CameraControllerGpuTest {
         val mockContext: Context = mock {
             on { getSystemService(Context.CAMERA_SERVICE) }.thenReturn(mockCameraManager)
         }
-        val mockSurfaceProducer: TextureRegistry.SurfaceProducer = mock()
+        mockSurfaceProducer = mock()
         mockRawSurfaceProducer = mock()
         val mockFlutterApi: CameraFlutterApi = mock()
 
@@ -170,6 +173,41 @@ class CameraControllerGpuTest {
         )
         // No other interactions — GpuPipeline has no separate raw adjustment path.
         verifyNoMoreInteractions(mockGpuPipeline)
+    }
+
+    /**
+     * When onSurfaceAvailable fires but no native pipeline is active (nativePipelinePtr == 0),
+     * the callback must return early without calling rebindPreviewSurface.
+     *
+     * Note: the positive path (ptr != 0) calls the JNI method nativeSetPreviewWindow before
+     * rebindPreviewSurface, which cannot be exercised in JVM unit tests without loading the
+     * native library. That path is covered by integration/device tests.
+     */
+    @Test
+    fun `onSurfaceAvailable with no active pipeline does not call rebindPreviewSurface`() {
+        injectGpuPipeline(mockGpuPipeline)
+
+        // nativePipelinePtr defaults to 0 — onSurfaceAvailable returns early.
+        val callbackCaptor = argumentCaptor<TextureRegistry.SurfaceProducer.Callback>()
+        verify(mockSurfaceProducer).setCallback(callbackCaptor.capture())
+        callbackCaptor.firstValue.onSurfaceAvailable()
+
+        verify(mockGpuPipeline, never()).rebindPreviewSurface(any())
+    }
+
+    /**
+     * When the Flutter SurfaceProducer fires onSurfaceCleanup, the controller must call
+     * rebindPreviewSurface(null) to detach the GPU renderer from the dead surface.
+     */
+    @Test
+    fun `onSurfaceCleanup calls rebindPreviewSurface with null`() {
+        injectGpuPipeline(mockGpuPipeline)
+
+        val callbackCaptor = argumentCaptor<TextureRegistry.SurfaceProducer.Callback>()
+        verify(mockSurfaceProducer).setCallback(callbackCaptor.capture())
+        callbackCaptor.firstValue.onSurfaceCleanup()
+
+        verify(mockGpuPipeline).rebindPreviewSurface(null)
     }
 
     /**

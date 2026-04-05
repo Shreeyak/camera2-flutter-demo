@@ -22,7 +22,7 @@ a new problem: the watchdog cannot distinguish between:
 yields the session when backgrounded. The watchdog only runs while the app is in the
 foreground, so it only fires for genuine stalls.
 
-This also good Android citizenship — releasing the capture session on pause lets other apps
+This is also good Android citizenship — releasing the capture session on pause lets other apps
 (phone calls, system camera) access the hardware without fighting for it.
 
 ---
