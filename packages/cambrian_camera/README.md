@@ -107,6 +107,42 @@ camera.setProcessingParams(ProcessingParams(
 Black balance is applied first in the pipeline, before brightness/contrast/saturation, which
 is the correct order — you remove the sensor's DC offset before stretching or shifting the signal.
 
+## Video Recording
+
+Start and stop recording to an MP4 file in the device's MediaStore:
+
+```dart
+// Start — returns (contentUri, displayName)
+final (uri, name) = await camera.startRecording();
+
+// Optional: custom directory and/or file name
+final (uri, name) = await camera.startRecording(
+  outputDirectory: 'Movies/MyApp/',  // MediaStore RELATIVE_PATH; defaults to Movies/CambrianCamera/
+  fileName: 'my_clip',               // .mp4 appended automatically if omitted
+);
+
+// Stop — finalizes the file and makes it visible in the gallery
+await camera.stopRecording();
+```
+
+While recording is active, Camera2 switches from `TEMPLATE_PREVIEW` to `TEMPLATE_RECORD`
+for stable frame rate and video-optimised capture settings. It reverts to `TEMPLATE_PREVIEW`
+automatically when recording stops.
+
+Monitor recording state changes via the stream:
+
+```dart
+camera.recordingStateStream.listen((state) {
+  // RecordingState.recording — encoding in progress
+  // RecordingState.idle     — stopped; file is finalized and visible in gallery
+  // RecordingState.error    — start or stop failed
+});
+```
+
+The file is written to disk continuously from the moment `startRecording()` returns
+(via a MediaCodec drain thread). It is marked `IS_PENDING` in MediaStore until
+`stopRecording()` completes, after which it becomes visible in the gallery.
+
 ## Capture
 
 ```dart
