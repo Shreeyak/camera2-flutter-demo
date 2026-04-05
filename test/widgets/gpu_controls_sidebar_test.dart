@@ -211,6 +211,7 @@ void main() {
         expect(received!.brightness, 0.0);
         expect(received!.contrast, 0.0);
         expect(received!.saturation, 0.0);
+        expect(received!.gamma, 1.0);
         expect(received!.blackR, 0.0);
         expect(received!.blackG, 0.0);
         expect(received!.blackB, 0.0);

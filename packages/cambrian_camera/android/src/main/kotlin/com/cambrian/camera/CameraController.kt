@@ -866,8 +866,13 @@ class CameraController(
             android.util.Log.e("CambrianCamera", "startCaptureSession: GPU init failed — camera surface is null")
             gpuPipeline = null
             pipeline.stop()
-            nativeRelease(nativePipelinePtr)
-            nativePipelinePtr = 0L
+            synchronized(pipelineLock) {
+                val ptr = nativePipelinePtr
+                if (ptr != 0L) {
+                    nativePipelinePtr = 0L
+                    nativeRelease(ptr)
+                }
+            }
             jpegImageReader = null
             jpegReader.close()
             mainHandler.post {

@@ -124,11 +124,16 @@ open class GpuPipeline(
      * Release all GL resources and stop the render thread.
      */
     open fun stop() {
+        glHandler.removeCallbacksAndMessages(null)
         glHandler.post {
             cameraSurface?.release()
             cameraSurface = null
             surfaceTexture?.release()
             surfaceTexture = null
+            if (oesTexName != 0) {
+                GLES30.glDeleteTextures(1, intArrayOf(oesTexName), 0)
+                oesTexName = 0
+            }
             if (gpuHandle != 0L) {
                 nativeGpuRelease(gpuHandle)
                 gpuHandle = 0L
@@ -146,7 +151,7 @@ open class GpuPipeline(
         val handle = gpuHandle
         if (handle == 0L) return
         glHandler.post {
-            nativeGpuRebindRawSurface(gpuHandle, surface)
+            nativeGpuRebindRawSurface(handle, surface)
         }
     }
 
@@ -158,7 +163,7 @@ open class GpuPipeline(
         val handle = gpuHandle
         if (handle == 0L) return
         glHandler.post {
-            nativeGpuRebindPreviewSurface(gpuHandle, surface)
+            nativeGpuRebindPreviewSurface(handle, surface)
         }
     }
 
@@ -174,9 +179,10 @@ open class GpuPipeline(
         blackB: Double,
         gamma: Double
     ) {
-        if (gpuHandle != 0L) {
+        val handle = gpuHandle
+        if (handle != 0L) {
             nativeGpuSetAdjustments(
-                gpuHandle, brightness, contrast, saturation,
+                handle, brightness, contrast, saturation,
                 blackR, blackG, blackB, gamma
             )
         }

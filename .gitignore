@@ -9,8 +9,11 @@ tmp_files/*
 **/android/.cxx
 **/android/opencv
 **/.venv
-!docs/redundant/.gitkeep
+**/src/main/cpp/build-test/
+**/src/main/cpp/build/
+**/CMakeFiles/
 docs/redundant
+!docs/redundant/.gitkeep
 
 
 # Miscellaneous

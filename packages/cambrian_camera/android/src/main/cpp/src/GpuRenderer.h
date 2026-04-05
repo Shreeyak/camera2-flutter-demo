@@ -163,8 +163,8 @@ private:
     // Pending uniforms — written by setAdjustments(), read under uniformMu_ at draw time
     std::mutex uniformMu_;
     float brightness_      = 0.f;
-    float contrast_        = 1.f;
-    float saturation_      = 1.f;
+    float contrast_        = 0.f;   // 0 = identity; shader applies uContrast + 1.0
+    float saturation_      = 0.f;   // 0 = identity; shader applies uSaturation + 1.0
     float blackBalance_[3] = {0.f, 0.f, 0.f};
     float gamma_           = 1.f;
 

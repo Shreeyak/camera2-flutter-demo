@@ -21,7 +21,7 @@ import 'camera/camera_settings_values.dart';
 import 'theme/material_theme.dart';
 import 'theme/theme_util.dart';
 import 'widgets/bottom_bar.dart';
-import 'widgets/bottom_bar_buttons.dart';
+import 'widgets/bottom_bar_buttons.dart' show CameraAutoToggleButton;
 import 'widgets/camera_control_overlay.dart'
     show CameraControlOverlay, kCameraDialMaxWidth;
 import 'widgets/gpu_controls_sidebar.dart' show GpuControlsSidebar;

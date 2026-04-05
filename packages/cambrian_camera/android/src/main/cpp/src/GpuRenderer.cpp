@@ -119,6 +119,10 @@ namespace cam {
 GpuRenderer::GpuRenderer(int width, int height)
     : width_(width), height_(height)
 {
+    if (height_ <= 0) {
+        LOGE("GpuRenderer: invalid height %d — clamping to 1 to avoid division by zero", height_);
+        height_ = 1;
+    }
     // Compute 480p tracker size, rounded to nearest even width to keep chroma alignment.
     trackerHeight_ = 480;
     trackerWidth_  = ((width_ * 480 / height_) + 1) & ~1;
@@ -182,11 +186,6 @@ void GpuRenderer::drawAndReadback(
                        uint64_t frameId, const cam::FrameMetadata&)> trackerCb,
     RawCallback rawCb)
 {
-    if (loggedFirstFrame_) {
-        LOGI("GpuRenderer: first frame rendered successfully (%dx%d)", width_, height_);
-        loggedFirstFrame_ = false;
-    }
-
     // -----------------------------------------------------------------------
     // 1. Snapshot uniforms under the lock so the GL thread gets a consistent copy.
     // -----------------------------------------------------------------------
@@ -255,19 +254,21 @@ void GpuRenderer::drawAndReadback(
     // -----------------------------------------------------------------------
     if (eglWindowSurface_ != EGL_NO_SURFACE) {
         // Switch rendering surface to the window
-        eglMakeCurrent(eglDisplay_, eglWindowSurface_, eglWindowSurface_, eglContext_);
+        if (!eglMakeCurrent(eglDisplay_, eglWindowSurface_, eglWindowSurface_, eglContext_)) {
+            LOGE("drawAndReadback: eglMakeCurrent to window failed (0x%x)", eglGetError());
+        } else {
+            // Blit full-res FBO into the default framebuffer (= window surface)
+            glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo_);
+            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+            glBlitFramebuffer(
+                0, 0, width_, height_,
+                0, 0, width_, height_,
+                GL_COLOR_BUFFER_BIT, GL_NEAREST);
+            checkGlError("blit to window");
 
-        // Blit full-res FBO into the default framebuffer (= window surface)
-        glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo_);
-        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
-        glBlitFramebuffer(
-            0, 0, width_, height_,
-            0, 0, width_, height_,
-            GL_COLOR_BUFFER_BIT, GL_NEAREST);
-        checkGlError("blit to window");
-
-        if (!eglSwapBuffers(eglDisplay_, eglWindowSurface_)) {
-            LOGE("drawAndReadback: eglSwapBuffers (processed) failed (0x%x)", eglGetError());
+            if (!eglSwapBuffers(eglDisplay_, eglWindowSurface_)) {
+                LOGE("drawAndReadback: eglSwapBuffers (processed) failed (0x%x)", eglGetError());
+            }
         }
 
         // Switch back to pbuffer so GL state is consistent for readback
@@ -341,6 +342,10 @@ void GpuRenderer::drawAndReadback(
     // 7. Advance double-buffer index
     // -----------------------------------------------------------------------
     pboIndex_   = 1 - pboIndex_;
+    if (loggedFirstFrame_) {
+        LOGI("GpuRenderer: first frame rendered successfully (%dx%d)", width_, height_);
+        loggedFirstFrame_ = false;
+    }
     firstFrame_ = false;
 
     // -----------------------------------------------------------------------
