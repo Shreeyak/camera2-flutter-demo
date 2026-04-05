@@ -139,6 +139,20 @@ open class GpuPipeline(
     }
 
     /**
+     * Attach or detach a MediaCodec input [Surface] as the encoder target.
+     * When set, each tone-mapped frame is blitted directly from the GPU FBO to the encoder.
+     * Posts the native call to the GL thread so EGL state is updated safely.
+     * @param surface  MediaCodec input surface, or null to stop encoding.
+     */
+    fun setEncoderSurface(surface: Surface?) {
+        val handle = gpuHandle
+        if (handle == 0L) return
+        glHandler.post {
+            nativeGpuSetEncoderSurface(gpuHandle, surface)
+        }
+    }
+
+    /**
      * Rebind the raw preview EGL surface to a new [Surface] after Flutter recreates it.
      * Posts the native call to the GL thread so EGL state is updated safely.
      */
@@ -233,6 +247,9 @@ open class GpuPipeline(
 
         @JvmStatic
         external fun nativeGpuRebindRawSurface(gpuHandle: Long, newRawSurface: Surface?)
+
+        @JvmStatic
+        external fun nativeGpuSetEncoderSurface(gpuHandle: Long, encoderSurface: Surface?)
 
         @JvmStatic
         external fun nativeGpuSetAdjustments(

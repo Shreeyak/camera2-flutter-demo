@@ -599,152 +599,107 @@ void setProcessingParams(ProcessingParams params) {
 
 ---
 
-## C++ Pipeline Internals
+## GPU Pipeline Internals
 
-### Dual-path GPU rendering
+### GL/EGL concepts
 
-The GPU renderer runs two shader passes per frame when `enableRawStream` is active:
+Two distinct constructs manage rendering and delivery:
+
+- **FBO (GL)** — an off-screen render target that lives entirely inside the GL context. The tone-mapping shader writes into it. Never visible on screen by itself.
+- **EGL window surface** — wraps an `ANativeWindow` (a `BufferQueue`) and delivers finished frames to an external consumer via `eglSwapBuffers`. Three exist: preview, encoder (optional), raw preview (optional).
+- **EGL pbuffer surface** — a 1×1 dummy surface. EGL requires a surface to be current at all times; the pbuffer acts as a neutral home base between blits. Its memory is never written.
+
+The FBO is used (rather than rendering directly into an EGL window surface) because it lets the tone-mapping shader run **once** per frame and deliver to multiple consumers cheaply via blits.
+
+### Per-frame sequence (`GpuRenderer::drawAndReadback`)
+
+All steps run sequentially on the single GL thread managed by `GpuPipeline.kt`'s `glHandler`. There is no inter-step concurrency.
 
 ```
-Camera2 → SurfaceTexture → OES texture
-  ├── [color shader]       → processedFBO → preview surface + FULL_RES/TRACKER sinks
-  └── [passthrough shader] → rawFBO(rawH) → raw preview surface + RAW sinks
+Camera OES texture (SurfaceTexture, updated by camera HAL)
+     │
+     ▼
+① Render OES → fbo_
+     tone-mapping shader (black balance, brightness,
+     contrast, saturation, gamma) runs once per frame.
+     All subsequent steps read from this one result.
+     │
+     ├──② glBlit fbo_ → trackerFbo_
+     │       downscale to 480p, GL_LINEAR filter
+     │
+     ├──③ eglMakeCurrent(eglWindowSurface_)
+     │       glBlit fbo_ → default FB (= window surface)
+     │       eglSwapBuffers ──────────────────────────────► Flutter Texture (preview)
+     │       eglMakeCurrent(pbuffer)
+     │
+     ├──④ eglMakeCurrent(eglEncoderSurface_)          [only when recording]
+     │       glBlit fbo_ → default FB (= encoder surface)
+     │       eglSwapBuffers ──────────────────────────────► MediaCodec input queue
+     │       eglMakeCurrent(pbuffer)                         → drain thread → .mp4
+     │
+     ├──⑤ glReadPixels(fbo_,      PBO[writeIdx])      async GPU→CPU DMA, no stall
+     │    glReadPixels(trackerFbo_, PBO[writeIdx])
+     │
+     └──⑥ glMapBufferRange(PBO[readIdx])              previous frame's DMA complete
+              fullResCb(rgba_ptr…) ───────────────────► ImagePipeline → C++ sinks
+              trackerCb(rgba_ptr…) ───────────────────► ImagePipeline → C++ sinks
+              glUnmapBuffer
 ```
 
-**Processed path** (always active): The color shader applies all `ProcessingParams` (black balance, brightness, contrast, saturation, gamma) and renders into `processedFBO`. The preview surface and all `FULL_RES`/`TRACKER` sinks receive this output.
+Steps ③ and ④ are GPU-internal blits — the GPU reads `fbo_` in VRAM and writes to another VRAM region. No data crosses to the CPU. `eglSwapBuffers` is a **pointer swap** (not a pixel copy) that atomically hands the back buffer to the external consumer and gives GL a fresh buffer to render into next frame.
 
-**Raw path** (optional, enabled by `rawW_ > 0`): The passthrough shader applies no shader adjustments — output is the Camera2/SurfaceTexture image as-is in RGBA. Rendered into `rawFBO` at `rawStreamHeight` resolution. The raw preview surface and all `RAW` sinks receive this output.
+### Concurrency model
 
-**Failure handling:** If raw initialization fails (EGL surface creation, FBO setup, shader compilation), the failure is logged, `rawW_` is set to `0`, and the processed pipeline continues normally. Callers can confirm raw is active by checking `capabilities.rawStreamWidth > 0` after `open()`.
+| What | Thread | Mechanism |
+|------|--------|-----------|
+| All GL/EGL calls | GL thread (`glHandler`) | Single-threaded; no GL locks needed |
+| Shader uniform updates | Any thread | `uniformMu_` mutex; snapshotted at start of step ① |
+| `setEncoderSurface()` | Posted to GL thread | Queued behind in-flight `drawAndReadback` |
+| C++ sink callbacks (step ⑥) | GL thread | Called synchronously; must return quickly |
+| MediaCodec drain | Separate `HandlerThread` | Reads from codec output queue independently |
 
-**Resource budget (raw path):** All raw resources are allocated only when `rawW_ > 0`:
+### Double-buffered PBO readback (steps ⑤ and ⑥)
 
-| Resource | Description |
-|----------|-------------|
-| `rawFBO` | Framebuffer object at `rawW_ × rawH_` RGBA |
-| `rawPBOs[2]` | Two pixel buffer objects for async readback (double-buffered) |
-| `rawEGLSurface` | Optional EGL surface for raw preview rendering |
+Two PBOs alternate each frame to hide GPU→CPU transfer latency:
 
-Raw resources are released when the pipeline is torn down or when raw init fails.
-
-### Processing stages (applied to every frame on the processed path)
-
-1. **Black balance** — per-channel level subtraction: `pixel[ch] = max(0, pixel[ch] - blackLevel[ch])`
-2. **White balance gains** — per-channel multiply: `pixel[R,G,B] *= wbGains[R,G,B]`
-3. **Gamma + histogram + brightness** — single pre-computed 256-entry LUT per channel
-4. **Saturation** — RGB luminance-deviation method (NOT HSV conversion)
-
-Stages 2-4 are fused into the LUT where possible. The LUT is rebuilt atomically when ProcessingParams change.
-
-### LUT precomputation
-
-```cpp
-void rebuildLUT(const ProcessingParams& p) {
-    for (int i = 0; i < 256; ++i) {
-        float v = i / 255.0f;
-        v = pow(v, 1.0f / p.gamma);
-        v = clamp(v + p.brightness, 0, 1);
-        lut_[i] = static_cast<uint8_t>(v * 255);
-    }
-}
+```
+Frame N:   write PBO[0]  (glReadPixels enqueues DMA)
+Frame N+1: write PBO[1]  AND  map PBO[0]  (DMA from frame N is done)
+Frame N+2: write PBO[0]  AND  map PBO[1]
+…
 ```
 
-### Saturation (RGB luminance-deviation, NOT HSV)
+C++ sinks therefore receive frames with **one frame of latency** relative to what is displayed. The RGBA pointer passed to callbacks is valid only for the duration of the callback — consumers must copy if they need to retain data.
 
-The reference approach converts RGBA→BGR→HSV→scale S→HSV→BGR→RGBA (4 color space conversions at 4K). Replace with direct RGB saturation:
+### Dual-path rendering (processed + raw)
 
-```cpp
-// Per pixel (fused into main loop):
-float lum = 0.299f * R + 0.587f * G + 0.114f * B;
-R = clamp(lum + sat * (R - lum), 0, 255);
-G = clamp(lum + sat * (G - lum), 0, 255);
-B = clamp(lum + sat * (B - lum), 0, 255);
+When `enableRawStream` is active, a second pass runs after step ⑦ (index advance):
+
+```
+Camera OES texture
+     │
+     ├── [tone-mapping shader] → fbo_     (always active, steps ①–⑥ above)
+     │
+     └── [passthrough shader]  → rawFbo_  (only when rawW_ > 0)
+              │
+              ├── glBlit → eglRawSurface_ ──────────────────► Flutter raw Texture
+              ├── PBO readback → rawCb() ──────────────────► RAW C++ sinks
+              └── (no encoder path on raw stream)
 ```
 
-3 multiplies + 3 adds per pixel instead of 4 color space conversions. Preserves luminance, which is more correct for scientific imaging.
+The passthrough shader applies no colour adjustments — output is the camera image as RGBA with no modifications. Useful for comparing processed vs unprocessed in the UI.
 
-### Generic consumer fan-out
+### Memory budget (GPU)
 
-After post-processing, the pipeline fans out to:
-1. **Preview** — ANativeWindow_lock → memcpy → unlockAndPost
-2. **Registered sinks** — for each sink, apply per-sink transforms (downscale, channel extraction), write to ring slot, invoke callback
-
-```cpp
-void fanOut(const cv::Mat& processed, const FrameMetadata& meta) {
-    writeToPreview(processed);
-
-    std::lock_guard<std::mutex> lk(sinksMu_);
-    for (auto& [id, sink] : sinks_) {
-        auto* slot = sink.ring.acquire();
-        if (!slot) {
-            if (!sink.config.dropOnFull)
-                LOGW("Sink '%s' ring full — frame dropped", sink.config.name.c_str());
-            continue;
-        }
-
-        // Apply per-sink transforms
-        cv::Mat output = processed;
-        if (sink.config.width > 0 && sink.config.height > 0) {
-            cv::resize(processed, sink.resizeBuf,
-                       cv::Size(sink.config.width, sink.config.height),
-                       0, 0, cv::INTER_LINEAR);
-            output = sink.resizeBuf;
-        }
-        if (sink.config.channels == 1 && sink.config.channelIndex >= 0) {
-            extractChannel(output, slot->buffer.data(), sink.config.channelIndex);
-            // ... build SinkFrame with channels=1
-        } else {
-            memcpy(slot->buffer.data(), output.data, output.total() * output.elemSize());
-            // ... build SinkFrame with channels=4
-        }
-
-        SinkFrame frame = buildSinkFrame(slot, sink, meta);
-        sink.callback(frame);
-    }
-}
-```
-
-### Ring buffer design
-
-```cpp
-template<typename Slot>
-class SlotRing {
-    std::vector<Slot> slots_;
-    std::mutex mu_;
-    // Use shared_ptr so done() closures are safe even if ring is destroyed
-    std::shared_ptr<State> state_;
-
-public:
-    Slot* acquire();            // returns nullptr if all in use
-    void release(Slot* slot);   // marks slot as available
-};
-```
-
-The `release` function captured in `SinkFrame::release` holds a `shared_ptr` to the ring state, preventing use-after-free if the pipeline is destroyed while a consumer holds a frame.
-
-### Memory management
-
-All ring buffers are pre-allocated at sink registration time. No per-frame allocation.
-
-Memory per sink = `width × height × channels × ringSize`
-
-Example budget for the WSI scanner app (4K = 3840×2160):
-
-| Sink | Resolution | Channels | Ring | Memory |
-|------|-----------|----------|------|--------|
-| Input ring (ImageReader) | 3840×2160 | 4 (RGBA) | 4 | 133 MB |
-| ANativeWindow (preview) | 3840×2160 | 4 (RGBA) | 2 | 66 MB |
-| "stitcher" consumer | 3840×2160 | 4 (RGBA) | 4 | 133 MB |
-| "tracker" consumer | 960×540 | 1 (green) | 8 | 4 MB |
-| **Total (processed only)** | | | | **~336 MB** |
-
-When the raw stream is enabled, additional GPU memory is allocated for the raw path (not counted above):
-
-| Resource | Resolution | Memory |
-|----------|-----------|--------|
-| rawFBO | rawW × rawH RGBA | e.g., ~8 MB at 1920×1080 |
-| rawPBOs[2] (double-buffered) | rawW × rawH RGBA | e.g., ~16 MB at 1920×1080 |
-| rawEGLSurface (optional) | rawW × rawH | ~8 MB at 1920×1080 |
+| Resource | Size | Notes |
+|----------|------|-------|
+| `fbo_` texture | W × H × 4 bytes | ~32 MB at 4K |
+| `trackerFbo_` texture | 480p × 4 bytes | ~4 MB |
+| `fullResPbo_[2]` | W × H × 4 × 2 | ~64 MB at 4K |
+| `trackerPbo_[2]` | 480p × 4 × 2 | ~8 MB |
+| `eglWindowSurface_` (double-buffered) | W × H × 4 × 2 | ~64 MB at 4K |
+| `eglEncoderSurface_` (double-buffered) | W × H × 4 × 2 | ~64 MB at 4K, only when recording |
+| `rawFbo_` + `rawPbo_[2]` + `rawEGLSurface_` | rawW × rawH × 4 × 5 | e.g., ~40 MB at 1080p |
 
 ---
 

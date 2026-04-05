@@ -183,9 +183,6 @@ class CameraController(
     /** Encoder-side recording state. Null until first startRecording() call. */
     private var videoRecorder: VideoRecorder? = null
 
-    /** Encoder input Surface; non-null during recording, added to the Camera2 session. */
-    private var encoderSurface: Surface? = null
-
     /** True when a recording is active; gates encoder surface inclusion in session. */
     @Volatile private var isRecording = false
 
@@ -802,16 +799,13 @@ class CameraController(
                 videoRecorder!!.prepare(previewWidth, previewHeight)
                 val surface = videoRecorder!!.inputSurface
                     ?: throw IllegalStateException("VideoRecorder.inputSurface is null after prepare()")
-                encoderSurface = surface
                 val uri = videoRecorder!!.start()
+                // Route tone-mapped GPU frames directly to the encoder (no CPU copy).
+                gpuPipeline?.setEncoderSurface(surface)
                 // isRecording guards startRecording/stopRecording re-entry.
                 isRecording = true
-                // Add encoder surface to Camera2 session so the camera HAL writes directly
-                // to the encoder via the hardware path (no CPU YUV copy).
-                reopenCaptureSession()
                 mainHandler.post { callback(Result.success(uri)) }
             } catch (e: Exception) {
-                encoderSurface = null
                 mainHandler.post {
                     callback(Result.failure(FlutterError("recording_start_failed", e.message, null)))
                 }
@@ -844,6 +838,8 @@ class CameraController(
                 return@post
             }
             isRecording = false
+            // Detach encoder surface from GPU pipeline before stopping the codec.
+            gpuPipeline?.setEncoderSurface(null)
             val uri = try {
                 recorder.stop()
             } catch (e: Exception) {
@@ -852,9 +848,6 @@ class CameraController(
                 }
                 return@post
             }
-            // Remove encoder surface from Camera2 session now that recording is done.
-            encoderSurface = null
-            reopenCaptureSession()
             mainHandler.post { callback(Result.success(uri)) }
         }
     }
@@ -873,53 +866,6 @@ class CameraController(
     // -------------------------------------------------------------------------
     // Internal: session setup
     // -------------------------------------------------------------------------
-
-    /**
-     * Closes the current [CaptureSession] and opens a new one with the same
-     * [ImageReader] surfaces plus [encoderSurface] when non-null.
-     *
-     * Called from [startRecording] (to add the encoder surface) and [stopRecording]
-     * (to remove it). Does NOT recreate [ImageReader]s, the native pipeline, or
-     * image listeners — only the Camera2 session is recycled.
-     *
-     * Must be called on the background thread ([backgroundHandler]).
-     */
-    private fun reopenCaptureSession() {
-        val device = cameraDevice ?: return
-        val stream = imageReader ?: return
-        val jpeg = jpegImageReader ?: return
-
-        try { captureSession?.close() } catch (_: Exception) {}
-        captureSession = null
-
-        val surfaces = buildList {
-            add(stream.surface)
-            add(jpeg.surface)
-            encoderSurface?.let { add(it) }
-        }
-
-        device.createCaptureSession(
-            SessionConfiguration(
-                SessionConfiguration.SESSION_REGULAR,
-                surfaces.map { OutputConfiguration(it) },
-                { cmd -> backgroundHandler.post(cmd) },
-                object : CameraCaptureSession.StateCallback() {
-                    override fun onConfigured(session: CameraCaptureSession) {
-                        captureSession = session
-                        val req = repeatingRequest ?: return
-                        try {
-                            session.setRepeatingRequest(req, repeatingCaptureCallback, backgroundHandler)
-                        } catch (e: CameraAccessException) {
-                            handleNonFatalError(CamErrorCode.CAMERA_ACCESS_ERROR, e.message ?: "CameraAccessException")
-                        }
-                    }
-                    override fun onConfigureFailed(session: CameraCaptureSession) {
-                        handleNonFatalError(CamErrorCode.CONFIGURATION_FAILED, "Session reconfiguration failed")
-                    }
-                },
-            ),
-        )
-    }
 
     /**
      * Starts a Camera2 [CaptureSession] on the already-opened [cameraDevice].
@@ -1333,11 +1279,11 @@ class CameraController(
         // Stop any active recording before tearing down the session.
         if (isRecording) {
             isRecording = false
+            gpuPipeline?.setEncoderSurface(null)
             try { videoRecorder?.stop() } catch (e: Exception) {
                 android.util.Log.w("CambrianCamera", "teardown: error stopping recording: ${e.message}")
             }
         }
-        encoderSurface = null
 
         // Close capture session first to stop frame delivery before closing the device.
         try {

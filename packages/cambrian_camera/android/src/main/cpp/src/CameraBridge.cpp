@@ -428,6 +428,38 @@ Java_com_cambrian_camera_GpuPipeline_nativeGpuRebindRawSurface(
 }
 
 // ---------------------------------------------------------------------------
+// nativeGpuSetEncoderSurface
+//
+// Attaches or detaches a MediaCodec input surface to the GPU renderer.
+// Must be called on the GL thread (post to glHandler) so EGL state is updated safely.
+//
+// @param gpuHandle       Handle returned by nativeGpuInit.
+// @param encoderSurface  MediaCodec input Surface; may be null to detach.
+// ---------------------------------------------------------------------------
+JNIEXPORT void JNICALL
+Java_com_cambrian_camera_GpuPipeline_nativeGpuSetEncoderSurface(
+        JNIEnv* env, jclass /*clazz*/,
+        jlong gpuHandle,
+        jobject encoderSurface) {
+    if (!gpuHandle) {
+        LOGE("nativeGpuSetEncoderSurface: null renderer handle");
+        return;
+    }
+    cam::GpuRenderer* renderer = rendererFromHandle(gpuHandle);
+
+    ANativeWindow* window = nullptr;
+    if (encoderSurface) {
+        window = ANativeWindow_fromSurface(env, encoderSurface);
+        if (!window) {
+            LOGE("nativeGpuSetEncoderSurface: ANativeWindow_fromSurface returned null");
+            return;
+        }
+    }
+    renderer->setEncoderSurface(window);
+    if (window) ANativeWindow_release(window);
+}
+
+// ---------------------------------------------------------------------------
 // nativeGpuSetAdjustments
 //
 // Updates the shader uniform values used during rendering.  Thread-safe;

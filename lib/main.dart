@@ -83,6 +83,7 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
   CameraSettingType? _activeSetting;
   ProcessingParams _processingParams = ProcessingParams();
   bool _sidebarOpen = false;
+  bool _isRecording = false;
 
   /// True once the first frame result with real AE values has arrived.
   /// Guards manual ISO/exposure changes to prevent a settingsConflict on open.
@@ -297,6 +298,28 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
     }
   }
 
+  // ── Recording
+
+  Future<void> _toggleRecording() async {
+    final camera = _camera;
+    if (camera == null) return;
+    try {
+      if (_isRecording) {
+        await camera.stopRecording();
+        setState(() => _isRecording = false);
+      } else {
+        await camera.startRecording();
+        setState(() => _isRecording = true);
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Recording error: $e')),
+        );
+      }
+    }
+  }
+
   // ── UI actions
 
   void _onSettingChipTap(CameraSettingType? p) {
@@ -457,6 +480,8 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
                       onToggleSettings: _toggleSettingsDrawer,
                       onSettingChipTap: _onSettingChipTap,
                       onToggleGpuControls: () => setState(() => _sidebarOpen = !_sidebarOpen),
+                      isRecording: _isRecording,
+                      onToggleRecording: _toggleRecording,
                     ),
                   ),
                 ],
