@@ -249,7 +249,7 @@ abstract class CameraHostApi {
   int? getNativePipelineHandle(int handle);
 
   @async
-  String startRecording(int handle, String? outputDirectory, String? fileName);
+  String startRecording(int handle, String? outputDirectory, String? fileName, int? bitrate, int? fps);
 
   @async
   String stopRecording(int handle);

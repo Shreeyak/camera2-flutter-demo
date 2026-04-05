@@ -310,11 +310,12 @@ class CambrianCamera {
   ///
   /// [outputDirectory] is a MediaStore RELATIVE_PATH (e.g. "Movies/MyApp/").
   /// If null, defaults to "Movies/CambrianCamera/".
+  /// [bitrate] is in bits per second (default 50 Mbps). [fps] is frame rate (default 30).
   ///
   /// Recording state changes are delivered via [recordingStateStream].
   /// Throws [PlatformException] if recording cannot be started.
-  Future<(String, String)> startRecording({String? outputDirectory, String? fileName}) async {
-    final raw = await _hostApi.startRecording(_handle, outputDirectory, fileName);
+  Future<(String, String)> startRecording({String? outputDirectory, String? fileName, int? bitrate, int? fps}) async {
+    final raw = await _hostApi.startRecording(_handle, outputDirectory, fileName, bitrate, fps);
     final parts = raw.split('|');
     return (parts[0], parts.length > 1 ? parts[1] : '');
   }

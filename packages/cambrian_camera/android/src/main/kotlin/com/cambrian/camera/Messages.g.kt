@@ -475,7 +475,7 @@ interface CameraHostApi {
   fun setProcessingParams(handle: Long, params: CamProcessingParams)
   fun takePicture(handle: Long, callback: (Result<String>) -> Unit)
   fun getNativePipelineHandle(handle: Long, callback: (Result<Long?>) -> Unit)
-  fun startRecording(handle: Long, outputDirectory: String?, fileName: String?, callback: (Result<String>) -> Unit)
+  fun startRecording(handle: Long, outputDirectory: String?, fileName: String?, bitrate: Int?, fps: Int?, callback: (Result<String>) -> Unit)
   fun stopRecording(handle: Long, callback: (Result<String>) -> Unit)
   fun close(handle: Long, callback: (Result<Unit>) -> Unit)
   /**
@@ -623,7 +623,9 @@ interface CameraHostApi {
             val handleArg = args[0] as Long
             val outputDirectoryArg = args[1] as String?
             val fileNameArg = args[2] as String?
-            api.startRecording(handleArg, outputDirectoryArg, fileNameArg) { result: Result<String> ->
+            val bitrateArg = args[3] as Long?
+            val fpsArg = args[4] as Long?
+            api.startRecording(handleArg, outputDirectoryArg, fileNameArg, bitrateArg?.toInt(), fpsArg?.toInt()) { result: Result<String> ->
               val error = result.exceptionOrNull()
               if (error != null) {
                 reply.reply(wrapError(error))

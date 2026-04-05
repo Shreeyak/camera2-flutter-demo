@@ -804,7 +804,7 @@ class CameraController(
         }
     }
 
-    fun startRecording(outputDirectory: String? = null, fileName: String? = null, callback: (Result<String>) -> Unit) {
+    fun startRecording(outputDirectory: String? = null, fileName: String? = null, bitrate: Int? = null, fps: Int? = null, callback: (Result<String>) -> Unit) {
         backgroundHandler.post {
             if (state != State.STREAMING || isRecording) {
                 mainHandler.post {
@@ -818,7 +818,7 @@ class CameraController(
                 }
                 // fps hint = upper bound of the recording range (30); matches KEY_FRAME_RATE
                 // in the encoder so bitrate-per-frame allocation is correct.
-                videoRecorder!!.prepare(previewWidth, previewHeight, fps = 30)
+                videoRecorder!!.prepare(previewWidth, previewHeight, bitrate = bitrate ?: 50_000_000, fps = fps ?: 30)
                 val surface = videoRecorder!!.inputSurface
                     ?: throw IllegalStateException("VideoRecorder.inputSurface is null after prepare()")
                 val uri = videoRecorder!!.start(outputDirectory, fileName)
