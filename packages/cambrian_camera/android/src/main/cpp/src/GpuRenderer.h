@@ -101,6 +101,11 @@ public:
     /// @param newWindow  New ANativeWindow, or null to detach without rebinding.
     void rebindRawSurface(ANativeWindow* newWindow);
 
+    /// Rebind the processed preview EGL window surface to a new ANativeWindow.
+    /// Call this on the GL thread when Flutter recreates the SurfaceProducer surface.
+    /// @param newWindow  New ANativeWindow, or null to detach without rebinding.
+    void rebindPreviewSurface(ANativeWindow* newWindow);
+
     int trackerWidth()  const { return trackerWidth_; }
     int trackerHeight() const { return trackerHeight_; }
 

@@ -151,6 +151,18 @@ open class GpuPipeline(
     }
 
     /**
+     * Rebind the processed preview EGL surface to a new [Surface] after Flutter recreates it.
+     * Posts the native call to the GL thread so EGL state is updated safely.
+     */
+    fun rebindPreviewSurface(surface: Surface?) {
+        val handle = gpuHandle
+        if (handle == 0L) return
+        glHandler.post {
+            nativeGpuRebindPreviewSurface(gpuHandle, surface)
+        }
+    }
+
+    /**
      * Update shader adjustment uniforms. Thread-safe; takes effect on next frame.
      */
     open fun setAdjustments(
@@ -233,6 +245,9 @@ open class GpuPipeline(
 
         @JvmStatic
         external fun nativeGpuRebindRawSurface(gpuHandle: Long, newRawSurface: Surface?)
+
+        @JvmStatic
+        external fun nativeGpuRebindPreviewSurface(gpuHandle: Long, newPreviewSurface: Surface?)
 
         @JvmStatic
         external fun nativeGpuSetAdjustments(

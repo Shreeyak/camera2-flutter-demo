@@ -457,6 +457,29 @@ void GpuRenderer::rebindRawSurface(ANativeWindow* newWindow) {
 }
 
 // ---------------------------------------------------------------------------
+// Public: preview surface rebind
+// ---------------------------------------------------------------------------
+
+void GpuRenderer::rebindPreviewSurface(ANativeWindow* newWindow) {
+    if (eglDisplay_ == EGL_NO_DISPLAY) {
+        LOGE("rebindPreviewSurface: EGL not initialized");
+        return;
+    }
+    if (eglWindowSurface_ != EGL_NO_SURFACE) {
+        eglDestroySurface(eglDisplay_, eglWindowSurface_);
+        eglWindowSurface_ = EGL_NO_SURFACE;
+    }
+    if (newWindow != nullptr) {
+        eglWindowSurface_ = eglCreateWindowSurface(eglDisplay_, eglConfig_, newWindow, nullptr);
+        if (eglWindowSurface_ == EGL_NO_SURFACE) {
+            LOGE("rebindPreviewSurface: eglCreateWindowSurface failed (0x%x)", eglGetError());
+        } else {
+            LOGI("rebindPreviewSurface: preview EGL surface rebound");
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Private: EGL setup
 // ---------------------------------------------------------------------------
 
