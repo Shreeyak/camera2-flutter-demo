@@ -1319,6 +1319,7 @@ class CameraController(
             try { videoRecorder?.stop() } catch (e: Exception) {
                 android.util.Log.w("CambrianCamera", "teardown: error stopping recording: ${e.message}")
             }
+            mainHandler.post { flutterApi.onRecordingStateChanged(handle, "error") {} }
         }
 
         // Close capture session first to stop frame delivery before closing the device.

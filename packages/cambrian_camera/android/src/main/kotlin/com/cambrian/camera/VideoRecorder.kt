@@ -15,6 +15,7 @@ import android.os.ParcelFileDescriptor
 import android.provider.MediaStore
 import android.util.Log
 import android.view.Surface
+import java.io.IOException
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
@@ -92,6 +93,13 @@ class VideoRecorder(private val context: Context) {
      * Created in [start], counted-down in [drainEncoderLoop], awaited in [stop].
      */
     private var eosLatch: CountDownLatch? = null
+
+    /**
+     * Non-null when [drainEncoderLoop] caught an exception (e.g. disk full during
+     * [android.media.MediaMuxer.writeSampleData]).  Read and cleared by [stop] so the
+     * failure can be rethrown on the calling thread.
+     */
+    @Volatile private var drainError: Exception? = null
 
     // -------------------------------------------------------------------------
     // Public API
@@ -275,6 +283,26 @@ class VideoRecorder(private val context: Context) {
             }
         }
 
+        // If the drain thread caught an exception (e.g. disk full during writeSampleData),
+        // clean up and rethrow so the caller can surface the error to Dart.
+        val capturedDrainError = drainError
+        drainError = null
+        if (capturedDrainError != null) {
+            drainThread?.quitSafely(); drainThread = null; drainHandler = null; eosLatch = null
+            outputUri?.let { uri ->
+                try { context.contentResolver.delete(uri, null, null) } catch (_: Exception) {}
+            }
+            muxer?.let { try { it.release() } catch (_: Exception) {} }; muxer = null
+            outputFd?.close(); outputFd = null
+            currentCodec.stop()
+            outputUri = null
+            state = State.IDLE
+            throw java.io.IOException(
+                "Encoding failed (storage full?): ${capturedDrainError.message}",
+                capturedDrainError,
+            )
+        }
+
         // Shut down the drain thread.
         drainThread?.quitSafely()
         drainThread = null
@@ -425,6 +453,7 @@ class VideoRecorder(private val context: Context) {
             }
         } catch (e: Exception) {
             Log.e(TAG, "drainEncoderLoop: exception during drain", e)
+            drainError = e
         } finally {
             eosLatch.countDown()
         }

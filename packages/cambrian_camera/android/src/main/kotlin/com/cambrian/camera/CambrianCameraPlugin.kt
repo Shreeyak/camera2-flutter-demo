@@ -3,6 +3,9 @@ package com.cambrian.camera
 
 import android.app.Activity
 import android.content.Context
+import android.os.Build
+import android.provider.MediaStore
+import android.util.Log
 import android.view.Surface
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.embedding.engine.plugins.activity.ActivityAware
@@ -82,6 +85,28 @@ class CambrianCameraPlugin : FlutterPlugin, ActivityAware, CameraHostApi {
         textureRegistry = binding.textureRegistry
         flutterApi = CameraFlutterApi(binding.binaryMessenger)
         CameraHostApi.setUp(binding.binaryMessenger, this)
+        cleanOrphanedPendingEntries(binding.applicationContext)
+    }
+
+    /**
+     * Deletes any [MediaStore.Video.Media.IS_PENDING] = 1 entries owned by this app.
+     *
+     * Called once at engine attach to clean up orphaned entries left behind if a previous
+     * process was killed mid-recording before [VideoRecorder.stop] could finalise the file.
+     * No-op on API levels below Q where [MediaStore.Video.Media.IS_PENDING] is unavailable.
+     */
+    private fun cleanOrphanedPendingEntries(context: Context) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return
+        try {
+            context.contentResolver.delete(
+                MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
+                "${MediaStore.Video.Media.IS_PENDING} = 1 AND " +
+                    "${MediaStore.Video.Media.OWNER_PACKAGE_NAME} = ?",
+                arrayOf(context.packageName),
+            )
+        } catch (e: Exception) {
+            Log.w(TAG, "cleanOrphanedPendingEntries: $e")
+        }
     }
 
     /**
@@ -343,5 +368,9 @@ class CambrianCameraPlugin : FlutterPlugin, ActivityAware, CameraHostApi {
             session.rawSurfaceProducer?.release()
             callback(result)
         }
+    }
+
+    companion object {
+        private const val TAG = "CambrianCameraPlugin"
     }
 }

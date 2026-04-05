@@ -132,6 +132,15 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused && _isRecording) {
+      _camera?.stopRecording().catchError((Object e) {
+        debugPrint('auto-stop on background failed: $e');
+      });
+    }
+  }
+
+  @override
   void didChangeMetrics() {
     _fetchRotation();
   }
