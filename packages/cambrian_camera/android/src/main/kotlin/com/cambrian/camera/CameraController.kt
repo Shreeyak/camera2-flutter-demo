@@ -784,7 +784,7 @@ class CameraController(
      *
      * @param callback Invoked with the content URI string on success, or a failure.
      */
-    fun startRecording(outputDirectory: String? = null, callback: (Result<String>) -> Unit) {
+    fun startRecording(outputDirectory: String? = null, fileName: String? = null, callback: (Result<String>) -> Unit) {
         backgroundHandler.post {
             if (state != State.STREAMING || isRecording) {
                 mainHandler.post {
@@ -799,7 +799,7 @@ class CameraController(
                 videoRecorder!!.prepare(previewWidth, previewHeight)
                 val surface = videoRecorder!!.inputSurface
                     ?: throw IllegalStateException("VideoRecorder.inputSurface is null after prepare()")
-                val uri = videoRecorder!!.start(outputDirectory)
+                val uri = videoRecorder!!.start(outputDirectory, fileName)
                 // Route tone-mapped GPU frames directly to the encoder (no CPU copy).
                 gpuPipeline?.setEncoderSurface(surface)
                 // isRecording guards startRecording/stopRecording re-entry.

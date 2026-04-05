@@ -530,7 +530,7 @@ protocol CameraHostApi {
   func setProcessingParams(handle: Int64, params: CamProcessingParams) throws
   func takePicture(handle: Int64, completion: @escaping (Result<String, Error>) -> Void)
   func getNativePipelineHandle(handle: Int64, completion: @escaping (Result<Int64?, Error>) -> Void)
-  func startRecording(handle: Int64, outputDirectory: String?, completion: @escaping (Result<String, Error>) -> Void)
+  func startRecording(handle: Int64, outputDirectory: String?, fileName: String?, completion: @escaping (Result<String, Error>) -> Void)
   func stopRecording(handle: Int64, completion: @escaping (Result<String, Error>) -> Void)
   func close(handle: Int64, completion: @escaping (Result<Void, Error>) -> Void)
   /// Returns the current display rotation in degrees CW from portrait: 0, 90, 180, or 270.
@@ -654,7 +654,8 @@ class CameraHostApiSetup {
         let args = message as! [Any?]
         let handleArg = args[0] as! Int64
         let outputDirectoryArg: String? = nilOrValue(args[1])
-        api.startRecording(handle: handleArg, outputDirectory: outputDirectoryArg) { result in
+        let fileNameArg: String? = nilOrValue(args[2])
+        api.startRecording(handle: handleArg, outputDirectory: outputDirectoryArg, fileName: fileNameArg) { result in
           switch result {
           case .success(let res):
             reply(wrapResult(res))

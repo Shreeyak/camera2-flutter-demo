@@ -313,8 +313,8 @@ class CambrianCamera {
   ///
   /// Recording state changes are delivered via [recordingStateStream].
   /// Throws [PlatformException] if recording cannot be started.
-  Future<(String, String)> startRecording({String? outputDirectory}) async {
-    final raw = await _hostApi.startRecording(_handle, outputDirectory);
+  Future<(String, String)> startRecording({String? outputDirectory, String? fileName}) async {
+    final raw = await _hostApi.startRecording(_handle, outputDirectory, fileName);
     final parts = raw.split('|');
     return (parts[0], parts.length > 1 ? parts[1] : '');
   }
