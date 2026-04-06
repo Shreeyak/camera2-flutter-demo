@@ -573,6 +573,7 @@ camera.errorStream.listen((error) {
 | `previewSurfaceLost` | No | Flutter surface recycled |
 | `pipelineError` | No | C++ processing error |
 | `settingsConflict` | No | Invalid settings combination — see note below |
+| `frameStall` | No | GPU pipeline stopped receiving frames (>3 s with no frame) |
 | `permissionDenied` | **Yes** | Camera permission revoked |
 | `cameraDisabled` | **Yes** | Camera disabled by system policy |
 | `maxCamerasInUse` | **Yes** | Too many cameras open in the system |
