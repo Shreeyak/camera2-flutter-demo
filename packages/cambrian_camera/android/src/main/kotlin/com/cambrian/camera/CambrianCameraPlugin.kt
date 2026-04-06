@@ -84,7 +84,7 @@ class CambrianCameraPlugin : FlutterPlugin, ActivityAware, CameraHostApi {
         // Clean up stale sessions from a previous engine (e.g. hot restart
         // where onDetachedFromEngine didn't complete before re-attach).
         if (sessions.isNotEmpty()) {
-            android.util.Log.w("CambrianCamera",
+            Log.w(TAG,
                 "onAttachedToEngine: cleaning up ${sessions.size} stale session(s)")
             sessions.values.forEach { session ->
                 try { session.controller.release() } catch (_: Exception) {}
@@ -129,6 +129,7 @@ class CambrianCameraPlugin : FlutterPlugin, ActivityAware, CameraHostApi {
      * (engine is already shutting down), then clears all engine-scoped references.
      */
     override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
+        Log.i(TAG, "detached sessions=${sessions.size}")
         CameraHostApi.setUp(binding.binaryMessenger, null)
         sessions.values.forEach { session ->
             try { session.controller.release() } catch (_: Exception) {}
@@ -197,6 +198,7 @@ class CambrianCameraPlugin : FlutterPlugin, ActivityAware, CameraHostApi {
         val producer = registry.createSurfaceProducer()
         val rawSurfaceProducer = if (enableRawStream) registry.createSurfaceProducer() else null
         val handle = producer.id()
+        Log.i(TAG, "open handle=$handle cameraId=${cameraId ?: "default"}")
         val controller = CameraController(ctx, producer, rawSurfaceProducer, enableRawStream, rawStreamHeight.toInt(), api, handle)
 
         // Register the session immediately so that close() can tear it down even if open()
@@ -368,6 +370,7 @@ class CambrianCameraPlugin : FlutterPlugin, ActivityAware, CameraHostApi {
      *   handle is not found.
      */
     override fun close(handle: Long, callback: (Result<Unit>) -> Unit) {
+        Log.i(TAG, "close handle=$handle")
         val session = sessions.remove(handle)
         if (session == null) {
             callback(Result.failure(FlutterError("invalid_handle", "No session for handle $handle", null)))
@@ -384,6 +387,6 @@ class CambrianCameraPlugin : FlutterPlugin, ActivityAware, CameraHostApi {
     }
 
     companion object {
-        private const val TAG = "CambrianCameraPlugin"
+        private const val TAG = "CC/Plugin"
     }
 }

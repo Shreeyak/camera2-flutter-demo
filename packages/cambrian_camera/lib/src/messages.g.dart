@@ -44,6 +44,7 @@ enum CamErrorCode {
   previewSurfaceLost,
   pipelineError,
   settingsConflict,
+  frameStall,
   unknown,
 }
 

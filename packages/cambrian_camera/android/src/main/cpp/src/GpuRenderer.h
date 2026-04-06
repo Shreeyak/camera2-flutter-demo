@@ -145,6 +145,7 @@ private:
     int    pboIndex_        = 0;     // index being written this frame; read = 1 - pboIndex_
     bool   firstFrame_      = true;  // skip readback on frame 0 (no previous write)
     bool   loggedFirstFrame_ = true; // one-time first-frame log flag (per instance)
+    uint64_t frameCount_    = 0;
 
     // Metadata stored alongside each PBO write to avoid off-by-one delivery
     struct PboMeta { uint64_t frameId; cam::FrameMetadata meta; };

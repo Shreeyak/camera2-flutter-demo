@@ -13,11 +13,13 @@
 #include "GpuRenderer.h"
 
 #include <android/log.h>
+#include <cinttypes>
 #include <cstring>
 
-#define LOG_TAG "GpuRenderer"
+#define LOG_TAG "CC/Renderer"
 #define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, __VA_ARGS__)
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  LOG_TAG, __VA_ARGS__)
+#define LOGW(...) __android_log_print(ANDROID_LOG_WARN,  LOG_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 
 namespace {
@@ -156,6 +158,7 @@ bool GpuRenderer::init(EGLNativeWindowType windowSurface,
 }
 
 void GpuRenderer::release() {
+    LOGI("release");
     // Bind the EGL context before GL teardown so all glDelete* calls have a valid context.
     // The destructor can be invoked off the GL thread during exception handling or unexpected
     // object destruction; eglMakeCurrent ensures GL resources are freed safely.
@@ -199,6 +202,11 @@ void GpuRenderer::drawAndReadback(
         blackBalance[0]  = blackBalance_[0];
         blackBalance[1]  = blackBalance_[1];
         blackBalance[2]  = blackBalance_[2];
+    }
+
+    frameCount_++;
+    if (frameCount_ % 300 == 0) {
+        LOGD("frame #%" PRIu64, frameCount_);
     }
 
     const int writeIdx = pboIndex_;
@@ -267,7 +275,11 @@ void GpuRenderer::drawAndReadback(
             checkGlError("blit to window");
 
             if (!eglSwapBuffers(eglDisplay_, eglWindowSurface_)) {
-                LOGE("drawAndReadback: eglSwapBuffers (processed) failed (0x%x)", eglGetError());
+                EGLint err = eglGetError();
+                LOGE("drawAndReadback: eglSwapBuffers (processed) failed: 0x%x", err);
+                if (err == EGL_BAD_SURFACE || err == EGL_BAD_NATIVE_WINDOW) {
+                    eglWindowSurface_ = EGL_NO_SURFACE;
+                }
             }
         }
 
@@ -406,7 +418,11 @@ void GpuRenderer::drawAndReadback(
                               0, 0, rawW_, rawH_,
                               GL_COLOR_BUFFER_BIT, GL_NEAREST);
             if (!eglSwapBuffers(eglDisplay_, rawEGLSurface_)) {
-                LOGE("drawAndReadback: eglSwapBuffers (raw) failed (0x%x)", eglGetError());
+                EGLint err = eglGetError();
+                LOGE("drawAndReadback: eglSwapBuffers (raw) failed: 0x%x", err);
+                if (err == EGL_BAD_SURFACE || err == EGL_BAD_NATIVE_WINDOW) {
+                    rawEGLSurface_ = EGL_NO_SURFACE;
+                }
             }
             eglMakeCurrent(eglDisplay_, eglPbufferSurface_, eglPbufferSurface_, eglContext_);
             checkGlError("raw preview blit");

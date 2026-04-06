@@ -7,6 +7,7 @@ import android.opengl.GLES30
 import android.opengl.Matrix
 import android.os.Handler
 import android.os.HandlerThread
+import android.os.SystemClock
 import android.util.Log
 import android.view.Surface
 import android.view.WindowManager
@@ -58,6 +59,11 @@ open class GpuPipeline(
          0f,  1f, 0f, 1f    // col 3
     )
 
+    private var lastFrameTimeMs = 0L
+    private var frameCount = 0L
+    private var stalled = false
+    var onStallDetected: ((elapsedMs: Long) -> Unit)? = null
+
     /** The [Surface] wrapping our [SurfaceTexture] — set as camera capture target. */
     var cameraSurface: Surface? = null
         private set
@@ -80,7 +86,7 @@ open class GpuPipeline(
         glHandler.post {
             // 1. Initialize GpuRenderer (creates EGL context, FBOs, PBOs, shader).
             if (CambrianCameraConfig.debugDataFlow) {
-                Log.i(TAG, "[DataFlow] Initializing GpuPipeline: ${width}x${height}, raw: ${rawW}x${rawH}")
+                Log.i(TAG, "Initializing GpuPipeline: ${width}x${height}, raw: ${rawW}x${rawH}")
             }
             gpuHandle = nativeGpuInit(previewSurface, width, height, rawPreviewSurface, rawW, rawH)
             if (gpuHandle == 0L) {
@@ -89,7 +95,7 @@ open class GpuPipeline(
                 return@post
             }
             if (CambrianCameraConfig.debugDataFlow) {
-                Log.i(TAG, "[DataFlow] GpuPipeline initialized successfully")
+                Log.i(TAG, "GpuPipeline initialized successfully")
             }
 
             // 2. Generate an OES texture name in the now-active GL context.
@@ -118,12 +124,14 @@ open class GpuPipeline(
             latch.countDown()
         }
         latch.await()
+        scheduleStallCheck()
     }
 
     /**
      * Release all GL resources and stop the render thread.
      */
     open fun stop() {
+        Log.i(TAG, "stop (frame #$frameCount)")
         glHandler.removeCallbacksAndMessages(null)
         glHandler.post {
             cameraSurface?.release()
@@ -201,10 +209,31 @@ open class GpuPipeline(
         }
     }
 
+    private fun scheduleStallCheck() {
+        glHandler.postDelayed({
+            if (gpuHandle == 0L) return@postDelayed
+            val elapsed = SystemClock.elapsedRealtime() - lastFrameTimeMs
+            if (lastFrameTimeMs > 0 && elapsed > STALL_THRESHOLD_MS && !stalled) {
+                stalled = true
+                Log.w(TAG, "frame stall: ${elapsed}ms since last frame (frame #$frameCount)")
+                onStallDetected?.invoke(elapsed)
+            }
+            scheduleStallCheck()
+        }, STALL_CHECK_INTERVAL_MS)
+    }
+
     // Called on glHandler thread when SurfaceTexture has a new frame.
     private fun onFrameAvailable(st: SurfaceTexture) {
         val handle = gpuHandle
         if (handle == 0L) return
+
+        val now = SystemClock.elapsedRealtime()
+        frameCount++
+        if (CambrianCameraConfig.debugDataFlow && frameCount % 100 == 0L) {
+            Log.d(TAG, "frame #$frameCount")
+        }
+        lastFrameTimeMs = now
+        stalled = false
 
         st.updateTexImage()
         st.getTransformMatrix(texMatrix)
@@ -242,7 +271,9 @@ open class GpuPipeline(
     }
 
     companion object {
-        private const val TAG = "GpuPipeline"
+        private const val TAG = "CC/Gpu"
+        private const val STALL_THRESHOLD_MS = 3000L
+        private const val STALL_CHECK_INTERVAL_MS = 3000L
 
         init {
             try {

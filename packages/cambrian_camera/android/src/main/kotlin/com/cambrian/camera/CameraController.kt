@@ -22,6 +22,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.HandlerThread
 import android.os.Looper
+import android.util.Log
 import android.util.Range
 import android.util.Rational
 import android.util.Size
@@ -228,6 +229,12 @@ class CameraController(
     /** Capture-result counter used for periodic diagnostics. */
     @Volatile private var captureResultCount: Long = 0L
 
+    // 3A state tracking for Tier 1 state-change logs
+    @Volatile private var lastAeState: Int? = null
+    @Volatile private var lastAfState: Int? = null
+    @Volatile private var lastAwbState: Int? = null
+    @Volatile private var lastHeartbeatFrameCount: Long = 0L
+
     /**
      * YUV layout of the Camera2 stream, detected from plane strides on the first frame
      * and cached for all subsequent frames. Reset to [YUV_FORMAT_UNKNOWN] at each
@@ -277,6 +284,7 @@ class CameraController(
                     if (ptr == 0L) return
                     val width = previewWidth
                     val height = previewHeight
+                    Log.i("CC/Cam", "surface available ${width}×${height}")
                     if (width > 0 && height > 0) {
                         surfaceProducer.setSize(width, height)
                     }
@@ -287,6 +295,7 @@ class CameraController(
                 }
 
                 override fun onSurfaceCleanup() {
+                    Log.i("CC/Cam", "surface cleanup")
                     val ptr = nativePipelinePtr
                     if (ptr != 0L) nativeSetPreviewWindow(ptr, null)
                     // Detach the GPU renderer's processed preview EGL surface so it
@@ -388,6 +397,7 @@ class CameraController(
                         openLock.release()
                         cameraDevice = camera
                         retryCount = 0 // Reset backoff counter on successful open.
+                        Log.i("CC/Cam", "device opened")
                         startCaptureSession(safeCallback)
                     }
 
@@ -395,6 +405,7 @@ class CameraController(
                         openLock.release()
                         camera.close()
                         cameraDevice = null
+                        Log.w("CC/Cam", "device disconnected")
                         // Non-fatal — attempt recovery.
                         handleNonFatalError(CamErrorCode.CAMERA_DISCONNECTED, "Camera disconnected unexpectedly")
                         mainHandler.post { safeCallback(Result.failure(FlutterError(CamErrorCode.CAMERA_DISCONNECTED.name, "Camera disconnected", null))) }
@@ -410,6 +421,7 @@ class CameraController(
 
                         val (errCode, message) = errorCodeToMessage(error)
                         val fatal = isFatalDeviceError(error)
+                        Log.e("CC/Cam", "device error=$error fatal=$fatal")
                         if (fatal) {
                             handleFatalError(errCode, message)
                         } else {
@@ -581,26 +593,26 @@ class CameraController(
             if (knownExp == null) {
                 val msg = "Cannot switch to manual ISO: no prior AE exposure value available yet. " +
                     "Provide exposureTimeNs explicitly or wait for the first capture result."
-                android.util.Log.e("CambrianCamera", msg)
+                Log.e("CC/Settings", msg)
                 mainHandler.post {
                     flutterApi.onError(handle, CamError(CamErrorCode.SETTINGS_CONFLICT, msg, false)) {}
                 }
                 return
             }
-            android.util.Log.d("CambrianCamera", "Auto-filled exposureTimeNs=$knownExp from last AE result")
+            Log.d("CC/Settings", "Auto-filled exposureTimeNs=$knownExp from last AE result")
             merged = merged.copy(exposureMode = "manual", exposureTimeNs = knownExp)
         } else if (finalExpManual && !finalIsoManual) {
             val knownIso = lastKnownIso
             if (knownIso == null) {
                 val msg = "Cannot switch to manual exposure: no prior AE ISO value available yet. " +
                     "Provide iso explicitly or wait for the first capture result."
-                android.util.Log.e("CambrianCamera", msg)
+                Log.e("CC/Settings", msg)
                 mainHandler.post {
                     flutterApi.onError(handle, CamError(CamErrorCode.SETTINGS_CONFLICT, msg, false)) {}
                 }
                 return
             }
-            android.util.Log.d("CambrianCamera", "Auto-filled iso=$knownIso from last AE result")
+            Log.d("CC/Settings", "Auto-filled iso=$knownIso from last AE result")
             merged = merged.copy(isoMode = "manual", iso = knownIso.toLong())
         }
 
@@ -613,23 +625,16 @@ class CameraController(
         try {
             val request = buildCaptureRequest(device, merged)
             repeatingRequest = request
-            if (CambrianCameraConfig.verboseDiagnostics) {
-                android.util.Log.d(
-                    "CambrianCamera",
-                    "updateSettings request target=${describeTargetSurface(targetSurface)} " +
-                        "iso=${merged.isoMode ?: "unchanged"}(${merged.iso ?: "-"}) " +
-                        "exposure=${merged.exposureMode ?: "unchanged"}(${merged.exposureTimeNs ?: "-"})",
-                )
-            }
             session.setRepeatingRequest(request, repeatingCaptureCallback, backgroundHandler)
+            Log.i("CC/Settings", "iso=${merged.isoMode}:${merged.iso ?: "-"} exp=${merged.exposureMode}:${fmtExpMs(merged.exposureTimeNs)} focus=${merged.focusMode}:${merged.focusDistanceDiopters ?: "-"} wb=${merged.wbMode} zoom=${merged.zoomRatio ?: "-"}")
             if (CambrianCameraConfig.verboseSettings) {
-                android.util.Log.d("CambrianCamera", buildSettingsLog(merged))
+                Log.d("CC/Settings", buildSettingsLog(merged))
             }
         } catch (e: CameraAccessException) {
             // Non-fatal; the session may be closing. Log and ignore.
-            android.util.Log.w("CameraController", "updateSettings failed: ${e.message}")
+            Log.w("CC/Cam", "updateSettings failed: ${e.message}")
         } catch (e: IllegalStateException) {
-            android.util.Log.w("CameraController", "updateSettings: session already closed")
+            Log.w("CC/Cam", "updateSettings: session already closed")
         }
     }
 
@@ -686,7 +691,7 @@ class CameraController(
     fun setProcessingParams(params: CamProcessingParams) {
         lastProcessingParams = params
         if (CambrianCameraConfig.debugDataFlow) {
-            android.util.Log.d("CambrianCamera", "[DataFlow] Processing params: brightness=${params.brightness} contrast=${params.contrast} saturation=${params.saturation}")
+            Log.d("CC/Cam", "Processing params: brightness=${params.brightness} contrast=${params.contrast} saturation=${params.saturation}")
         }
         // GPU path: uniforms are updated via GpuPipeline.setAdjustments().
         // nativeSetProcessingParams is not called — the CPU pipeline is inactive.
@@ -796,9 +801,9 @@ class CameraController(
             repeatingRequest = request
             session.setRepeatingRequest(request, repeatingCaptureCallback, backgroundHandler)
         } catch (e: CameraAccessException) {
-            android.util.Log.w("CameraController", "rebuildRepeatingRequest failed: ${e.message}")
+            Log.w("CC/Cam", "rebuildRepeatingRequest failed: ${e.message}")
         } catch (e: IllegalStateException) {
-            android.util.Log.w("CameraController", "rebuildRepeatingRequest: session already closed")
+            Log.w("CC/Cam", "rebuildRepeatingRequest: session already closed")
         }
     }
 
@@ -898,6 +903,7 @@ class CameraController(
      * Called by the plugin on engine detach. Use [close] for orderly user-initiated shutdown.
      */
     fun release() {
+        Log.i("CC/Cam", "release handle=$handle")
         released = true
         teardown()
         backgroundThread.quitSafely()
@@ -934,7 +940,7 @@ class CameraController(
         previewWidth = streamWidth
         previewHeight = streamHeight
         if (CambrianCameraConfig.debugDataFlow) {
-            android.util.Log.i("CambrianCamera", "[DataFlow] Stream resolution: ${streamWidth}x${streamHeight} (4:3=${streamWidth * 3 == streamHeight * 4})")
+            Log.i("CC/Cam", "Stream resolution: ${streamWidth}x${streamHeight} (4:3=${streamWidth * 3 == streamHeight * 4})")
         }
         surfaceProducer.setSize(streamWidth, streamHeight)
         if (enableRawStream && rawSurfaceProducer != null) {
@@ -945,7 +951,7 @@ class CameraController(
             rawW = 0
             rawH = 0
         }
-        android.util.Log.i("CambrianCamera", "Camera stream resolution selected: ${streamWidth}x$streamHeight")
+        Log.i("CC/Cam", "streaming fmt=YUV_420_888 ${streamWidth}×${streamHeight}")
 
         // JPEG ImageReader — pre-allocated for still capture (use streaming resolution).
         val jpegReader = ImageReader.newInstance(streamWidth, streamHeight, ImageFormat.JPEG, 1)
@@ -955,7 +961,7 @@ class CameraController(
         // GpuRenderer owns the preview surface via EGL.
         nativePipelinePtr = nativeInit(null, streamWidth, streamHeight)
         if (nativePipelinePtr == 0L) {
-            android.util.Log.e("CambrianCamera", "startCaptureSession: nativeInit failed — aborting session startup")
+            Log.e("CC/Cam", "startCaptureSession: nativeInit failed — aborting session startup")
             jpegImageReader = null
             jpegReader.close()
             mainHandler.post {
@@ -976,13 +982,19 @@ class CameraController(
         )
         pipeline.start()
         gpuPipeline = pipeline
+        pipeline.onStallDetected = { elapsedMs ->
+            Log.w("CC/Cam", "frame stall reported: ${elapsedMs}ms")
+            mainHandler.post {
+                flutterApi.onError(handle, CamError(CamErrorCode.FRAME_STALL, "Frame stall: ${elapsedMs}ms since last frame", false)) {}
+            }
+        }
 
         // Replay any previously set processing params so they survive pipeline recreation.
         lastProcessingParams?.let { setProcessingParams(it) }
 
         val gpuSurface = pipeline.cameraSurface
         if (gpuSurface == null) {
-            android.util.Log.e("CambrianCamera", "startCaptureSession: GPU init failed — camera surface is null")
+            Log.e("CC/Cam", "startCaptureSession: GPU init failed — camera surface is null")
             gpuPipeline = null
             pipeline.stop()
             synchronized(pipelineLock) {
@@ -1011,7 +1023,7 @@ class CameraController(
                 { command -> backgroundHandler.post(command) },
                 object : CameraCaptureSession.StateCallback() {
                     override fun onConfigured(session: CameraCaptureSession) {
-                        android.util.Log.i("CambrianCamera", "Camera session configured: ${previewWidth}x$previewHeight")
+                        Log.i("CC/Cam", "session configured ${previewWidth}×$previewHeight")
                         captureSession = session
                         try {
                             val settings = pendingSettings
@@ -1022,14 +1034,6 @@ class CameraController(
                                     buildDefaultCaptureRequest(device)
                                 }
                             repeatingRequest = request
-                            if (CambrianCameraConfig.verboseDiagnostics) {
-                                android.util.Log.d(
-                                    "CambrianCamera",
-                                    "setRepeatingRequest target=${describeTargetSurface(repeatingTargetSurface)} " +
-                                        "initialIso=${settings?.isoMode ?: "default"}(${settings?.iso ?: "-"}) " +
-                                        "initialExposure=${settings?.exposureMode ?: "default"}(${settings?.exposureTimeNs ?: "-"})",
-                                )
-                            }
                             session.setRepeatingRequest(request, repeatingCaptureCallback, backgroundHandler)
                             setState(State.STREAMING)
                             emitState("streaming")
@@ -1041,6 +1045,7 @@ class CameraController(
                     }
 
                     override fun onConfigureFailed(session: CameraCaptureSession) {
+                        Log.e("CC/Cam", "session configure failed")
                         handleNonFatalError(CamErrorCode.CONFIGURATION_FAILED, "CaptureSession configuration failed")
                         mainHandler.post {
                             openCallback(
@@ -1162,7 +1167,7 @@ class CameraController(
                 )!!
             }
             builder.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, best)
-            android.util.Log.d("CambrianCamera", "AE fps range: [${best.lower}, ${best.upper}] (recording=$isRecording)")
+            Log.d("CC/3A", "AE fps range: [${best.lower}, ${best.upper}] (recording=$isRecording)")
         }
 
         return builder
@@ -1211,14 +1216,14 @@ class CameraController(
                 when (settings.isoMode) {
                     "manual" -> settings.iso?.let { set(CaptureRequest.SENSOR_SENSITIVITY, it.toInt()) }
                     "auto", null -> { /* don't set → template default (AE controls ISO) */ }
-                    else -> android.util.Log.w("CambrianCamera", "Unknown isoMode: ${settings.isoMode}")
+                    else -> Log.w("CC/Settings", "Unknown isoMode: ${settings.isoMode}")
                 }
 
                 // Exposure time: "auto" = AE controls, "manual" = fixed value.
                 when (settings.exposureMode) {
                     "manual" -> settings.exposureTimeNs?.let { set(CaptureRequest.SENSOR_EXPOSURE_TIME, it) }
                     "auto", null -> { /* don't set → template default (AE controls shutter) */ }
-                    else -> android.util.Log.w("CambrianCamera", "Unknown exposureMode: ${settings.exposureMode}")
+                    else -> Log.w("CC/Settings", "Unknown exposureMode: ${settings.exposureMode}")
                 }
 
                 // Focus: "auto" = continuous AF, "manual" = fixed distance.
@@ -1233,7 +1238,7 @@ class CameraController(
                         set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
                     }
                     null -> { /* don't set → template default (continuous AF) */ }
-                    else -> android.util.Log.w("CambrianCamera", "Unknown focusMode: ${settings.focusMode}")
+                    else -> Log.w("CC/Settings", "Unknown focusMode: ${settings.focusMode}")
                 }
 
                 // White balance: "auto" = AWB, "locked" = freeze, "manual" = user gains.
@@ -1264,7 +1269,7 @@ class CameraController(
                         )
                     }
                     null -> { /* don't set → template default (AWB auto) */ }
-                    else -> android.util.Log.w("CambrianCamera", "Unknown wbMode: ${settings.wbMode}")
+                    else -> Log.w("CC/Settings", "Unknown wbMode: ${settings.wbMode}")
                 }
 
                 // Zoom — use CONTROL_ZOOM_RATIO on API 30+, fall back to SCALER_CROP_REGION.
@@ -1343,7 +1348,7 @@ class CameraController(
             if (recorderToStop != null) {
                 backgroundHandler.post {
                     try { recorderToStop.stop() } catch (e: Exception) {
-                        android.util.Log.w("CambrianCamera", "teardown: error stopping recording: ${e.message}")
+                        Log.w("CC/Cam", "teardown: error stopping recording: ${e.message}")
                     }
                     mainHandler.post { flutterApi.onRecordingStateChanged(handle, "error") {} }
                 }
@@ -1388,6 +1393,10 @@ class CameraController(
         detectedYuvFormat = YUV_FORMAT_UNKNOWN
         lastKnownIso = null
         lastKnownExposureTimeNs = null
+        lastAeState = null
+        lastAfState = null
+        lastAwbState = null
+        lastHeartbeatFrameCount = 0L
 
         // Release native pipeline; pipelineLock guards nativeRelease against concurrent
         // startup/shutdown (nativeDeliverYuv is not called in the GPU path).
@@ -1419,6 +1428,8 @@ class CameraController(
     ) {
         if (state == State.ERROR) return // Already in a terminal state.
 
+        val delayMs = backoffDelaysMs[minOf(retryCount, backoffDelaysMs.size - 1)]
+        Log.w("CC/Cam", "non-fatal: code=$code msg=$message retry=${retryCount}/${maxRetries} backoff=${delayMs}ms")
         setState(State.RECOVERING)
         emitState("recovering")
         mainHandler.post { flutterApi.onError(handle, CamError(code, message, false)) {} }
@@ -1428,7 +1439,6 @@ class CameraController(
             return
         }
 
-        val delayMs = backoffDelaysMs[minOf(retryCount, backoffDelaysMs.size - 1)]
         retryCount++
 
         backgroundHandler.postDelayed({
@@ -1504,6 +1514,7 @@ class CameraController(
         code: CamErrorCode,
         message: String,
     ) {
+        Log.e("CC/Cam", "fatal: code=$code msg=$message")
         teardown()
         setState(State.ERROR)
         emitState("error")
@@ -1561,15 +1572,33 @@ class CameraController(
                     mainHandler.post { flutterApi.onFrameResult(handle, frameResult) {} }
                 }
 
-                if (!CambrianCameraConfig.verboseDiagnostics) return
-                if (captureResultCount != 1L && captureResultCount % 60L != 0L) return
-                val aeMode = result.get(CaptureResult.CONTROL_AE_MODE)
-                val aeState = result.get(CaptureResult.CONTROL_AE_STATE)
-                android.util.Log.d(
-                    "CambrianCamera",
-                    "capture result#$captureResultCount target=${describeTargetSurface(repeatingTargetSurface)} " +
-                        "aeMode=$aeMode aeState=$aeState iso=$lastKnownIso exposureNs=$lastKnownExposureTimeNs",
-                )
+                // Tier 1 — 3A state changes (unconditional, fires only on transitions)
+                val newAeState  = result.get(CaptureResult.CONTROL_AE_STATE)
+                val newAfState  = result.get(CaptureResult.CONTROL_AF_STATE)
+                val newAwbState = result.get(CaptureResult.CONTROL_AWB_STATE)
+                if (newAeState != lastAeState) {
+                    Log.i("CC/3A", "[AE] ${aeStateName(lastAeState)} → ${aeStateName(newAeState)}  iso=${result.get(CaptureResult.SENSOR_SENSITIVITY)}  exp=${fmtExpMs(result.get(CaptureResult.SENSOR_EXPOSURE_TIME))}")
+                    lastAeState = newAeState
+                }
+                if (newAfState != lastAfState) {
+                    Log.i("CC/3A", "[AF] ${afStateName(lastAfState)} → ${afStateName(newAfState)}  focus=${result.get(CaptureResult.LENS_FOCUS_DISTANCE)?.let { "${it}D" } ?: "null"}")
+                    lastAfState = newAfState
+                }
+                if (newAwbState != lastAwbState) {
+                    Log.i("CC/3A", "[AWB] ${awbStateName(lastAwbState)} → ${awbStateName(newAwbState)}  wb=${fmtWbGains(result)}")
+                    lastAwbState = newAwbState
+                }
+
+                // Tier 2 — Heartbeat (gated, every 30 results)
+                if (CambrianCameraConfig.verboseDiagnostics && captureResultCount % 30L == 0L) {
+                    val drops = maxOf(0L, 30L - (streamFrameCount - lastHeartbeatFrameCount))
+                    lastHeartbeatFrameCount = streamFrameCount
+                    val fps = result.get(CaptureResult.SENSOR_FRAME_DURATION)?.let { "%.1f".format(1_000_000_000.0 / it) } ?: "?"
+                    Log.d("CC/3A", "[HB #$captureResultCount] fps=$fps  ae=${aeStateName(newAeState)} iso=${result.get(CaptureResult.SENSOR_SENSITIVITY)} exp=${fmtExpMs(result.get(CaptureResult.SENSOR_EXPOSURE_TIME))}  af=${afStateName(newAfState)} focus=${result.get(CaptureResult.LENS_FOCUS_DISTANCE)?.let { "${it}D" } ?: "-"}  awb=${awbStateName(newAwbState)}  drops=$drops")
+                }
+                if (CambrianCameraConfig.verboseFullResult && captureResultCount % 30L == 0L) {
+                    Log.d("CC/3A", "[FULL #$captureResultCount] $result")
+                }
             }
         }
 
@@ -1582,9 +1611,52 @@ class CameraController(
         }
     }
 
-    /** Updates internal state field (single place to add logging if needed). */
+    private fun aeStateName(state: Int?): String = when (state) {
+        CaptureResult.CONTROL_AE_STATE_INACTIVE        -> "INACTIVE"
+        CaptureResult.CONTROL_AE_STATE_SEARCHING       -> "SEARCHING"
+        CaptureResult.CONTROL_AE_STATE_CONVERGED       -> "CONVERGED"
+        CaptureResult.CONTROL_AE_STATE_LOCKED          -> "LOCKED"
+        CaptureResult.CONTROL_AE_STATE_FLASH_REQUIRED  -> "FLASH_REQ"
+        CaptureResult.CONTROL_AE_STATE_PRECAPTURE      -> "PRECAPTURE"
+        null                                           -> "null"
+        else                                           -> "AE($state)"
+    }
+
+    private fun afStateName(state: Int?): String = when (state) {
+        CaptureResult.CONTROL_AF_STATE_INACTIVE              -> "INACTIVE"
+        CaptureResult.CONTROL_AF_STATE_PASSIVE_SCAN          -> "PASSIVE_SCAN"
+        CaptureResult.CONTROL_AF_STATE_PASSIVE_FOCUSED       -> "PASSIVE_FOCUSED"
+        CaptureResult.CONTROL_AF_STATE_ACTIVE_SCAN           -> "ACTIVE_SCAN"
+        CaptureResult.CONTROL_AF_STATE_FOCUSED_LOCKED        -> "FOCUSED_LOCKED"
+        CaptureResult.CONTROL_AF_STATE_NOT_FOCUSED_LOCKED    -> "NOT_FOCUSED_LOCKED"
+        CaptureResult.CONTROL_AF_STATE_PASSIVE_UNFOCUSED     -> "PASSIVE_UNFOCUSED"
+        null                                                 -> "null"
+        else                                                 -> "AF($state)"
+    }
+
+    private fun awbStateName(state: Int?): String = when (state) {
+        CaptureResult.CONTROL_AWB_STATE_INACTIVE    -> "INACTIVE"
+        CaptureResult.CONTROL_AWB_STATE_SEARCHING   -> "SEARCHING"
+        CaptureResult.CONTROL_AWB_STATE_CONVERGED   -> "CONVERGED"
+        CaptureResult.CONTROL_AWB_STATE_LOCKED      -> "LOCKED"
+        null                                        -> "null"
+        else                                        -> "AWB($state)"
+    }
+
+    private fun fmtExpMs(ns: Long?): String = if (ns == null) "null" else "${ns / 1_000_000}ms"
+
+    private fun fmtWbGains(result: TotalCaptureResult): String {
+        val g = result.get(CaptureResult.COLOR_CORRECTION_GAINS) ?: return "null"
+        return "[R:${"%.2f".format(g.red)} Ge:${"%.2f".format(g.greenEven)} Go:${"%.2f".format(g.greenOdd)} B:${"%.2f".format(g.blue)}]"
+    }
+
+    /** Updates internal state field and logs transitions. */
     private fun setState(newState: State) {
+        val prev = state
         state = newState
+        if (prev != newState) {
+            Log.i("CC/Cam", "$prev → $newState")
+        }
     }
 
     /**

@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart' show debugPrint, kDebugMode;
 import 'package:flutter/widgets.dart';
 
 import 'camera_settings.dart';
@@ -167,8 +168,12 @@ class CambrianCamera {
     try {
       final caps = await api.getCapabilities(handle);
       camera._capabilities = CameraCapabilities.fromPigeon(caps);
+      if (kDebugMode) {
+        debugPrint('CC/Dart: opened handle=$handle ${caps.streamWidth}×${caps.streamHeight}');
+      }
       return camera;
-    } catch (_) {
+    } catch (e) {
+      if (kDebugMode) debugPrint('CC/Dart: open failed: $e');
       await camera.close();
       rethrow;
     }
@@ -343,6 +348,7 @@ class CambrianCamera {
   /// Safe to call multiple times; subsequent calls are no-ops.
   Future<void> close() async {
     if (_closed) return;
+    if (kDebugMode) debugPrint('CC/Dart: close handle=$_handle');
     // Set before the try block intentionally: prevents concurrent/reentrant second
     // calls from reaching the native layer even if _hostApi.close() throws.
     _closed = true;
@@ -366,10 +372,14 @@ class CambrianCamera {
 
   void _onStateChanged(CamStateUpdate update) {
     _currentState = CameraState.fromString(update.state);
+    if (kDebugMode) debugPrint('CC/Dart: state=$_currentState');
     _stateController.add(_currentState);
   }
 
   void _onError(CamError error) {
+    if (kDebugMode) {
+      debugPrint('CC/Dart: error=${error.code} fatal=${error.isFatal}: ${error.message}');
+    }
     _errorController.add(CameraError.fromPigeon(error));
   }
 
