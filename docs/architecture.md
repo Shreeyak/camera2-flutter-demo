@@ -269,10 +269,21 @@ class CameraError {
 
 /// Serialized as integer indices — do NOT reorder; only append before [unknown].
 enum CamErrorCode {
-  cameraDevice, cameraService, cameraDisconnected, configurationFailed,
-  permissionDenied, cameraDisabled, maxCamerasInUse, cameraInUse,
-  cameraAccessError, maxRetriesExceeded, previewSurfaceLost, pipelineError,
-  settingsConflict, unknown,
+  cameraDevice,          // ERROR_CAMERA_DEVICE — fatal hardware failure
+  cameraService,         // ERROR_CAMERA_SERVICE — camera service error
+  cameraDisconnected,    // camera lost unexpectedly (system reclaim, USB)
+  configurationFailed,   // session configuration or rebind failed
+  permissionDenied,      // CAMERA permission denied or revoked — fatal
+  cameraDisabled,        // ERROR_CAMERA_DISABLED — disabled by policy — fatal
+  maxCamerasInUse,       // ERROR_MAX_CAMERAS_IN_USE — too many open — fatal
+  cameraInUse,           // ERROR_CAMERA_IN_USE — another app holds the camera
+  cameraAccessError,     // CameraAccessException (transient access failure)
+  maxRetriesExceeded,    // auto-recovery gave up after max retries — fatal
+  previewSurfaceLost,    // Flutter SurfaceProducer was invalidated
+  pipelineError,         // C++ processing pipeline error
+  settingsConflict,      // invalid settings combination
+  frameStall,            // GPU pipeline stopped receiving frames
+  unknown,               // catch-all; keep last
 }
 
 class FrameResult {
@@ -304,6 +315,34 @@ C++ uses `static_assert` to verify counts match. Example: `static_assert(cam::me
 ---
 
 ## Kotlin Layer
+
+### Diagnostic Logging
+
+All log tags share a `CC/` prefix so they can be filtered with one command:
+
+```bash
+adb logcat | grep "CC/"
+```
+
+| Tag | Source | Content |
+|-----|--------|---------|
+| `CC/Cam` | CameraController | Lifecycle transitions, device/surface events, errors |
+| `CC/3A` | CameraController | AE/AF/AWB state changes (Tier 1) and heartbeat (Tier 2) |
+| `CC/Settings` | CameraController | Settings applied per `updateSettings()` call |
+| `CC/Gpu` | GpuPipeline | Frame counter, stall detection, pipeline start/stop |
+| `CC/Renderer` | GpuRenderer.cpp | EGL/GL operations, per-300-frame heartbeat |
+| `CC/Plugin` | CambrianCameraPlugin | open/close/detach events |
+| `CC/Dart` | cambrian_camera_controller.dart | Dart-side open/close/state/error (debug builds only) |
+
+Log tiers are controlled by `CambrianCameraConfig`:
+
+| Flag | Default | Effect |
+|------|---------|--------|
+| *(always on)* | — | Tier 0: lifecycle events, 3A state transitions, settings summary |
+| `verboseDiagnostics` | `true` | Tier 2: `CC/3A` heartbeat every 30 frames (fps, drops, full 3A state) |
+| `verboseSettings` | `true` | Verbose settings dump via `buildSettingsLog()` |
+| `verboseFullResult` | `false` | Tier 3: full `TotalCaptureResult` dump every 30 frames |
+| `debugDataFlow` | `false` | GPU pipeline initialization and frame-flow traces |
 
 ### Auto-Recovery State Machine
 

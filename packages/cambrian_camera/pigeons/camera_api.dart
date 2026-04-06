@@ -183,6 +183,7 @@ enum CamErrorCode {
   previewSurfaceLost,  // Flutter SurfaceProducer was invalidated
   pipelineError,       // C++ processing pipeline error
   settingsConflict,    // invalid settings combination (e.g. mixed manual/auto ISO+exposure)
+  frameStall,          // GPU pipeline stopped receiving frames
   unknown,             // catch-all; keep last
 }
 
