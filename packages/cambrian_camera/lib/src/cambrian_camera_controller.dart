@@ -316,8 +316,10 @@ class CambrianCamera {
   /// Throws [PlatformException] if recording cannot be started.
   Future<(String, String)> startRecording({String? outputDirectory, String? fileName, int? bitrate, int? fps}) async {
     final raw = await _hostApi.startRecording(_handle, outputDirectory, fileName, bitrate, fps);
-    final parts = raw.split('|');
-    return (parts[0], parts.length > 1 ? parts[1] : '');
+    // Split on the first '|' only — the display name may itself contain '|'.
+    final separatorIndex = raw.indexOf('|');
+    if (separatorIndex == -1) return (raw, '');
+    return (raw.substring(0, separatorIndex), raw.substring(separatorIndex + 1));
   }
 
   /// Stops recording and finalizes the MP4. Returns the content URI of the finalized file.

@@ -279,17 +279,23 @@ void GpuRenderer::drawAndReadback(
     // 4b. Blit tone-mapped FBO → encoder surface (MediaCodec input, if set)
     // -----------------------------------------------------------------------
     if (eglEncoderSurface_ != EGL_NO_SURFACE) {
-        eglMakeCurrent(eglDisplay_, eglEncoderSurface_, eglEncoderSurface_, eglContext_);
-        glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo_);
-        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
-        glBlitFramebuffer(
-            0, 0, width_, height_,
-            0, 0, width_, height_,
-            GL_COLOR_BUFFER_BIT, GL_NEAREST);
-        if (!eglSwapBuffers(eglDisplay_, eglEncoderSurface_)) {
-            LOGE("drawAndReadback: eglSwapBuffers (encoder) failed (0x%x)", eglGetError());
+        if (!eglMakeCurrent(eglDisplay_, eglEncoderSurface_, eglEncoderSurface_, eglContext_)) {
+            LOGE("drawAndReadback: eglMakeCurrent (encoder) failed (0x%x)", eglGetError());
+        } else {
+            glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo_);
+            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+            glBlitFramebuffer(
+                0, 0, width_, height_,
+                0, 0, width_, height_,
+                GL_COLOR_BUFFER_BIT, GL_NEAREST);
+            checkGlError("blit to encoder");
+            if (!eglSwapBuffers(eglDisplay_, eglEncoderSurface_)) {
+                LOGE("drawAndReadback: eglSwapBuffers (encoder) failed (0x%x)", eglGetError());
+            }
+            if (!eglMakeCurrent(eglDisplay_, eglPbufferSurface_, eglPbufferSurface_, eglContext_)) {
+                LOGE("drawAndReadback: eglMakeCurrent (pbuffer restore) failed (0x%x)", eglGetError());
+            }
         }
-        eglMakeCurrent(eglDisplay_, eglPbufferSurface_, eglPbufferSurface_, eglContext_);
     }
 
     // -----------------------------------------------------------------------

@@ -403,7 +403,12 @@ final path = await camera.takePicture();
 #### `camera.startRecording()`
 
 ```dart
-Future<(String, String)> startRecording({String? outputDirectory, String? fileName})
+Future<(String, String)> startRecording({
+  String? outputDirectory,
+  String? fileName,
+  int? bitrate,
+  int? fps,
+})
 ```
 
 Starts encoding to an MP4 file. Returns `(contentUri, displayName)` where `contentUri` is the MediaStore content URI and `displayName` is the file name (e.g. `cambrian_1712345678.mp4`).
@@ -412,15 +417,19 @@ Starts encoding to an MP4 file. Returns `(contentUri, displayName)` where `conte
 |---|---|---|
 | `outputDirectory` | `Movies/CambrianCamera/` | MediaStore `RELATIVE_PATH` (e.g. `Movies/MyApp/`) |
 | `fileName` | `cambrian_<timestamp>` | File name without extension; `.mp4` appended automatically |
+| `bitrate` | `50000000` (50 Mbps) | Target encoder bitrate in bits per second |
+| `fps` | `30` | Target encoder frame rate |
 
 ```dart
 // Minimal
 final (uri, name) = await camera.startRecording();
 
-// Custom location and name
+// Custom location, name, and encoding parameters
 final (uri, name) = await camera.startRecording(
   outputDirectory: 'Movies/MyApp/',
   fileName: 'session_01',  // saved as session_01.mp4
+  bitrate: 8_000_000,      // 8 Mbps
+  fps: 24,
 );
 ```
 

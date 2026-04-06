@@ -530,7 +530,7 @@ protocol CameraHostApi {
   func setProcessingParams(handle: Int64, params: CamProcessingParams) throws
   func takePicture(handle: Int64, completion: @escaping (Result<String, Error>) -> Void)
   func getNativePipelineHandle(handle: Int64, completion: @escaping (Result<Int64?, Error>) -> Void)
-  func startRecording(handle: Int64, outputDirectory: String?, fileName: String?, completion: @escaping (Result<String, Error>) -> Void)
+  func startRecording(handle: Int64, outputDirectory: String?, fileName: String?, bitrate: Int64?, fps: Int64?, completion: @escaping (Result<String, Error>) -> Void)
   func stopRecording(handle: Int64, completion: @escaping (Result<String, Error>) -> Void)
   func close(handle: Int64, completion: @escaping (Result<Void, Error>) -> Void)
   /// Returns the current display rotation in degrees CW from portrait: 0, 90, 180, or 270.
@@ -655,7 +655,9 @@ class CameraHostApiSetup {
         let handleArg = args[0] as! Int64
         let outputDirectoryArg: String? = nilOrValue(args[1])
         let fileNameArg: String? = nilOrValue(args[2])
-        api.startRecording(handle: handleArg, outputDirectory: outputDirectoryArg, fileName: fileNameArg) { result in
+        let bitrateArg: Int64? = nilOrValue(args[3])
+        let fpsArg: Int64? = nilOrValue(args[4])
+        api.startRecording(handle: handleArg, outputDirectory: outputDirectoryArg, fileName: fileNameArg, bitrate: bitrateArg, fps: fpsArg) { result in
           switch result {
           case .success(let res):
             reply(wrapResult(res))
@@ -751,7 +753,7 @@ class CameraFlutterApi: CameraFlutterApiProtocol {
       if listResponse.count > 1 {
         let code: String = listResponse[0] as! String
         let message: String? = nilOrValue(listResponse[1])
-        let details: String? = nilOrValue(listResponse[2])
+        let details: Any? = listResponse[2]
         completion(.failure(PigeonError(code: code, message: message, details: details)))
       } else {
         completion(.success(Void()))
@@ -769,7 +771,7 @@ class CameraFlutterApi: CameraFlutterApiProtocol {
       if listResponse.count > 1 {
         let code: String = listResponse[0] as! String
         let message: String? = nilOrValue(listResponse[1])
-        let details: String? = nilOrValue(listResponse[2])
+        let details: Any? = listResponse[2]
         completion(.failure(PigeonError(code: code, message: message, details: details)))
       } else {
         completion(.success(Void()))
@@ -787,7 +789,7 @@ class CameraFlutterApi: CameraFlutterApiProtocol {
       if listResponse.count > 1 {
         let code: String = listResponse[0] as! String
         let message: String? = nilOrValue(listResponse[1])
-        let details: String? = nilOrValue(listResponse[2])
+        let details: Any? = listResponse[2]
         completion(.failure(PigeonError(code: code, message: message, details: details)))
       } else {
         completion(.success(Void()))
@@ -807,7 +809,7 @@ class CameraFlutterApi: CameraFlutterApiProtocol {
       if listResponse.count > 1 {
         let code: String = listResponse[0] as! String
         let message: String? = nilOrValue(listResponse[1])
-        let details: String? = nilOrValue(listResponse[2])
+        let details: Any? = listResponse[2]
         completion(.failure(PigeonError(code: code, message: message, details: details)))
       } else {
         completion(.success(Void()))

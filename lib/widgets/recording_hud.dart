@@ -19,6 +19,7 @@ import 'package:flutter/material.dart'
         DecoratedBox,
         EdgeInsets,
         FadeTransition,
+        Flexible,
         FontWeight,
         Key,
         MainAxisSize,
@@ -248,29 +249,33 @@ class _SavingCapsule extends StatelessWidget {
               ),
             ),
             const SizedBox(width: 10),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Text(
-                  'saving file\u2026',
-                  style: TextStyle(color: Colors.white70, fontSize: 10),
-                ),
-                Text(
-                  displayName,
-                  overflow: TextOverflow.ellipsis,
-                  maxLines: 1,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 12,
-                    fontWeight: FontWeight.w700,
+            Flexible(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Text(
+                    'saving file\u2026',
+                    style: TextStyle(color: Colors.white70, fontSize: 10),
                   ),
-                ),
-                Text(
-                  'to $outputDir',
-                  style: const TextStyle(color: Colors.white54, fontSize: 10),
-                ),
-              ],
+                  Text(
+                    displayName,
+                    overflow: TextOverflow.ellipsis,
+                    maxLines: 1,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  Text(
+                    'to $outputDir',
+                    overflow: TextOverflow.ellipsis,
+                    maxLines: 1,
+                    style: const TextStyle(color: Colors.white54, fontSize: 10),
+                  ),
+                ],
+              ),
             ),
           ],
         ),

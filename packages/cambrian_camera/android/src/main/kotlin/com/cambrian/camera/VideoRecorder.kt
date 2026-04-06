@@ -238,12 +238,25 @@ class VideoRecorder(private val context: Context) {
             throw IllegalStateException("VideoRecorder: codec is null at start()")
         }
 
-        currentCodec.start()
+        try {
+            currentCodec.start()
 
-        val thread = HandlerThread("VideoEncoderDrain").also { it.start() }
-        drainThread = thread
-        drainHandler = Handler(thread.looper)
-        drainHandler!!.post { drainEncoderLoop(latch) }
+            val thread = HandlerThread("VideoEncoderDrain").also { it.start() }
+            drainThread = thread
+            drainHandler = Handler(thread.looper)
+            drainHandler!!.post { drainEncoderLoop(latch) }
+        } catch (e: Exception) {
+            // Rollback everything created in this call so the recorder returns to a clean state.
+            drainThread?.quitSafely(); drainThread = null; drainHandler = null; eosLatch = null
+            try { newMuxer.release() } catch (_: Exception) {}
+            muxer = null
+            fd.close(); outputFd = null
+            try { resolver.delete(uri, null, null) } catch (_: Exception) {}
+            outputUri = null
+            state = State.ERROR
+            Log.e(TAG, "start: failed during codec.start/drain setup", e)
+            throw e
+        }
 
         state = State.RECORDING
         Log.d(TAG, "start: recording to $uri")
@@ -288,7 +301,8 @@ class VideoRecorder(private val context: Context) {
         val capturedDrainError = drainError
         drainError = null
         if (capturedDrainError != null) {
-            drainThread?.quitSafely(); drainThread = null; drainHandler = null; eosLatch = null
+            drainThread?.let { it.quitSafely(); it.join() }
+            drainThread = null; drainHandler = null; eosLatch = null
             try { context.contentResolver.delete(uri, null, null) } catch (_: Exception) {}
             muxer?.let { try { it.release() } catch (_: Exception) {} }; muxer = null
             outputFd?.close(); outputFd = null
@@ -301,8 +315,12 @@ class VideoRecorder(private val context: Context) {
             )
         }
 
-        // Shut down the drain thread.
-        drainThread?.quitSafely()
+        // Shut down the drain thread and wait for it to actually exit before releasing shared
+        // resources — quitSafely() does not interrupt a running dequeueOutputBuffer call.
+        drainThread?.let {
+            it.quitSafely()
+            it.join()
+        }
         drainThread = null
         drainHandler = null
         eosLatch = null

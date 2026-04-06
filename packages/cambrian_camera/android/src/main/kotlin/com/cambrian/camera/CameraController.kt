@@ -783,17 +783,6 @@ class CameraController(
     }
 
     /**
-     * Starts a video recording session.
-     *
-     * Prepares the [VideoRecorder], starts encoding into a MediaStore file, and adds
-     * the encoder's input surface to the Camera2 session so the camera HAL writes frames
-     * directly to the encoder via the hardware path. The callback is invoked on the main
-     * thread with the content URI of the output file on success, or a [FlutterError] on
-     * failure.
-     *
-     * @param callback Invoked with the content URI string on success, or a failure.
-     */
-    /**
      * Rebuilds and resubmits the repeating capture request using the current [appliedSettings]
      * and [isRecording] state. Call after toggling [isRecording] so Camera2 switches between
      * [CameraDevice.TEMPLATE_PREVIEW] and [CameraDevice.TEMPLATE_RECORD].
@@ -813,6 +802,20 @@ class CameraController(
         }
     }
 
+    /**
+     * Starts a video recording session.
+     *
+     * Prepares the [VideoRecorder], starts encoding into a MediaStore file, and routes
+     * tone-mapped GPU frames to the encoder via [GpuPipeline.setEncoderSurface]. The
+     * callback is invoked on the main thread with the content URI of the output file on
+     * success, or a [FlutterError] on failure.
+     *
+     * @param outputDirectory MediaStore RELATIVE_PATH (e.g. "Movies/MyApp/"); defaults to "Movies/CambrianCamera/".
+     * @param fileName        Display name without extension; ".mp4" is appended automatically.
+     * @param bitrate         Target encoder bitrate in bits/s; defaults to 50 Mbps.
+     * @param fps             Target encoder frame rate; defaults to 30 fps.
+     * @param callback        Invoked with the content URI string on success, or a failure.
+     */
     fun startRecording(outputDirectory: String? = null, fileName: String? = null, bitrate: Int? = null, fps: Int? = null, callback: (Result<String>) -> Unit) {
         backgroundHandler.post {
             if (state != State.STREAMING || isRecording) {
@@ -1119,9 +1122,9 @@ class CameraController(
      *
      * The returned builder already has [gpuPipeline]?.cameraSurface added as target
      * (so the GPU OES SurfaceTexture receives camera frames) and [CaptureRequest.CONTROL_MODE_AUTO]
-     * applied. When recording, the encoder [VideoRecorder.persistentSurface] is also added
-     * as a target. The JPEG [jpegImageReader] is intentionally excluded — it is targeted only
-     * by the one-shot request in [takePicture].
+     * applied. Encoder output is routed via [GpuPipeline.setEncoderSurface] rather than as a
+     * Camera2 session target. The JPEG [jpegImageReader] is intentionally excluded — it is
+     * targeted only by the one-shot request in [takePicture].
      */
     private fun createRepeatingRequestBuilder(
         device: CameraDevice,
@@ -1330,13 +1333,22 @@ class CameraController(
      */
     private fun teardown() {
         // Stop any active recording before tearing down the session.
+        // Offload the blocking drain wait to backgroundHandler so close()/release() callers
+        // are not stalled for up to 5 seconds on the main/plugin thread.
         if (isRecording) {
             isRecording = false
             gpuPipeline?.setEncoderSurface(null)
-            try { videoRecorder?.stop() } catch (e: Exception) {
-                android.util.Log.w("CambrianCamera", "teardown: error stopping recording: ${e.message}")
+            val recorderToStop = videoRecorder
+            if (recorderToStop != null) {
+                backgroundHandler.post {
+                    try { recorderToStop.stop() } catch (e: Exception) {
+                        android.util.Log.w("CambrianCamera", "teardown: error stopping recording: ${e.message}")
+                    }
+                    mainHandler.post { flutterApi.onRecordingStateChanged(handle, "error") {} }
+                }
+            } else {
+                mainHandler.post { flutterApi.onRecordingStateChanged(handle, "error") {} }
             }
-            mainHandler.post { flutterApi.onRecordingStateChanged(handle, "error") {} }
         }
 
         // Close capture session first to stop frame delivery before closing the device.

@@ -1217,7 +1217,7 @@ Returns `(contentUri, displayName)` — the URI and filename for UI display.
 3. On error (disk full, muxer failure), entry is deleted via `contentResolver.delete(uri)`
 4. If app is killed mid-recording, entry remains `IS_PENDING=1`; cleaned up on next app launch via `cleanOrphanedPendingEntries()`
 
-**Permissions:** Requires `android.permission.WRITE_EXTERNAL_STORAGE` (or `MANAGE_MEDIA` on API 31+).
+**Permissions:** No additional write permission is required. This module targets `minSdk = 33`; writing a new `MediaStore` entry via `ContentResolver` with `IS_PENDING = 1` does not require `WRITE_EXTERNAL_STORAGE`. `MANAGE_MEDIA` is a privileged permission not needed for this write flow.
 
 ### Error Handling
 
