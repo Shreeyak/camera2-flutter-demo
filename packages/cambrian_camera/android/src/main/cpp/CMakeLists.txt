@@ -4,9 +4,11 @@ project(cambrian_camera)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# OpenCV: symlinked at packages/cambrian_camera/android/opencv
+# OpenCV: for Android, use the symlinked SDK; for host tests, rely on system install.
 # See CLAUDE.md for setup instructions.
-set(OpenCV_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../../opencv/sdk/native/jni")
+if(ANDROID)
+    set(OpenCV_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../../opencv/sdk/native/jni")
+endif()
 find_package(OpenCV REQUIRED core imgproc)
 
 add_library(cambrian_camera SHARED

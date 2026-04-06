@@ -428,34 +428,35 @@ Java_com_cambrian_camera_GpuPipeline_nativeGpuRebindRawSurface(
 }
 
 // ---------------------------------------------------------------------------
-// nativeGpuSetEncoderSurface
+// nativeGpuRebindPreviewSurface
 //
-// Attaches or detaches a MediaCodec input surface to the GPU renderer.
-// Must be called on the GL thread (post to glHandler) so EGL state is updated safely.
+// Replaces the processed preview EGL window surface with one created from
+// newPreviewSurface.  Must be called on the GL thread (post to glHandler)
+// after Flutter recreates the SurfaceProducer surface.
 //
-// @param gpuHandle       Handle returned by nativeGpuInit.
-// @param encoderSurface  MediaCodec input Surface; may be null to detach.
+// @param gpuHandle          Handle returned by nativeGpuInit.
+// @param newPreviewSurface  New Android Surface for preview; may be null to detach.
 // ---------------------------------------------------------------------------
 JNIEXPORT void JNICALL
-Java_com_cambrian_camera_GpuPipeline_nativeGpuSetEncoderSurface(
+Java_com_cambrian_camera_GpuPipeline_nativeGpuRebindPreviewSurface(
         JNIEnv* env, jclass /*clazz*/,
         jlong gpuHandle,
-        jobject encoderSurface) {
+        jobject newPreviewSurface) {
     if (!gpuHandle) {
-        LOGE("nativeGpuSetEncoderSurface: null renderer handle");
+        LOGE("nativeGpuRebindPreviewSurface: null renderer handle");
         return;
     }
     cam::GpuRenderer* renderer = rendererFromHandle(gpuHandle);
 
     ANativeWindow* window = nullptr;
-    if (encoderSurface) {
-        window = ANativeWindow_fromSurface(env, encoderSurface);
+    if (newPreviewSurface) {
+        window = ANativeWindow_fromSurface(env, newPreviewSurface);
         if (!window) {
-            LOGE("nativeGpuSetEncoderSurface: ANativeWindow_fromSurface returned null");
+            LOGE("nativeGpuRebindPreviewSurface: ANativeWindow_fromSurface returned null");
             return;
         }
     }
-    renderer->setEncoderSurface(window);
+    renderer->rebindPreviewSurface(window);
     if (window) ANativeWindow_release(window);
 }
 

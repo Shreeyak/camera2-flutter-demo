@@ -81,6 +81,19 @@ class CambrianCameraPlugin : FlutterPlugin, ActivityAware, CameraHostApi {
      * and registers the Pigeon [CameraHostApi] handler.
      */
     override fun onAttachedToEngine(binding: FlutterPlugin.FlutterPluginBinding) {
+        // Clean up stale sessions from a previous engine (e.g. hot restart
+        // where onDetachedFromEngine didn't complete before re-attach).
+        if (sessions.isNotEmpty()) {
+            android.util.Log.w("CambrianCamera",
+                "onAttachedToEngine: cleaning up ${sessions.size} stale session(s)")
+            sessions.values.forEach { session ->
+                try { session.controller.release() } catch (_: Exception) {}
+                try { session.producer.release() } catch (_: Exception) {}
+                try { session.rawSurfaceProducer?.release() } catch (_: Exception) {}
+            }
+            sessions.clear()
+        }
+
         applicationContext = binding.applicationContext
         textureRegistry = binding.textureRegistry
         flutterApi = CameraFlutterApi(binding.binaryMessenger)

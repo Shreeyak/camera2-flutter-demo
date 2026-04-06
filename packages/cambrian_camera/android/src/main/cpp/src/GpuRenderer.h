@@ -101,11 +101,10 @@ public:
     /// @param newWindow  New ANativeWindow, or null to detach without rebinding.
     void rebindRawSurface(ANativeWindow* newWindow);
 
-    /// Set or clear the encoder EGL surface.
-    /// When set, drawAndReadback() blits the tone-mapped FBO to this surface each frame.
-    /// Call this on the GL thread; pass null to stop feeding the encoder.
-    /// @param newWindow  ANativeWindow wrapping a MediaCodec input surface, or null to detach.
-    void setEncoderSurface(ANativeWindow* newWindow);
+    /// Rebind the processed preview EGL window surface to a new ANativeWindow.
+    /// Call this on the GL thread when Flutter recreates the SurfaceProducer surface.
+    /// @param newWindow  New ANativeWindow, or null to detach without rebinding.
+    void rebindPreviewSurface(ANativeWindow* newWindow);
 
     int trackerWidth()  const { return trackerWidth_; }
     int trackerHeight() const { return trackerHeight_; }
@@ -155,8 +154,7 @@ private:
     GLuint rawPbo_[2]     = {0, 0};
     bool   rawFirstFrame_ = true;
     PboMeta rawPboMeta_[2] = {};
-    EGLSurface rawEGLSurface_     = EGL_NO_SURFACE;
-    EGLSurface eglEncoderSurface_ = EGL_NO_SURFACE;  // MediaCodec input surface; optional
+    EGLSurface rawEGLSurface_ = EGL_NO_SURFACE;
 
     // Cached uniform locations for passthrough program
     GLint rawUTexture_   = -1;
@@ -165,8 +163,8 @@ private:
     // Pending uniforms — written by setAdjustments(), read under uniformMu_ at draw time
     std::mutex uniformMu_;
     float brightness_      = 0.f;
-    float contrast_        = 1.f;
-    float saturation_      = 1.f;
+    float contrast_        = 0.f;   // 0 = identity; shader applies uContrast + 1.0
+    float saturation_      = 0.f;   // 0 = identity; shader applies uSaturation + 1.0
     float blackBalance_[3] = {0.f, 0.f, 0.f};
     float gamma_           = 1.f;
 
