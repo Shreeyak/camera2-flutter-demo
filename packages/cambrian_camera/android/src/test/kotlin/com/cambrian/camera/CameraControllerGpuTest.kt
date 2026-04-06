@@ -3,13 +3,19 @@ package com.cambrian.camera
 import android.content.Context
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
-import io.flutter.view.TextureRegistry
+import android.os.Handler
 import android.view.Surface
+import io.flutter.view.TextureRegistry
+import java.lang.reflect.Field
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.mockito.kotlin.any
+import org.mockito.kotlin.anyOrNull
 import org.mockito.kotlin.argumentCaptor
 import org.mockito.kotlin.eq
 import org.mockito.kotlin.mock
@@ -17,12 +23,6 @@ import org.mockito.kotlin.never
 import org.mockito.kotlin.verify
 import org.mockito.kotlin.verifyNoMoreInteractions
 import org.mockito.kotlin.whenever
-import java.lang.reflect.Field
-import java.util.concurrent.CountDownLatch
-import java.util.concurrent.TimeUnit
-import android.os.Handler
-import android.view.Surface
-import org.junit.Assert.assertTrue
 
 /**
  * JVM unit tests for CameraController GPU wiring logic.
@@ -46,6 +46,7 @@ class CameraControllerGpuTest {
     private lateinit var isRecordingField: Field
     private lateinit var stateField: Field
     private lateinit var mockVideoRecorder: VideoRecorder
+    private lateinit var mockFlutterApi: CameraFlutterApi
 
     @Before
     fun setUp() {
@@ -56,7 +57,7 @@ class CameraControllerGpuTest {
         }
         mockSurfaceProducer = mock()
         mockRawSurfaceProducer = mock()
-        val mockFlutterApi: CameraFlutterApi = mock()
+        mockFlutterApi = mock()
 
         controller = CameraController(
             context = mockContext,
@@ -86,6 +87,20 @@ class CameraControllerGpuTest {
 
         stateField = CameraController::class.java.getDeclaredField("state")
         stateField.isAccessible = true
+
+        // Android Handler stubs are no-ops with isReturnDefaultValues=true — post() never
+        // runs the runnable. Inject synchronous mocks so callbacks fire on the calling thread.
+        val syncHandler: Handler = mock {
+            on { post(any()) }.thenAnswer { invocation ->
+                invocation.getArgument<Runnable>(0).run()
+                true
+            }
+        }
+        listOf("backgroundHandler", "mainHandler").forEach { name ->
+            CameraController::class.java.getDeclaredField(name)
+                .apply { isAccessible = true }
+                .set(controller, syncHandler)
+        }
     }
 
     /** Injects the mock GpuPipeline into the controller via reflection. */
@@ -341,13 +356,13 @@ class CameraControllerGpuTest {
     fun `startRecording sets isRecording to true`() {
         val mockSurface: Surface = mock()
         whenever(mockVideoRecorder.inputSurface).thenReturn(mockSurface)
-        whenever(mockVideoRecorder.start(any(), any())).thenReturn("content://fake/1")
+        whenever(mockVideoRecorder.start(anyOrNull(), anyOrNull())).thenReturn("content://fake/1")
         videoRecorderField.set(controller, mockVideoRecorder)
 
         // Set state = STREAMING via reflection
         val streamingState = CameraController::class.java
             .declaredClasses.first { it.simpleName == "State" }
-            .enumConstants.first { (it as Enum<*>).name == "STREAMING" }
+            .enumConstants!!.first { (it as Enum<*>).name == "STREAMING" }
         stateField.set(controller, streamingState)
 
         val latch = CountDownLatch(1)

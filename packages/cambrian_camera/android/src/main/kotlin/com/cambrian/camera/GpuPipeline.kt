@@ -144,6 +144,19 @@ open class GpuPipeline(
     }
 
     /**
+     * Attach or detach the MediaCodec encoder surface.
+     * Posts to the GL thread so EGL surface creation is serialised with drawAndReadback().
+     * Pass null to detach (called when recording stops or the pipeline is torn down).
+     */
+    fun setEncoderSurface(surface: Surface?) {
+        val handle = gpuHandle
+        if (handle == 0L) return
+        glHandler.post {
+            nativeGpuSetEncoderSurface(handle, surface)
+        }
+    }
+
+    /**
      * Rebind the raw preview EGL surface to a new [Surface] after Flutter recreates it.
      * Posts the native call to the GL thread so EGL state is updated safely.
      */
@@ -248,6 +261,9 @@ open class GpuPipeline(
 
         @JvmStatic
         external fun nativeGpuRelease(gpuHandle: Long)
+
+        @JvmStatic
+        external fun nativeGpuSetEncoderSurface(gpuHandle: Long, encoderSurface: Surface?)
 
         @JvmStatic
         external fun nativeGpuRebindRawSurface(gpuHandle: Long, newRawSurface: Surface?)

@@ -186,6 +186,9 @@ class CameraController(
     /** True when a recording is active; gates encoder surface inclusion in session. */
     @Volatile private var isRecording = false
 
+    /** Encoder target fps set by the last startRecording() call; used to align AE fps range. */
+    @Volatile private var recordingFps: Int = 30
+
     /**
      * Guards [nativePipelinePtr] reads/writes and JNI calls that touch the native pipeline.
      * Ensures [nativeDeliverYuv] and [nativeRelease] never run concurrently for the same pointer.
@@ -822,15 +825,16 @@ class CameraController(
                 if (videoRecorder == null) {
                     videoRecorder = VideoRecorder(context)
                 }
-                // fps hint = upper bound of the recording range (30); matches KEY_FRAME_RATE
-                // in the encoder so bitrate-per-frame allocation is correct.
-                videoRecorder!!.prepare(previewWidth, previewHeight, bitrate = bitrate ?: 50_000_000, fps = fps ?: 30)
+                val configuredFps = fps ?: 30
+                videoRecorder!!.prepare(previewWidth, previewHeight, bitrate = bitrate ?: 50_000_000, fps = configuredFps)
                 val surface = videoRecorder!!.inputSurface
                     ?: throw IllegalStateException("VideoRecorder.inputSurface is null after prepare()")
                 val uri = videoRecorder!!.start(outputDirectory, fileName)
                 // Route tone-mapped GPU frames directly to the encoder (no CPU copy).
                 gpuPipeline?.setEncoderSurface(surface)
                 // isRecording guards startRecording/stopRecording re-entry.
+                // Store fps so createRepeatingRequestBuilder aligns AE fps range with encoder.
+                recordingFps = configuredFps
                 isRecording = true
                 // Switch Camera2 to TEMPLATE_RECORD for video-optimised settings.
                 rebuildRepeatingRequest()
@@ -1109,9 +1113,9 @@ class CameraController(
      * video capture), otherwise [CameraDevice.TEMPLATE_PREVIEW] for continuous streaming.
      * (TEMPLATE_ZERO_SHUTTER_LAG is designed for still-capture pipelines, not preview.)
      *
-     * Sets [CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE] to the highest available minimum
-     * frame rate (preferring [30, 30]).  Without this, Camera2's AE algorithm is free to
-     * ramp exposure time above 1/30 s, which physically caps delivery to well below 30 fps.
+     * Sets [CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE] to match the encoder fps when
+     * recording, or the highest sustained preview rate otherwise.  Without this, Camera2's
+     * AE algorithm is free to ramp exposure time beyond 1/fps s, dropping frames.
      *
      * The returned builder already has [gpuPipeline]?.cameraSurface added as target
      * (so the GPU OES SurfaceTexture receives camera frames) and [CaptureRequest.CONTROL_MODE_AUTO]
@@ -1139,11 +1143,13 @@ class CameraController(
         val fpsRanges = chars.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)
         if (fpsRanges != null && fpsRanges.isNotEmpty()) {
             val best = if (isRecording) {
-                // Recording: use [15, 30] so AE can lower fps in dark scenes rather than
-                // blowing out exposure. The variable lower bound gives AE headroom to extend
-                // exposure up to ~66 ms while the upper bound keeps the container framerate
-                // at 30 fps. Falls back to the widest available range if [15, 30] isn't listed.
-                fpsRanges.firstOrNull { it.lower == 15 && it.upper == 30 }
+                // Recording: use [targetFps/2, targetFps] so AE can lower fps in dark scenes
+                // rather than blowing out exposure, while the upper bound matches the encoder
+                // fps so AE exposure choices stay frame-aligned with the container framerate.
+                val targetFps = recordingFps
+                val halfFps = targetFps / 2
+                fpsRanges.firstOrNull { it.lower == halfFps && it.upper == targetFps }
+                    ?: fpsRanges.firstOrNull { it.upper == targetFps }
                     ?: fpsRanges.minWithOrNull(compareBy({ it.lower }, { it.upper }))!!
             } else {
                 // Preview: lock to the highest sustained fps so the live feed doesn't stutter.

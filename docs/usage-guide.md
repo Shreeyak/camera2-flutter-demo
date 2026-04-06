@@ -424,7 +424,7 @@ final (uri, name) = await camera.startRecording(
 );
 ```
 
-When recording starts, Camera2 switches from `TEMPLATE_PREVIEW` to `TEMPLATE_RECORD` for video-optimised capture settings. The AE target fps range also changes from the fixed `[30, 30]` used during preview to `[15, 30]` during recording — the variable lower bound gives AE headroom to extend exposure in dark scenes (up to ~66 ms) rather than underexposing, while the upper bound keeps the container frame rate at 30 fps. Both the template and fps range revert automatically when `stopRecording()` is called. The file is written continuously via a MediaCodec drain thread; it remains hidden in MediaStore (`IS_PENDING=1`) until `stopRecording()` finalizes it.
+When recording starts, Camera2 switches from `TEMPLATE_PREVIEW` to `TEMPLATE_RECORD` for video-optimised capture settings. The AE target fps range upper bound is set to match the configured encoder fps (default 30), while the lower bound is half of that — this gives AE headroom to extend exposure in dark scenes rather than underexposing, while keeping the upper bound frame-aligned with the encoder. Both the template and fps range revert automatically when `stopRecording()` is called. The file is written continuously via a MediaCodec drain thread; it remains hidden in MediaStore (`IS_PENDING=1`) until `stopRecording()` finalizes it.
 
 #### `camera.stopRecording()`
 
@@ -462,6 +462,8 @@ camera.recordingStateStream.listen((state) {
       print('File saved');
     case RecordingState.error:
       print('Recording failed');
+    default:
+      break;
   }
 });
 ```

@@ -30,6 +30,7 @@ import 'package:flutter/material.dart'
         StatefulWidget,
         StatelessWidget,
         Text,
+        TextOverflow,
         TextStyle,
         ValueKey,
         Widget;
@@ -257,6 +258,8 @@ class _SavingCapsule extends StatelessWidget {
                 ),
                 Text(
                   displayName,
+                  overflow: TextOverflow.ellipsis,
+                  maxLines: 1,
                   style: const TextStyle(
                     color: Colors.white,
                     fontSize: 12,

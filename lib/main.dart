@@ -88,6 +88,7 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
 
   // ── Recording state
   bool _isRecording = false;
+  bool _recordingActionInProgress = false;
   String _recordingDisplayName = '';
   static const String _recordingOutputDir = 'Movies/CambrianCamera';
   StreamSubscription<RecordingState>? _recordingStateSub;
@@ -326,7 +327,8 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
 
   Future<void> _toggleRecording() async {
     final camera = _camera;
-    if (camera == null) return;
+    if (camera == null || _recordingActionInProgress) return;
+    setState(() => _recordingActionInProgress = true);
     try {
       if (_isRecording) {
         await camera.stopRecording();
@@ -341,6 +343,8 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
       if (mounted) {
         _showError('Recording error: $e');
       }
+    } finally {
+      if (mounted) setState(() => _recordingActionInProgress = false);
     }
   }
 

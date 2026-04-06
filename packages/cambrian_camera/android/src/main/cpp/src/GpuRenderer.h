@@ -96,6 +96,10 @@ public:
     void setAdjustments(float brightness, float contrast, float saturation,
                         float blackR, float blackG, float blackB, float gamma);
 
+    /// Attach or detach the MediaCodec encoder EGL surface.
+    /// Must be called on the GL thread. Pass null to detach.
+    void setEncoderSurface(ANativeWindow* newWindow);
+
     /// Rebind the raw preview EGL window surface to a new ANativeWindow.
     /// Call this on the GL thread when Flutter recreates the raw SurfaceProducer surface.
     /// @param newWindow  New ANativeWindow, or null to detach without rebinding.
@@ -121,6 +125,7 @@ private:
     EGLConfig  eglConfig_          = nullptr;          // stored for surface recreation
     EGLSurface eglWindowSurface_  = EGL_NO_SURFACE;   // preview window; may stay NO_SURFACE
     EGLSurface eglPbufferSurface_ = EGL_NO_SURFACE;   // 1×1 fallback; always created
+    EGLSurface eglEncoderSurface_ = EGL_NO_SURFACE;   // MediaCodec encoder window; set at record start
 
     // GL program + geometry
     GLuint program_ = 0;

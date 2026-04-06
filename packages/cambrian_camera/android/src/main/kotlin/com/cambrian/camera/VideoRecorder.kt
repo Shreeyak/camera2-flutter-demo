@@ -289,9 +289,7 @@ class VideoRecorder(private val context: Context) {
         drainError = null
         if (capturedDrainError != null) {
             drainThread?.quitSafely(); drainThread = null; drainHandler = null; eosLatch = null
-            outputUri?.let { uri ->
-                try { context.contentResolver.delete(uri, null, null) } catch (_: Exception) {}
-            }
+            try { context.contentResolver.delete(uri, null, null) } catch (_: Exception) {}
             muxer?.let { try { it.release() } catch (_: Exception) {} }; muxer = null
             outputFd?.close(); outputFd = null
             currentCodec.stop()
