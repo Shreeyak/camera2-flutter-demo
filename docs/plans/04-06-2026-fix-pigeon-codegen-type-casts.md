@@ -70,7 +70,7 @@ There is a related open issue (flutter/flutter#116999, P2) but no targeted fix.
 
 Create a single wrapper script that replaces raw `dart run pigeon` usage. The script:
 1. Runs Pigeon codegen
-2. Patches the two known-bad type casts via `sed`
+2. Patches the two known-bad type casts via `perl -i -pe`
 3. Verifies the patches took effect (fails if bad patterns still present)
 
 Plus update CLAUDE.md so that Claude (and any developer) knows to use the script.

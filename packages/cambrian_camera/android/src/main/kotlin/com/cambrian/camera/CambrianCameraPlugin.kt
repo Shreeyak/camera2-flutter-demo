@@ -311,12 +311,12 @@ class CambrianCameraPlugin : FlutterPlugin, ActivityAware, CameraHostApi {
      * @param handle   The camera handle returned by [open].
      * @param callback Invoked with [Result.success] containing the output URI, or [Result.failure].
      */
-    override fun startRecording(handle: Long, outputDirectory: String?, fileName: String?, bitrate: Int?, fps: Int?, callback: (Result<String>) -> Unit) {
+    override fun startRecording(handle: Long, outputDirectory: String?, fileName: String?, bitrate: Long?, fps: Long?, callback: (Result<String>) -> Unit) {
         val session = sessions[handle] ?: run {
             callback(Result.failure(FlutterError("invalid_handle", "No camera session for handle $handle", null)))
             return
         }
-        session.controller.startRecording(outputDirectory, fileName, bitrate, fps) { result ->
+        session.controller.startRecording(outputDirectory, fileName, bitrate?.toInt(), fps?.toInt()) { result ->
             // Best-effort state notification. Channel errors are discarded — the Pigeon
             // reply callback below is always invoked regardless, so no state is lost.
             result.onSuccess {
