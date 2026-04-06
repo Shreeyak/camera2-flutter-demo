@@ -12,9 +12,9 @@ tmp_files/*
 **/src/main/cpp/build-test/
 **/src/main/cpp/build/
 **/CMakeFiles/
-docs/redundant
 !docs/redundant/.gitkeep
-
+docs/redundant
+docs/user-to-do.md
 
 # Miscellaneous
 pubspec.lock
