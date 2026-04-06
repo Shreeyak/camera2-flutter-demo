@@ -79,6 +79,16 @@ After implementing any architectural change, review both files and update any se
   - **Kotlin/Java:** no wildcard imports (e.g. avoid `import x.y.*`)
 - Use `flutter pub get` after modifying `pubspec.yaml`
 - Always create a todo list to track progress and remain on track
+- **Diagrams in chat**: Use ASCII flow diagrams inside code blocks. Prefer the numbered-branch style with Unicode box-drawing characters (`│`, `├──`, `└──`, `►`) and circled digits (①②③) for steps. Example style:
+  ```
+  Input
+       │
+       ├──① Step one
+       │
+       ├──② Step two ──────────────────► Output A
+       │
+       └──③ Step three ─────────────────► Output B
+  ```
 
 ## OpenCV (Android)
 

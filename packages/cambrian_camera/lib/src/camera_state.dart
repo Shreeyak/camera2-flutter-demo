@@ -30,6 +30,26 @@ enum CameraState {
       };
 }
 
+/// The recording state emitted by [CambrianCamera.recordingStateStream].
+enum RecordingState {
+  /// Recording is active.
+  recording,
+
+  /// Recording is idle (not started, or cleanly stopped).
+  idle,
+
+  /// A recording error occurred.
+  error;
+
+  /// Creates a [RecordingState] from the wire string sent by the platform.
+  static RecordingState fromString(String value) => switch (value) {
+        'recording' => RecordingState.recording,
+        'idle' => RecordingState.idle,
+        'error' => RecordingState.error,
+        _ => RecordingState.error, // safe default
+      };
+}
+
 /// Identifies the type of camera error.
 ///
 /// Values are the Pigeon-generated [CamErrorCode] enum serialized as integer

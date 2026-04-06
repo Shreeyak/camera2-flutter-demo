@@ -79,7 +79,12 @@ camera.updateSettings(CameraSettings(
 // 5. Capture a still image
 final path = await camera.takePicture();
 
-// 6. Clean up
+// 6. Record video
+final (uri, name) = await camera.startRecording();
+// ... recording in progress ...
+await camera.stopRecording(); // file finalized and visible in gallery
+
+// 7. Clean up
 await camera.close();
 ```
 
@@ -389,6 +394,76 @@ Captures a JPEG still image using a pre-allocated ImageReader. Returns the absol
 ```dart
 final path = await camera.takePicture();
 // path is something like /data/.../cache/capture_1711929600000.jpg
+```
+
+---
+
+### Video Recording
+
+#### `camera.startRecording()`
+
+```dart
+Future<(String, String)> startRecording({String? outputDirectory, String? fileName})
+```
+
+Starts encoding to an MP4 file. Returns `(contentUri, displayName)` where `contentUri` is the MediaStore content URI and `displayName` is the file name (e.g. `cambrian_1712345678.mp4`).
+
+| Parameter | Default | Description |
+|---|---|---|
+| `outputDirectory` | `Movies/CambrianCamera/` | MediaStore `RELATIVE_PATH` (e.g. `Movies/MyApp/`) |
+| `fileName` | `cambrian_<timestamp>` | File name without extension; `.mp4` appended automatically |
+
+```dart
+// Minimal
+final (uri, name) = await camera.startRecording();
+
+// Custom location and name
+final (uri, name) = await camera.startRecording(
+  outputDirectory: 'Movies/MyApp/',
+  fileName: 'session_01',  // saved as session_01.mp4
+);
+```
+
+When recording starts, Camera2 switches from `TEMPLATE_PREVIEW` to `TEMPLATE_RECORD` for video-optimised capture settings. The AE target fps range also changes from the fixed `[30, 30]` used during preview to `[15, 30]` during recording — the variable lower bound gives AE headroom to extend exposure in dark scenes (up to ~66 ms) rather than underexposing, while the upper bound keeps the container frame rate at 30 fps. Both the template and fps range revert automatically when `stopRecording()` is called. The file is written continuously via a MediaCodec drain thread; it remains hidden in MediaStore (`IS_PENDING=1`) until `stopRecording()` finalizes it.
+
+#### `camera.stopRecording()`
+
+```dart
+Future<String> stopRecording()
+```
+
+Signals end-of-stream to the encoder, waits for the drain thread to flush, writes the `moov` atom, and marks the MediaStore entry as `IS_PENDING=0` — making the file visible in the gallery. Returns the finalized content URI. Camera2 reverts to `TEMPLATE_PREVIEW` automatically.
+
+```dart
+final uri = await camera.stopRecording();
+// file is fully written and visible in gallery
+```
+
+#### `camera.recordingStateStream`
+
+```dart
+Stream<RecordingState> get recordingStateStream
+```
+
+Broadcasts recording lifecycle changes.
+
+| State | When |
+|---|---|
+| `RecordingState.recording` | Encoder is active; file is being written |
+| `RecordingState.idle` | Recording stopped; file is finalized |
+| `RecordingState.error` | Start or stop failed |
+
+```dart
+camera.recordingStateStream.listen((state) {
+  switch (state) {
+    case RecordingState.recording:
+      print('Recording…');
+    case RecordingState.idle:
+      print('File saved');
+    case RecordingState.error:
+      print('Recording failed');
+  }
+});
 ```
 
 ---

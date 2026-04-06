@@ -1007,3 +1007,236 @@ This phase validates the entire frame pipeline end-to-end before adding processi
 - Preview rebinding: simulate activity recreation, verify preview resumes
 - Memory stability: run at 30fps for 5 minutes, verify no memory growth
 - ProcessingParams responsiveness: change params, measure latency to preview update
+
+---
+
+## Video Recording
+
+### Overview
+
+Video recording encodes the tone-mapped GPU output directly to H.264/HEVC MP4 files. The encoder receives frames via a MediaCodec input surface attached to the GPU pipeline's render thread. Recording is exposed as optional parameters to `startRecording()` and is fully lifecycle-aware.
+
+**Key features:**
+- Surface-mode `MediaCodec` encoder (camera HAL writes frames directly via GPU, no CPU YUV copy)
+- HEVC preferred, automatic AVC fallback if unavailable
+- Configurable bitrate (default 50 Mbps) and fps (default 30 fps)
+- MediaStore integration: files saved with `IS_PENDING=1` during recording, cleared on success
+- Auto-stop when app backgrounded (`AppLifecycleState.paused`)
+- Error handling for disk full, muxer failure, and force-stop during recovery
+- Startup cleanup of orphaned `IS_PENDING=1` entries from killed processes
+
+### Architecture
+
+```
+Dart startRecording(bitrate?, fps?)
+     │
+     ├─► CambrianCameraPlugin.startRecording()
+     │
+     ├─► CameraController.startRecording()
+     │   │
+     │   ├─► VideoRecorder.prepare(width, height, bitrate, fps)
+     │   │   ├─► MediaCodec.configure() [HEVC or AVC]
+     │   │   ├─► MediaMuxer(outputUri)
+     │   │   └─► spawn drainEncoderLoop thread
+     │   │
+     │   ├─► gpuPipeline.setEncoderSurface(surface)
+     │   │   └─► GL thread: nativeGpuSetEncoderSurface()
+     │   │       └─► EGLDisplay.eglCreateWindowSurface(encoderSurface)
+     │   │
+     │   ├─► isRecording = true
+     │   │
+     │   └─► emit RecordingState.recording
+     │
+Camera2 frames stream (30 fps)
+     │
+     ▼
+GpuPipeline glHandler (GL thread)
+     │
+     ├─► GpuRenderer::drawAndReadback()
+     │   │
+     │   ├─► (step ①) Render OES → fbo_ (tone-mapping shader)
+     │   │
+     │   ├─► (step ③) eglMakeCurrent(eglWindowSurface_)
+     │   │   └─► glBlit fbo_ → default FB
+     │   │       └─► eglSwapBuffers() ──► Flutter Texture (preview)
+     │   │       └─► eglMakeCurrent(pbuffer)
+     │   │
+     │   ├─► (step ④) eglMakeCurrent(eglEncoderSurface_)  [only when recording]
+     │   │   └─► glBlit fbo_ → default FB
+     │   │       └─► eglSwapBuffers() ──────────► MediaCodec input queue
+     │   │       └─► eglMakeCurrent(pbuffer)
+     │   │
+     │   └─► (steps ⑤-⑥) PBO readback
+     │       └─► C++ sinks
+     │
+MediaCodec drain thread (async)
+     │
+     ├─► dequeueOutputBuffer (100ms timeout)
+     │
+     ├─► writeSampleData(trackIndex, buffer) ──► MediaMuxer
+     │   │   [if disk full: exception → drainError]
+     │   │
+     │   └─► releaseOutputBuffer()
+     │
+     └─► [on EOS] break drain loop, countdown latch
+         
+Dart stopRecording()
+     │
+     ├─► CambrianCameraPlugin.stopRecording()
+     │
+     └─► CameraController.stopRecording()
+         │
+         ├─► VideoRecorder.stop()
+         │   │
+         │   ├─► codec.signalEndOfInputStream() ──► [to drain thread]
+         │   │
+         │   ├─► wait eosLatch (5 sec timeout)
+         │   │
+         │   ├─► check drainError
+         │   │   ├─ if set: delete MediaStore entry, rethrow IOException
+         │   │   └─ if null: continue
+         │   │
+         │   ├─► muxer.stop() [writes moov atom]
+         │   │
+         │   ├─► SET IS_PENDING=0 (file now visible in gallery)
+         │   │
+         │   └─► return contentUri
+         │
+         ├─► emit RecordingState.idle (success) or RecordingState.error (failure)
+         │
+         └─► isRecording = false
+         
+Force-stop (during teardown on error or background)
+     │
+     ├─► CameraController.teardown()
+     │   │
+     │   ├─► if (isRecording)
+     │   │   ├─► videoRecorder.stop() [force-stop, don't wait for EOS]
+     │   │   ├─► emit RecordingState.error (via mainHandler.post)
+     │   │   └─► isRecording = false
+     │   │
+     │   └─► close capture session, release camera device
+     │
+     └─► [on app background] _CameraScreenState.didChangeAppLifecycleState()
+         └─► if (paused && _isRecording)
+             └─► camera.stopRecording()  [auto-stop, normal flow]
+```
+
+**When `setEncoderSurface(surface)` is called:**
+1. GL thread makes the encoder EGL surface current
+2. Tone-mapped FBO is blitted to the encoder surface each frame via `eglSwapBuffers`
+3. MediaCodec consumes these buffers asynchronously from its own drain thread
+4. Drain thread writes to MediaMuxer, which writes MP4 atoms to MediaStore
+
+### Lifecycle
+
+**Start (`startRecording`)**
+1. Dart calls `startRecording(outputDirectory?, fileName?, bitrate?, fps?)`
+2. CameraController validates state (`STREAMING` + not already recording)
+3. Creates `VideoRecorder`, calls `prepare(width, height, bitrate, fps)` to configure MediaCodec and MediaMuxer
+4. Gets encoder input `Surface`, calls `gpuPipeline.setEncoderSurface(surface)` to attach to GPU render thread
+5. Sets `isRecording = true`
+6. Emits `RecordingState.recording` to Dart
+
+**Recording**
+- Drain thread polls MediaCodec output buffer, writes to muxer
+- If disk full or muxer error during drain, exception is stored in `drainError`
+- No error surface emission yet — only on `stop()`
+
+**Stop (`stopRecording`)**
+1. Dart calls `stopRecording()`
+2. CameraController validates state (recording must be active)
+3. Signals EOS via `codec.signalEndOfInputStream()`
+4. Waits up to 5 seconds for drain thread to process EOS
+5. Checks `drainError`: if set, cleans up pending MediaStore entry and rethrows as `IOException`
+6. Calls `muxer.stop()` to finalize (writes moov atom)
+7. Sets `IS_PENDING=0` to make file visible in gallery
+8. Emits `RecordingState.idle` or `RecordingState.error` to Dart
+
+**Force-stop (during teardown)**
+- Triggered by auto-recovery (camera disconnect, session failure) or engine detach
+- `teardown()` force-stops recording without waiting for EOS drain
+- **Emits `RecordingState.error` to Dart** immediately
+- MediaStore entry is deleted if muxer failed; otherwise finalized
+
+### State Machine
+
+```
+┌─────────┐
+│  IDLE   │
+└────┬────┘
+     │ startRecording()
+     ▼
+┌──────────────┐
+│  PREPARING   │ (configure codec, muxer, MediaStore entry)
+└────┬─────────┘
+     │
+     ▼
+┌──────────────┐
+│  RECORDING   │ (encoder consumes frames, drain thread polls output)
+└────┬─────────┘
+     │ stopRecording()
+     ▼
+┌──────────────┐
+│  STOPPING    │ (wait for EOS, finalize muxer)
+└────┬─────────┘
+     │
+     ▼
+┌─────────┐
+│  IDLE   │
+└─────────┘
+```
+
+Error transitions: any step may jump to `ERROR` state and emit `RecordingState.error` to Dart.
+
+### Parameters
+
+**Dart API** (`cambrian_camera_controller.dart`)
+```dart
+Future<(String, String)> startRecording({
+  String? outputDirectory,  // MediaStore RELATIVE_PATH; default "Movies/CambrianCamera/"
+  String? fileName,         // File name without extension; default timestamp
+  int? bitrate,             // bits per second; default 50_000_000 (50 Mbps)
+  int? fps,                 // frame rate; default 30
+})
+```
+
+Returns `(contentUri, displayName)` — the URI and filename for UI display.
+
+**Threading**
+- Dart call → main thread → backgroundHandler.post() (Camera2 thread)
+- CameraController → backgroundHandler → GPU GL thread (`glHandler.post`)
+- Drain thread (separate `HandlerThread`) polls codec output independently
+- Error emission posts back to mainHandler for Dart callback
+
+### MediaStore Integration
+
+**Pending entry lifecycle:**
+1. `start()` creates entry with `IS_PENDING=1` (invisible to gallery)
+2. `stop()` sets `IS_PENDING=0` on success (makes file visible)
+3. On error (disk full, muxer failure), entry is deleted via `contentResolver.delete(uri)`
+4. If app is killed mid-recording, entry remains `IS_PENDING=1`; cleaned up on next app launch via `cleanOrphanedPendingEntries()`
+
+**Permissions:** Requires `android.permission.WRITE_EXTERNAL_STORAGE` (or `MANAGE_MEDIA` on API 31+).
+
+### Error Handling
+
+| Scenario | Action | Dart Result |
+|----------|--------|-------------|
+| Start fails (state invalid, codec init) | Emit error immediately | `RecordingState.error` |
+| Disk full during drain | Store exception, rethrow on `stop()` | `RecordingState.error` on stop |
+| Muxer failure on `stop()` | Delete pending entry, rethrow | `RecordingState.error` |
+| EOS drain timeout (5 sec) | Force stop, continue cleanup | `RecordingState.idle` (best-effort) |
+| Force-stop during teardown | Emit error, delete or finalize entry | `RecordingState.error` |
+
+### Testing
+
+Unit tests in `CameraControllerGpuTest.kt`:
+- `startRecording sets isRecording to true` — inject mock VideoRecorder, verify state transition
+- `stopRecording when not recording returns failure` — guard against double-stop
+- `teardown while recording emits error state` — force-stop notifies Dart and stops encoder
+
+Integration tests (on-device):
+- Start recording → press home → verify auto-stop
+- Fill disk → verify error state and snackbar notification
+- Kill app mid-recording → relaunch → verify no orphaned MediaStore entries

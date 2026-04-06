@@ -180,6 +180,12 @@ class CameraController(
     /** Opaque pointer to the native pipeline, set after [nativeInit]. */
     @Volatile private var nativePipelinePtr: Long = 0L
 
+    /** Encoder-side recording state. Null until first startRecording() call. */
+    private var videoRecorder: VideoRecorder? = null
+
+    /** True when a recording is active; gates encoder surface inclusion in session. */
+    @Volatile private var isRecording = false
+
     /**
      * Guards [nativePipelinePtr] reads/writes and JNI calls that touch the native pipeline.
      * Ensures [nativeDeliverYuv] and [nativeRelease] never run concurrently for the same pointer.
@@ -774,6 +780,111 @@ class CameraController(
     }
 
     /**
+     * Starts a video recording session.
+     *
+     * Prepares the [VideoRecorder], starts encoding into a MediaStore file, and adds
+     * the encoder's input surface to the Camera2 session so the camera HAL writes frames
+     * directly to the encoder via the hardware path. The callback is invoked on the main
+     * thread with the content URI of the output file on success, or a [FlutterError] on
+     * failure.
+     *
+     * @param callback Invoked with the content URI string on success, or a failure.
+     */
+    /**
+     * Rebuilds and resubmits the repeating capture request using the current [appliedSettings]
+     * and [isRecording] state. Call after toggling [isRecording] so Camera2 switches between
+     * [CameraDevice.TEMPLATE_PREVIEW] and [CameraDevice.TEMPLATE_RECORD].
+     */
+    private fun rebuildRepeatingRequest() {
+        val session = captureSession ?: return
+        val device = cameraDevice ?: return
+        if (repeatingTargetSurface == null && gpuPipeline?.cameraSurface == null) return
+        try {
+            val request = buildCaptureRequest(device, appliedSettings)
+            repeatingRequest = request
+            session.setRepeatingRequest(request, repeatingCaptureCallback, backgroundHandler)
+        } catch (e: CameraAccessException) {
+            android.util.Log.w("CameraController", "rebuildRepeatingRequest failed: ${e.message}")
+        } catch (e: IllegalStateException) {
+            android.util.Log.w("CameraController", "rebuildRepeatingRequest: session already closed")
+        }
+    }
+
+    fun startRecording(outputDirectory: String? = null, fileName: String? = null, bitrate: Int? = null, fps: Int? = null, callback: (Result<String>) -> Unit) {
+        backgroundHandler.post {
+            if (state != State.STREAMING || isRecording) {
+                mainHandler.post {
+                    callback(Result.failure(FlutterError("invalid_state", "Cannot start recording: camera not streaming or already recording", null)))
+                }
+                return@post
+            }
+            try {
+                if (videoRecorder == null) {
+                    videoRecorder = VideoRecorder(context)
+                }
+                // fps hint = upper bound of the recording range (30); matches KEY_FRAME_RATE
+                // in the encoder so bitrate-per-frame allocation is correct.
+                videoRecorder!!.prepare(previewWidth, previewHeight, bitrate = bitrate ?: 50_000_000, fps = fps ?: 30)
+                val surface = videoRecorder!!.inputSurface
+                    ?: throw IllegalStateException("VideoRecorder.inputSurface is null after prepare()")
+                val uri = videoRecorder!!.start(outputDirectory, fileName)
+                // Route tone-mapped GPU frames directly to the encoder (no CPU copy).
+                gpuPipeline?.setEncoderSurface(surface)
+                // isRecording guards startRecording/stopRecording re-entry.
+                isRecording = true
+                // Switch Camera2 to TEMPLATE_RECORD for video-optimised settings.
+                rebuildRepeatingRequest()
+                mainHandler.post { callback(Result.success(uri)) }
+            } catch (e: Exception) {
+                mainHandler.post {
+                    callback(Result.failure(FlutterError("recording_start_failed", e.message, null)))
+                }
+            }
+        }
+    }
+
+    /**
+     * Stops the active video recording and finalizes the output file.
+     *
+     * Signals end-of-stream to the encoder, waits for the drain thread to finish, then
+     * finalizes the MediaStore entry and removes the encoder surface from the Camera2
+     * session. The callback is invoked on the main thread with the content URI of the
+     * finalized file.
+     *
+     * @param callback Invoked with the content URI string on success, or a failure.
+     */
+    fun stopRecording(callback: (Result<String>) -> Unit) {
+        backgroundHandler.post {
+            if (!isRecording) {
+                mainHandler.post {
+                    callback(Result.failure(FlutterError("invalid_state", "Cannot stop recording: no recording in progress", null)))
+                }
+                return@post
+            }
+            val recorder = videoRecorder ?: run {
+                mainHandler.post {
+                    callback(Result.failure(FlutterError("invalid_state", "VideoRecorder unexpectedly null", null)))
+                }
+                return@post
+            }
+            isRecording = false
+            // Revert Camera2 to TEMPLATE_PREVIEW now that recording has stopped.
+            rebuildRepeatingRequest()
+            // Detach encoder surface from GPU pipeline before stopping the codec.
+            gpuPipeline?.setEncoderSurface(null)
+            val uri = try {
+                recorder.stop()
+            } catch (e: Exception) {
+                mainHandler.post {
+                    callback(Result.failure(FlutterError("recording_failed", e.message, null)))
+                }
+                return@post
+            }
+            mainHandler.post { callback(Result.success(uri)) }
+        }
+    }
+
+    /**
      * Tears down all resources without emitting state events.
      *
      * Called by the plugin on engine detach. Use [close] for orderly user-initiated shutdown.
@@ -992,9 +1103,10 @@ class CameraController(
     // -------------------------------------------------------------------------
 
     /**
-     * Creates a [CaptureRequest.Builder] for repeating preview requests.
+     * Creates a [CaptureRequest.Builder] for repeating preview or recording requests.
      *
-     * Uses [CameraDevice.TEMPLATE_PREVIEW] — the correct template for continuous streaming.
+     * Uses [CameraDevice.TEMPLATE_RECORD] when [isRecording] is true (correct template for
+     * video capture), otherwise [CameraDevice.TEMPLATE_PREVIEW] for continuous streaming.
      * (TEMPLATE_ZERO_SHUTTER_LAG is designed for still-capture pipelines, not preview.)
      *
      * Sets [CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE] to the highest available minimum
@@ -1003,32 +1115,44 @@ class CameraController(
      *
      * The returned builder already has [gpuPipeline]?.cameraSurface added as target
      * (so the GPU OES SurfaceTexture receives camera frames) and [CaptureRequest.CONTROL_MODE_AUTO]
-     * applied. The JPEG [jpegImageReader] is intentionally excluded — it is targeted only by the
-     * one-shot request in [takePicture].
+     * applied. When recording, the encoder [VideoRecorder.persistentSurface] is also added
+     * as a target. The JPEG [jpegImageReader] is intentionally excluded — it is targeted only
+     * by the one-shot request in [takePicture].
      */
     private fun createRepeatingRequestBuilder(
         device: CameraDevice,
     ): CaptureRequest.Builder {
-        val builder = device.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW)
+        val template = if (isRecording) CameraDevice.TEMPLATE_RECORD else CameraDevice.TEMPLATE_PREVIEW
+        val builder = device.createCaptureRequest(template)
 
         // Camera2 targets the GpuPipeline's SurfaceTexture; the GL thread renders
         // each OES frame and delivers RGBA to pipeline sinks.
         gpuPipeline?.cameraSurface?.let { builder.addTarget(it) }
         builder.set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
 
-        // Lock in the highest available min-fps range so AE can't use long exposures
-        // that would cap delivery below 30 fps.  Without this, devices in low light
-        // routinely drop to 12–15 fps even though the sensor supports 30 fps at this size.
+        // Anti-banding: constrain AE exposure choices to safe multiples of the mains
+        // flicker period to prevent a moving horizontal band artifact under artificial
+        // lighting (rolling shutter × light flicker mismatch).
+        builder.set(CaptureRequest.CONTROL_AE_ANTIBANDING_MODE, CaptureRequest.CONTROL_AE_ANTIBANDING_MODE_AUTO)
+
         val chars = cameraManager.getCameraCharacteristics(device.id)
         val fpsRanges = chars.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)
         if (fpsRanges != null && fpsRanges.isNotEmpty()) {
-            // Prefer the range whose lower bound is highest (forces max sustained fps).
-            // Among ties, prefer a fixed range (upper == lower) to avoid jitter.
-            val best = fpsRanges.maxWithOrNull(
-                compareBy({ it.lower }, { if (it.lower == it.upper) 1 else 0 })
-            )!!
+            val best = if (isRecording) {
+                // Recording: use [15, 30] so AE can lower fps in dark scenes rather than
+                // blowing out exposure. The variable lower bound gives AE headroom to extend
+                // exposure up to ~66 ms while the upper bound keeps the container framerate
+                // at 30 fps. Falls back to the widest available range if [15, 30] isn't listed.
+                fpsRanges.firstOrNull { it.lower == 15 && it.upper == 30 }
+                    ?: fpsRanges.minWithOrNull(compareBy({ it.lower }, { it.upper }))!!
+            } else {
+                // Preview: lock to the highest sustained fps so the live feed doesn't stutter.
+                fpsRanges.maxWithOrNull(
+                    compareBy({ it.lower }, { if (it.lower == it.upper) 1 else 0 })
+                )!!
+            }
             builder.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, best)
-            android.util.Log.d("CambrianCamera", "AE fps range: [${best.lower}, ${best.upper}]")
+            android.util.Log.d("CambrianCamera", "AE fps range: [${best.lower}, ${best.upper}] (recording=$isRecording)")
         }
 
         return builder
@@ -1199,6 +1323,16 @@ class CameraController(
      * Safe to call from any state. Does NOT emit state events (callers must do that).
      */
     private fun teardown() {
+        // Stop any active recording before tearing down the session.
+        if (isRecording) {
+            isRecording = false
+            gpuPipeline?.setEncoderSurface(null)
+            try { videoRecorder?.stop() } catch (e: Exception) {
+                android.util.Log.w("CambrianCamera", "teardown: error stopping recording: ${e.message}")
+            }
+            mainHandler.post { flutterApi.onRecordingStateChanged(handle, "error") {} }
+        }
+
         // Close capture session first to stop frame delivery before closing the device.
         try {
             captureSession?.close()
@@ -1245,6 +1379,9 @@ class CameraController(
                 nativeRelease(ptr)
             }
         }
+
+        videoRecorder?.release()
+        videoRecorder = null
     }
 
     // -------------------------------------------------------------------------

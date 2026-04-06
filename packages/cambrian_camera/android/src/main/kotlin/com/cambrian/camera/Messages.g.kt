@@ -475,6 +475,8 @@ interface CameraHostApi {
   fun setProcessingParams(handle: Long, params: CamProcessingParams)
   fun takePicture(handle: Long, callback: (Result<String>) -> Unit)
   fun getNativePipelineHandle(handle: Long, callback: (Result<Long?>) -> Unit)
+  fun startRecording(handle: Long, outputDirectory: String?, fileName: String?, bitrate: Int?, fps: Int?, callback: (Result<String>) -> Unit)
+  fun stopRecording(handle: Long, callback: (Result<String>) -> Unit)
   fun close(handle: Long, callback: (Result<Unit>) -> Unit)
   /**
    * Returns the current display rotation in degrees CW from portrait: 0, 90, 180, or 270.
@@ -614,6 +616,50 @@ interface CameraHostApi {
         }
       }
       run {
+        val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.cambrian_camera.CameraHostApi.startRecording$separatedMessageChannelSuffix", codec)
+        if (api != null) {
+          channel.setMessageHandler { message, reply ->
+            val args = message as List<Any?>
+            val handleArg = args[0] as Long
+            val outputDirectoryArg = args[1] as String?
+            val fileNameArg = args[2] as String?
+            val bitrateArg = args[3] as Long?
+            val fpsArg = args[4] as Long?
+            api.startRecording(handleArg, outputDirectoryArg, fileNameArg, bitrateArg?.toInt(), fpsArg?.toInt()) { result: Result<String> ->
+              val error = result.exceptionOrNull()
+              if (error != null) {
+                reply.reply(wrapError(error))
+              } else {
+                val data = result.getOrNull()
+                reply.reply(wrapResult(data))
+              }
+            }
+          }
+        } else {
+          channel.setMessageHandler(null)
+        }
+      }
+      run {
+        val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.cambrian_camera.CameraHostApi.stopRecording$separatedMessageChannelSuffix", codec)
+        if (api != null) {
+          channel.setMessageHandler { message, reply ->
+            val args = message as List<Any?>
+            val handleArg = args[0] as Long
+            api.stopRecording(handleArg) { result: Result<String> ->
+              val error = result.exceptionOrNull()
+              if (error != null) {
+                reply.reply(wrapError(error))
+              } else {
+                val data = result.getOrNull()
+                reply.reply(wrapResult(data))
+              }
+            }
+          }
+        } else {
+          channel.setMessageHandler(null)
+        }
+      }
+      run {
         val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.cambrian_camera.CameraHostApi.close$separatedMessageChannelSuffix", codec)
         if (api != null) {
           channel.setMessageHandler { message, reply ->
@@ -698,6 +744,27 @@ class CameraFlutterApi(private val binaryMessenger: BinaryMessenger, private val
     val channelName = "dev.flutter.pigeon.cambrian_camera.CameraFlutterApi.onFrameResult$separatedMessageChannelSuffix"
     val channel = BasicMessageChannel<Any?>(binaryMessenger, channelName, codec)
     channel.send(listOf(handleArg, resultArg)) {
+      if (it is List<*>) {
+        if (it.size > 1) {
+          callback(Result.failure(FlutterError(it[0] as String, it[1] as String, it[2] as String?)))
+        } else {
+          callback(Result.success(Unit))
+        }
+      } else {
+        callback(Result.failure(createConnectionError(channelName)))
+      } 
+    }
+  }
+  /**
+   * Called when the recording state changes.
+   * [state] is one of: "recording", "idle", "error".
+   */
+  fun onRecordingStateChanged(handleArg: Long, stateArg: String, callback: (Result<Unit>) -> Unit)
+{
+    val separatedMessageChannelSuffix = if (messageChannelSuffix.isNotEmpty()) ".$messageChannelSuffix" else ""
+    val channelName = "dev.flutter.pigeon.cambrian_camera.CameraFlutterApi.onRecordingStateChanged$separatedMessageChannelSuffix"
+    val channel = BasicMessageChannel<Any?>(binaryMessenger, channelName, codec)
+    channel.send(listOf(handleArg, stateArg)) {
       if (it is List<*>) {
         if (it.size > 1) {
           callback(Result.failure(FlutterError(it[0] as String, it[1] as String, it[2] as String?)))

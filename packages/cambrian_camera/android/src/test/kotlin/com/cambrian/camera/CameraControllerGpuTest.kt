@@ -11,12 +11,18 @@ import org.junit.Before
 import org.junit.Test
 import org.mockito.kotlin.any
 import org.mockito.kotlin.argumentCaptor
+import org.mockito.kotlin.eq
 import org.mockito.kotlin.mock
 import org.mockito.kotlin.never
 import org.mockito.kotlin.verify
 import org.mockito.kotlin.verifyNoMoreInteractions
 import org.mockito.kotlin.whenever
 import java.lang.reflect.Field
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import android.os.Handler
+import android.view.Surface
+import org.junit.Assert.assertTrue
 
 /**
  * JVM unit tests for CameraController GPU wiring logic.
@@ -36,6 +42,10 @@ class CameraControllerGpuTest {
     private lateinit var mockCameraManager: CameraManager
     private lateinit var mockSurfaceProducer: TextureRegistry.SurfaceProducer
     private lateinit var mockRawSurfaceProducer: TextureRegistry.SurfaceProducer
+    private lateinit var videoRecorderField: Field
+    private lateinit var isRecordingField: Field
+    private lateinit var stateField: Field
+    private lateinit var mockVideoRecorder: VideoRecorder
 
     @Before
     fun setUp() {
@@ -59,6 +69,7 @@ class CameraControllerGpuTest {
         )
 
         mockGpuPipeline = mock()
+        mockVideoRecorder = mock()
 
         // Cache the private fields for injection and inspection.
         gpuPipelineField = CameraController::class.java.getDeclaredField("gpuPipeline")
@@ -66,6 +77,15 @@ class CameraControllerGpuTest {
 
         lastParamsField = CameraController::class.java.getDeclaredField("lastProcessingParams")
         lastParamsField.isAccessible = true
+
+        videoRecorderField = CameraController::class.java.getDeclaredField("videoRecorder")
+        videoRecorderField.isAccessible = true
+
+        isRecordingField = CameraController::class.java.getDeclaredField("isRecording")
+        isRecordingField.isAccessible = true
+
+        stateField = CameraController::class.java.getDeclaredField("state")
+        stateField.isAccessible = true
     }
 
     /** Injects the mock GpuPipeline into the controller via reflection. */
@@ -315,5 +335,62 @@ class CameraControllerGpuTest {
         assertEquals(0L, caps.rawStreamTextureId)
         assertEquals(0L, caps.rawStreamWidth)
         assertEquals(0L, caps.rawStreamHeight)
+    }
+
+    @Test
+    fun `startRecording sets isRecording to true`() {
+        val mockSurface: Surface = mock()
+        whenever(mockVideoRecorder.inputSurface).thenReturn(mockSurface)
+        whenever(mockVideoRecorder.start(any(), any())).thenReturn("content://fake/1")
+        videoRecorderField.set(controller, mockVideoRecorder)
+
+        // Set state = STREAMING via reflection
+        val streamingState = CameraController::class.java
+            .declaredClasses.first { it.simpleName == "State" }
+            .enumConstants.first { (it as Enum<*>).name == "STREAMING" }
+        stateField.set(controller, streamingState)
+
+        val latch = CountDownLatch(1)
+        controller.startRecording { latch.countDown() }
+        assertTrue(latch.await(2, TimeUnit.SECONDS))
+
+        assertTrue(isRecordingField.getBoolean(controller))
+        verify(mockVideoRecorder).prepare(any(), any(), any(), any())
+    }
+
+    @Test
+    fun `stopRecording when not recording returns failure`() {
+        val latch = CountDownLatch(1)
+        var captured: Result<String>? = null
+        controller.stopRecording { result ->
+            captured = result
+            latch.countDown()
+        }
+        assertTrue(latch.await(2, TimeUnit.SECONDS))
+
+        val result = captured!!
+        assertTrue(result.isFailure)
+        val err = result.exceptionOrNull() as FlutterError
+        assertEquals("invalid_state", err.code)
+    }
+
+    @Test
+    fun `teardown while recording emits error recording state`() {
+        whenever(mockVideoRecorder.stop()).thenReturn("content://fake/1")
+        videoRecorderField.set(controller, mockVideoRecorder)
+        isRecordingField.setBoolean(controller, true)
+
+        controller.release()
+
+        // Drain mainHandler to ensure posted callbacks execute
+        val latch = CountDownLatch(1)
+        val mainHandlerField = CameraController::class.java
+            .getDeclaredField("mainHandler").apply { isAccessible = true }
+        val mainHandler = mainHandlerField.get(controller) as Handler
+        mainHandler.post { latch.countDown() }
+        assertTrue(latch.await(2, TimeUnit.SECONDS))
+
+        verify(mockVideoRecorder).stop()
+        verify(mockFlutterApi).onRecordingStateChanged(eq(1L), eq("error"), any())
     }
 }
