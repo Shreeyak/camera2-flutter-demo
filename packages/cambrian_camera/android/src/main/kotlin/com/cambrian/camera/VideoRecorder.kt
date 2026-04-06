@@ -43,6 +43,9 @@ class VideoRecorder(private val context: Context) {
     /** Internal recorder lifecycle state. */
     private enum class State { IDLE, PREPARING, RECORDING, STOPPING, ERROR }
 
+    /** Return value of [start]; carries both the MediaStore URI and the display name. */
+    data class RecordingResult(val uri: Uri, val displayName: String)
+
     @Volatile private var state: State = State.IDLE
 
     // -------------------------------------------------------------------------
@@ -168,7 +171,7 @@ class VideoRecorder(private val context: Context) {
      * @return Content URI string of the output file (still pending until [stop]).
      * @throws IllegalStateException if called before [prepare].
      */
-    fun start(outputDirectory: String? = null, fileName: String? = null): String {
+    fun start(outputDirectory: String? = null, fileName: String? = null): RecordingResult {
         check(state == State.PREPARING) { "start() called in wrong state: $state" }
 
         val resolver = context.contentResolver
@@ -260,7 +263,7 @@ class VideoRecorder(private val context: Context) {
 
         state = State.RECORDING
         Log.d(TAG, "start: recording to $uri")
-        return "${uri}|${displayName}"
+        return RecordingResult(uri, displayName)
     }
 
     /**
@@ -301,7 +304,11 @@ class VideoRecorder(private val context: Context) {
         val capturedDrainError = drainError
         drainError = null
         if (capturedDrainError != null) {
-            drainThread?.let { it.quitSafely(); it.join() }
+            drainThread?.let {
+                it.quitSafely()
+                it.join(DRAIN_THREAD_JOIN_TIMEOUT_MS)
+                if (it.isAlive) Log.w(TAG, "stop: drain thread did not exit within timeout (error path)")
+            }
             drainThread = null; drainHandler = null; eosLatch = null
             try { context.contentResolver.delete(uri, null, null) } catch (_: Exception) {}
             muxer?.let { try { it.release() } catch (_: Exception) {} }; muxer = null
@@ -319,7 +326,8 @@ class VideoRecorder(private val context: Context) {
         // resources — quitSafely() does not interrupt a running dequeueOutputBuffer call.
         drainThread?.let {
             it.quitSafely()
-            it.join()
+            it.join(DRAIN_THREAD_JOIN_TIMEOUT_MS)
+            if (it.isAlive) Log.w(TAG, "stop: drain thread did not exit within timeout")
         }
         drainThread = null
         drainHandler = null
@@ -483,5 +491,7 @@ class VideoRecorder(private val context: Context) {
         private const val TAG = "VideoRecorder"
         private const val MIME_HEVC = "video/hevc"
         private const val MIME_AVC = "video/avc"
+        /** Timeout for [HandlerThread.join] after [HandlerThread.quitSafely] in [stop]. */
+        private const val DRAIN_THREAD_JOIN_TIMEOUT_MS = 2000L
     }
 }

@@ -77,9 +77,9 @@ class RecordingHud extends StatefulWidget {
 }
 
 // Tri-state for the HUD:
-//   null  = invisible (initial or fully dismissed)
-//   true  = recording capsule
-//   false = saving capsule
+//   hidden    = invisible (initial or fully dismissed)
+//   recording = recording capsule
+//   saving    = saving capsule
 enum _HudPhase { hidden, recording, saving }
 
 class _RecordingHudState extends State<RecordingHud> {
@@ -104,7 +104,15 @@ class _RecordingHudState extends State<RecordingHud> {
   }
 
   void _subscribe(Stream<RecordingState> stream) {
-    _sub = stream.listen(_onState);
+    _sub = stream.listen(
+      _onState,
+      onError: (_) {
+        _stopwatch.stop();
+        _ticker?.cancel();
+        _ticker = null;
+        if (mounted) setState(() => _phase = _HudPhase.hidden);
+      },
+    );
   }
 
   void _onState(RecordingState state) {

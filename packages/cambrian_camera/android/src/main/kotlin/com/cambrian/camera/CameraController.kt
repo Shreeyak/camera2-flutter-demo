@@ -832,7 +832,7 @@ class CameraController(
                 videoRecorder!!.prepare(previewWidth, previewHeight, bitrate = bitrate ?: 50_000_000, fps = configuredFps)
                 val surface = videoRecorder!!.inputSurface
                     ?: throw IllegalStateException("VideoRecorder.inputSurface is null after prepare()")
-                val uri = videoRecorder!!.start(outputDirectory, fileName)
+                val result = videoRecorder!!.start(outputDirectory, fileName)
                 // Route tone-mapped GPU frames directly to the encoder (no CPU copy).
                 gpuPipeline?.setEncoderSurface(surface)
                 // isRecording guards startRecording/stopRecording re-entry.
@@ -841,7 +841,8 @@ class CameraController(
                 isRecording = true
                 // Switch Camera2 to TEMPLATE_RECORD for video-optimised settings.
                 rebuildRepeatingRequest()
-                mainHandler.post { callback(Result.success(uri)) }
+                // Encode as "uri|displayName" for the Dart layer to split on the first '|'.
+                mainHandler.post { callback(Result.success("${result.uri}|${result.displayName}")) }
             } catch (e: Exception) {
                 mainHandler.post {
                     callback(Result.failure(FlutterError("recording_start_failed", e.message, null)))

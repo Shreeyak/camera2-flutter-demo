@@ -433,7 +433,12 @@ final (uri, name) = await camera.startRecording(
 );
 ```
 
-When recording starts, Camera2 switches from `TEMPLATE_PREVIEW` to `TEMPLATE_RECORD` for video-optimised capture settings. The AE target fps range upper bound is set to match the configured encoder fps (default 30), while the lower bound is half of that — this gives AE headroom to extend exposure in dark scenes rather than underexposing, while keeping the upper bound frame-aligned with the encoder. Both the template and fps range revert automatically when `stopRecording()` is called. The file is written continuously via a MediaCodec drain thread; it remains hidden in MediaStore (`IS_PENDING=1`) until `stopRecording()` finalizes it.
+When recording starts, Camera2 switches from `TEMPLATE_PREVIEW` to `TEMPLATE_RECORD` for video-optimised capture settings. The AE target fps range upper bound is set to match the configured encoder fps (default 30), while the lower bound is half of that — this gives AE headroom to extend exposure in dark scenes rather than underexposing, while keeping the upper bound frame-aligned with the encoder. Both the template and fps range revert automatically when `stopRecording()` is called. The file is written continuously via a MediaCodec drain thread; it remains hidden in MediaStore (`IS_PENDING=1`) until `stopRecording()` finalizes it. If manual ISO or exposure time is active when `startRecording()` is called, the AE fps-range adjustment is skipped because AE is disabled; the encoder receives frames at the camera's current capture rate.
+
+**Throws** `PlatformException` if:
+- Already recording (call `stopRecording()` first)
+- Encoder initialization fails
+- MediaStore entry creation fails (insufficient storage or scoped-storage permission denied)
 
 #### `camera.stopRecording()`
 
@@ -447,6 +452,12 @@ Signals end-of-stream to the encoder, waits for the drain thread to flush, write
 final uri = await camera.stopRecording();
 // file is fully written and visible in gallery
 ```
+
+**Throws** `PlatformException` if:
+- Not currently recording
+- File finalization fails (disk full, I/O error during `moov` write)
+
+On error the MediaStore entry is deleted (no partial file is left as `IS_PENDING=1`). Camera2 still reverts to `TEMPLATE_PREVIEW`.
 
 #### `camera.recordingStateStream`
 
@@ -462,6 +473,13 @@ Broadcasts recording lifecycle changes.
 | `RecordingState.idle` | Recording stopped; file is finalized |
 | `RecordingState.error` | Start or stop failed |
 
+`RecordingState.error` is emitted when:
+- Encoder initialization fails during `startRecording()`
+- A file I/O error (e.g., disk full) occurs during recording
+- `stopRecording()` finalization fails
+
+When an error occurs, the recording is automatically stopped and the state transitions to `idle` on the next successful operation. Detailed error information is available via `camera.errorStream`. The app can retry by calling `startRecording()` again.
+
 ```dart
 camera.recordingStateStream.listen((state) {
   switch (state) {
@@ -471,8 +489,7 @@ camera.recordingStateStream.listen((state) {
       print('File saved');
     case RecordingState.error:
       print('Recording failed');
-    default:
-      break;
+      // Retry or surface error to user; check camera.errorStream for details.
   }
 });
 ```
