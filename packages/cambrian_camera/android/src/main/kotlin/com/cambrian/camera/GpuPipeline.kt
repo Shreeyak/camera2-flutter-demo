@@ -213,7 +213,7 @@ open class GpuPipeline(
         glHandler.postDelayed({
             if (gpuHandle == 0L) return@postDelayed
             val elapsed = SystemClock.elapsedRealtime() - lastFrameTimeMs
-            if (lastFrameTimeMs > 0 && elapsed > STALL_THRESHOLD_MS && !stalled) {
+            if (lastFrameTimeMs > 0 && elapsed >= STALL_THRESHOLD_MS && !stalled) {
                 stalled = true
                 Log.w(TAG, "frame stall: ${elapsed}ms since last frame (frame #$frameCount)")
                 onStallDetected?.invoke(elapsed)
@@ -273,7 +273,7 @@ open class GpuPipeline(
     companion object {
         private const val TAG = "CC/Gpu"
         private const val STALL_THRESHOLD_MS = 3000L
-        private const val STALL_CHECK_INTERVAL_MS = 3000L
+        private const val STALL_CHECK_INTERVAL_MS = 1000L
 
         init {
             try {

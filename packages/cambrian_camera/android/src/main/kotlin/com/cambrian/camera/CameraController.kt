@@ -223,9 +223,6 @@ class CameraController(
      */
     @Volatile private var appliedSettings: CamSettings = CamSettings()
 
-    /** Frame counter used for periodic diagnostics and as frameId for the native pipeline. */
-    @Volatile private var streamFrameCount: Long = 0L
-
     /** Capture-result counter used for periodic diagnostics. */
     @Volatile private var captureResultCount: Long = 0L
 
@@ -233,7 +230,6 @@ class CameraController(
     @Volatile private var lastAeState: Int? = null
     @Volatile private var lastAfState: Int? = null
     @Volatile private var lastAwbState: Int? = null
-    @Volatile private var lastHeartbeatFrameCount: Long = 0L
 
     /**
      * YUV layout of the Camera2 stream, detected from plane strides on the first frame
@@ -616,6 +612,7 @@ class CameraController(
             merged = merged.copy(isoMode = "manual", iso = knownIso.toLong())
         }
 
+        val prevSettings = appliedSettings
         appliedSettings = merged
         pendingSettings = merged
         val session = captureSession ?: return
@@ -626,7 +623,9 @@ class CameraController(
             val request = buildCaptureRequest(device, merged)
             repeatingRequest = request
             session.setRepeatingRequest(request, repeatingCaptureCallback, backgroundHandler)
-            Log.i("CC/Settings", "iso=${merged.isoMode}:${merged.iso ?: "-"} exp=${merged.exposureMode}:${fmtExpMs(merged.exposureTimeNs)} focus=${merged.focusMode}:${merged.focusDistanceDiopters ?: "-"} wb=${merged.wbMode} zoom=${merged.zoomRatio ?: "-"}")
+            if (merged != prevSettings) {
+                Log.i("CC/Settings", "iso=${merged.isoMode}:${merged.iso ?: "-"} exp=${merged.exposureMode}:${fmtExpMs(merged.exposureTimeNs)} focus=${merged.focusMode}:${merged.focusDistanceDiopters ?: "-"} wb=${merged.wbMode} zoom=${merged.zoomRatio ?: "-"}")
+            }
             if (CambrianCameraConfig.verboseSettings) {
                 Log.d("CC/Settings", buildSettingsLog(merged))
             }
@@ -933,7 +932,6 @@ class CameraController(
             }
 
         val (streamFormat, streamWidth, streamHeight) = resolveStreamFormat(device)
-        streamFrameCount = 0L
         captureResultCount = 0L
         detectedYuvFormat = YUV_FORMAT_UNKNOWN
 
@@ -1388,7 +1386,6 @@ class CameraController(
         }
         jpegImageReader = null
         repeatingTargetSurface = null
-        streamFrameCount = 0L
         captureResultCount = 0L
         detectedYuvFormat = YUV_FORMAT_UNKNOWN
         lastKnownIso = null
@@ -1396,7 +1393,6 @@ class CameraController(
         lastAeState = null
         lastAfState = null
         lastAwbState = null
-        lastHeartbeatFrameCount = 0L
 
         // Release native pipeline; pipelineLock guards nativeRelease against concurrent
         // startup/shutdown (nativeDeliverYuv is not called in the GPU path).
@@ -1591,10 +1587,8 @@ class CameraController(
 
                 // Tier 2 — Heartbeat (gated, every 30 results)
                 if (CambrianCameraConfig.verboseDiagnostics && captureResultCount % 30L == 0L) {
-                    val drops = maxOf(0L, 30L - (streamFrameCount - lastHeartbeatFrameCount))
-                    lastHeartbeatFrameCount = streamFrameCount
                     val fps = result.get(CaptureResult.SENSOR_FRAME_DURATION)?.let { "%.1f".format(1_000_000_000.0 / it) } ?: "?"
-                    Log.d("CC/3A", "[HB #$captureResultCount] fps=$fps  ae=${aeStateName(newAeState)} iso=${result.get(CaptureResult.SENSOR_SENSITIVITY)} exp=${fmtExpMs(result.get(CaptureResult.SENSOR_EXPOSURE_TIME))}  af=${afStateName(newAfState)} focus=${result.get(CaptureResult.LENS_FOCUS_DISTANCE)?.let { "${it}D" } ?: "-"}  awb=${awbStateName(newAwbState)}  drops=$drops")
+                    Log.d("CC/3A", "[HB #$captureResultCount] fps=$fps  ae=${aeStateName(newAeState)} iso=${result.get(CaptureResult.SENSOR_SENSITIVITY)} exp=${fmtExpMs(result.get(CaptureResult.SENSOR_EXPOSURE_TIME))}  af=${afStateName(newAfState)} focus=${result.get(CaptureResult.LENS_FOCUS_DISTANCE)?.let { "${it}D" } ?: "-"}  awb=${awbStateName(newAwbState)}")
                 }
                 if (CambrianCameraConfig.verboseFullResult && captureResultCount % 30L == 0L) {
                     Log.d("CC/3A", "[FULL #$captureResultCount] $result")
