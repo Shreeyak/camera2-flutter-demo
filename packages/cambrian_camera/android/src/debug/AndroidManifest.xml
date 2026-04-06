@@ -1,0 +1,14 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <!-- Debug-only: allows ADB broadcasts to start/stop recording without UI interaction.
+             Excluded from release builds by virtue of living in src/debug/. -->
+        <receiver
+            android:name="com.cambrian.camera.VideoRecordingReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.cambrian.camera.START_RECORDING" />
+                <action android:name="com.cambrian.camera.STOP_RECORDING" />
+            </intent-filter>
+        </receiver>
+    </application>
+</manifest>

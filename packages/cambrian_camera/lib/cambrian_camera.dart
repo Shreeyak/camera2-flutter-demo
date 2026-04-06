@@ -36,4 +36,5 @@ export 'src/camera_state.dart'
         CameraCapabilities,
         CameraSize,
         CameraTextureInfo,
-        quarterTurnsFromDisplayRotation;
+        quarterTurnsFromDisplayRotation,
+        RecordingState;

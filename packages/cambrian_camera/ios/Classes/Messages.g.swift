@@ -530,6 +530,8 @@ protocol CameraHostApi {
   func setProcessingParams(handle: Int64, params: CamProcessingParams) throws
   func takePicture(handle: Int64, completion: @escaping (Result<String, Error>) -> Void)
   func getNativePipelineHandle(handle: Int64, completion: @escaping (Result<Int64?, Error>) -> Void)
+  func startRecording(handle: Int64, outputDirectory: String?, fileName: String?, bitrate: Int64?, fps: Int64?, completion: @escaping (Result<String, Error>) -> Void)
+  func stopRecording(handle: Int64, completion: @escaping (Result<String, Error>) -> Void)
   func close(handle: Int64, completion: @escaping (Result<Void, Error>) -> Void)
   /// Returns the current display rotation in degrees CW from portrait: 0, 90, 180, or 270.
   ///
@@ -646,6 +648,44 @@ class CameraHostApiSetup {
     } else {
       getNativePipelineHandleChannel.setMessageHandler(nil)
     }
+    let startRecordingChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.cambrian_camera.CameraHostApi.startRecording\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
+    if let api = api {
+      startRecordingChannel.setMessageHandler { message, reply in
+        let args = message as! [Any?]
+        let handleArg = args[0] as! Int64
+        let outputDirectoryArg: String? = nilOrValue(args[1])
+        let fileNameArg: String? = nilOrValue(args[2])
+        let bitrateArg: Int64? = nilOrValue(args[3])
+        let fpsArg: Int64? = nilOrValue(args[4])
+        api.startRecording(handle: handleArg, outputDirectory: outputDirectoryArg, fileName: fileNameArg, bitrate: bitrateArg, fps: fpsArg) { result in
+          switch result {
+          case .success(let res):
+            reply(wrapResult(res))
+          case .failure(let error):
+            reply(wrapError(error))
+          }
+        }
+      }
+    } else {
+      startRecordingChannel.setMessageHandler(nil)
+    }
+    let stopRecordingChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.cambrian_camera.CameraHostApi.stopRecording\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
+    if let api = api {
+      stopRecordingChannel.setMessageHandler { message, reply in
+        let args = message as! [Any?]
+        let handleArg = args[0] as! Int64
+        api.stopRecording(handle: handleArg) { result in
+          switch result {
+          case .success(let res):
+            reply(wrapResult(res))
+          case .failure(let error):
+            reply(wrapError(error))
+          }
+        }
+      }
+    } else {
+      stopRecordingChannel.setMessageHandler(nil)
+    }
     let closeChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.cambrian_camera.CameraHostApi.close\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
     if let api = api {
       closeChannel.setMessageHandler { message, reply in
@@ -688,6 +728,9 @@ protocol CameraFlutterApiProtocol {
   func onStateChanged(handle handleArg: Int64, state stateArg: CamStateUpdate, completion: @escaping (Result<Void, PigeonError>) -> Void)
   func onError(handle handleArg: Int64, error errorArg: CamError, completion: @escaping (Result<Void, PigeonError>) -> Void)
   func onFrameResult(handle handleArg: Int64, result resultArg: CamFrameResult, completion: @escaping (Result<Void, PigeonError>) -> Void)
+  /// Called when the recording state changes.
+  /// [state] is one of: "recording", "idle", "error".
+  func onRecordingStateChanged(handle handleArg: Int64, state stateArg: String, completion: @escaping (Result<Void, PigeonError>) -> Void)
 }
 class CameraFlutterApi: CameraFlutterApiProtocol {
   private let binaryMessenger: FlutterBinaryMessenger
@@ -710,7 +753,7 @@ class CameraFlutterApi: CameraFlutterApiProtocol {
       if listResponse.count > 1 {
         let code: String = listResponse[0] as! String
         let message: String? = nilOrValue(listResponse[1])
-        let details: Any? = nilOrValue(listResponse[2])
+        let details: Any? = listResponse[2]
         completion(.failure(PigeonError(code: code, message: message, details: details)))
       } else {
         completion(.success(Void()))
@@ -728,7 +771,7 @@ class CameraFlutterApi: CameraFlutterApiProtocol {
       if listResponse.count > 1 {
         let code: String = listResponse[0] as! String
         let message: String? = nilOrValue(listResponse[1])
-        let details: Any? = nilOrValue(listResponse[2])
+        let details: Any? = listResponse[2]
         completion(.failure(PigeonError(code: code, message: message, details: details)))
       } else {
         completion(.success(Void()))
@@ -746,7 +789,27 @@ class CameraFlutterApi: CameraFlutterApiProtocol {
       if listResponse.count > 1 {
         let code: String = listResponse[0] as! String
         let message: String? = nilOrValue(listResponse[1])
-        let details: Any? = nilOrValue(listResponse[2])
+        let details: Any? = listResponse[2]
+        completion(.failure(PigeonError(code: code, message: message, details: details)))
+      } else {
+        completion(.success(Void()))
+      }
+    }
+  }
+  /// Called when the recording state changes.
+  /// [state] is one of: "recording", "idle", "error".
+  func onRecordingStateChanged(handle handleArg: Int64, state stateArg: String, completion: @escaping (Result<Void, PigeonError>) -> Void) {
+    let channelName: String = "dev.flutter.pigeon.cambrian_camera.CameraFlutterApi.onRecordingStateChanged\(messageChannelSuffix)"
+    let channel = FlutterBasicMessageChannel(name: channelName, binaryMessenger: binaryMessenger, codec: codec)
+    channel.sendMessage([handleArg, stateArg] as [Any?]) { response in
+      guard let listResponse = response as? [Any?] else {
+        completion(.failure(createConnectionError(withChannelName: channelName)))
+        return
+      }
+      if listResponse.count > 1 {
+        let code: String = listResponse[0] as! String
+        let message: String? = nilOrValue(listResponse[1])
+        let details: Any? = listResponse[2]
         completion(.failure(PigeonError(code: code, message: message, details: details)))
       } else {
         completion(.success(Void()))

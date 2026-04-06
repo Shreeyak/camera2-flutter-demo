@@ -13,6 +13,8 @@ class BottomBar extends StatelessWidget {
   final VoidCallback onToggleSettings;
   final ValueChanged<CameraSettingType?> onSettingChipTap;
   final VoidCallback onToggleGpuControls;
+  final bool isRecording;
+  final VoidCallback onToggleRecording;
 
   const BottomBar({
     super.key,
@@ -24,6 +26,8 @@ class BottomBar extends StatelessWidget {
     required this.onToggleSettings,
     required this.onSettingChipTap,
     required this.onToggleGpuControls,
+    required this.isRecording,
+    required this.onToggleRecording,
   });
 
   @override
@@ -47,6 +51,8 @@ class BottomBar extends StatelessWidget {
                     isSettingsEnabled: isSettingsEnabled,
                     onToggleSettings: onToggleSettings,
                     onToggleGpuControls: onToggleGpuControls,
+                    isRecording: isRecording,
+                    onToggleRecording: onToggleRecording,
                   ),
                 ),
               ),
@@ -76,16 +82,20 @@ class BottomBar extends StatelessWidget {
   }
 }
 
-// ── Main action bar with SETTINGS and CALIBRATE COLOR buttons
+// ── Main action bar with SETTINGS, CALIBRATE COLOR, and RECORD buttons
 class _MainActionBar extends StatelessWidget {
   final bool isSettingsEnabled;
   final VoidCallback onToggleSettings;
   final VoidCallback onToggleGpuControls;
+  final bool isRecording;
+  final VoidCallback onToggleRecording;
 
   const _MainActionBar({
     required this.isSettingsEnabled,
     required this.onToggleSettings,
     required this.onToggleGpuControls,
+    required this.isRecording,
+    required this.onToggleRecording,
   });
 
   @override
@@ -114,6 +124,14 @@ class _MainActionBar extends StatelessWidget {
                 label: 'CALIBRATE COLOR',
                 isDisabled: false,
                 onTap: onToggleGpuControls,
+              ),
+              const SizedBox(width: 16),
+              BottomBarActionButton(
+                icon: isRecording ? Icons.stop_circle : Icons.fiber_manual_record,
+                label: isRecording ? 'STOP' : 'RECORD',
+                isActive: isRecording,
+                isDisabled: false,
+                onTap: onToggleRecording,
               ),
             ],
           ),

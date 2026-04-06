@@ -107,6 +107,50 @@ camera.setProcessingParams(ProcessingParams(
 Black balance is applied first in the pipeline, before brightness/contrast/saturation, which
 is the correct order — you remove the sensor's DC offset before stretching or shifting the signal.
 
+## Video Recording
+
+Start and stop recording to an MP4 file in the device's MediaStore:
+
+```dart
+// Start — returns (contentUri, displayName)
+final (uri, name) = await camera.startRecording();
+
+// Optional: custom directory and/or file name
+final (uri, name) = await camera.startRecording(
+  outputDirectory: 'Movies/MyApp/',  // MediaStore RELATIVE_PATH; defaults to Movies/CambrianCamera/
+  fileName: 'my_clip',               // .mp4 appended automatically if omitted
+);
+
+// Stop — finalizes the file and makes it visible in the gallery
+await camera.stopRecording();
+```
+
+While recording is active, Camera2 switches from `TEMPLATE_PREVIEW` to `TEMPLATE_RECORD`
+for video-optimised capture settings, and the AE target fps range changes from a fixed
+`[30, 30]` (preview) to `[15, 30]` (recording). The variable lower bound gives AE
+headroom to extend exposure in dark scenes rather than underexposing, while the upper
+bound keeps the container frame rate at 30 fps. It reverts to `TEMPLATE_PREVIEW` and
+`[30, 30]` automatically when recording stops.
+
+`CONTROL_AE_ANTIBANDING_MODE_AUTO` is set on all capture requests to protect against the
+moving horizontal band artifact caused by rolling shutter interacting with artificial light
+flicker (50/60 Hz mains). AE constrains its exposure choices to safe multiples of the
+detected flicker period.
+
+Monitor recording state changes via the stream:
+
+```dart
+camera.recordingStateStream.listen((state) {
+  // RecordingState.recording — encoding in progress
+  // RecordingState.idle     — stopped; file is finalized and visible in gallery
+  // RecordingState.error    — start or stop failed
+});
+```
+
+The file is written to disk continuously from the moment `startRecording()` returns
+(via a MediaCodec drain thread). It is marked `IS_PENDING` in MediaStore until
+`stopRecording()` completes, after which it becomes visible in the gallery.
+
 ## Capture
 
 ```dart
