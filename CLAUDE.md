@@ -90,6 +90,17 @@ After implementing any architectural change, review both files and update any se
        └──③ Step three ─────────────────► Output B
   ```
 
+## Pigeon Codegen
+
+Pigeon (Flutter's platform channel code generator) has a known bug in all versions
+through v26.3.3 that generates incorrect type casts in callback error parsing.
+**Never run `dart run pigeon` directly.** Always use:
+
+    scripts/regenerate_pigeon.sh
+
+This script runs Pigeon and patches the generated output. See
+`docs/plans/04-06-2026-fix-pigeon-codegen-type-casts.md` for full context.
+
 ## OpenCV (Android)
 
 The native pipeline uses OpenCV. The SDK is **not** checked in; it is symlinked from a host build:

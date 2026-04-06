@@ -475,7 +475,7 @@ interface CameraHostApi {
   fun setProcessingParams(handle: Long, params: CamProcessingParams)
   fun takePicture(handle: Long, callback: (Result<String>) -> Unit)
   fun getNativePipelineHandle(handle: Long, callback: (Result<Long?>) -> Unit)
-  fun startRecording(handle: Long, outputDirectory: String?, fileName: String?, bitrate: Int?, fps: Int?, callback: (Result<String>) -> Unit)
+  fun startRecording(handle: Long, outputDirectory: String?, fileName: String?, bitrate: Long?, fps: Long?, callback: (Result<String>) -> Unit)
   fun stopRecording(handle: Long, callback: (Result<String>) -> Unit)
   fun close(handle: Long, callback: (Result<Unit>) -> Unit)
   /**
@@ -625,7 +625,7 @@ interface CameraHostApi {
             val fileNameArg = args[2] as String?
             val bitrateArg = args[3] as Long?
             val fpsArg = args[4] as Long?
-            api.startRecording(handleArg, outputDirectoryArg, fileNameArg, bitrateArg?.toInt(), fpsArg?.toInt()) { result: Result<String> ->
+            api.startRecording(handleArg, outputDirectoryArg, fileNameArg, bitrateArg, fpsArg) { result: Result<String> ->
               val error = result.exceptionOrNull()
               if (error != null) {
                 reply.reply(wrapError(error))
@@ -712,7 +712,7 @@ class CameraFlutterApi(private val binaryMessenger: BinaryMessenger, private val
     channel.send(listOf(handleArg, stateArg)) {
       if (it is List<*>) {
         if (it.size > 1) {
-          callback(Result.failure(FlutterError(it[0] as String, it[1] as String, it[2] as String?)))
+          callback(Result.failure(FlutterError(it[0] as String, it[1] as String?, it[2] as String?)))
         } else {
           callback(Result.success(Unit))
         }
@@ -729,7 +729,7 @@ class CameraFlutterApi(private val binaryMessenger: BinaryMessenger, private val
     channel.send(listOf(handleArg, errorArg)) {
       if (it is List<*>) {
         if (it.size > 1) {
-          callback(Result.failure(FlutterError(it[0] as String, it[1] as String, it[2] as String?)))
+          callback(Result.failure(FlutterError(it[0] as String, it[1] as String?, it[2] as String?)))
         } else {
           callback(Result.success(Unit))
         }
@@ -746,7 +746,7 @@ class CameraFlutterApi(private val binaryMessenger: BinaryMessenger, private val
     channel.send(listOf(handleArg, resultArg)) {
       if (it is List<*>) {
         if (it.size > 1) {
-          callback(Result.failure(FlutterError(it[0] as String, it[1] as String, it[2] as String?)))
+          callback(Result.failure(FlutterError(it[0] as String, it[1] as String?, it[2] as String?)))
         } else {
           callback(Result.success(Unit))
         }
@@ -767,7 +767,7 @@ class CameraFlutterApi(private val binaryMessenger: BinaryMessenger, private val
     channel.send(listOf(handleArg, stateArg)) {
       if (it is List<*>) {
         if (it.size > 1) {
-          callback(Result.failure(FlutterError(it[0] as String, it[1] as String, it[2] as String?)))
+          callback(Result.failure(FlutterError(it[0] as String, it[1] as String?, it[2] as String?)))
         } else {
           callback(Result.success(Unit))
         }
