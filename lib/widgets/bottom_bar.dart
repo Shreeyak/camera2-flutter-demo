@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import '../camera/camera_settings_values.dart';
 import '../camera/camera_callbacks.dart';
+import '../testing/testable.dart' show Testable;
 import 'bottom_bar_buttons.dart';
+import 'bottom_bar_keys.dart' show kBarCalibrate, kBarRecord, kBarSettings;
 import 'camera_settings_bar.dart';
 
 class BottomBar extends StatelessWidget {
@@ -112,26 +114,35 @@ class _MainActionBar extends StatelessWidget {
           padding: const EdgeInsets.fromLTRB(48.0, 8.0, 48.0, 0.0),
           child: Row(
             children: [
-              BottomBarActionButton(
-                icon: Icons.tune,
-                label: 'SETTINGS',
-                isDisabled: !isSettingsEnabled,
-                onTap: onToggleSettings,
+              Testable(
+                entry: kBarSettings,
+                child: BottomBarActionButton(
+                  icon: Icons.tune,
+                  label: 'SETTINGS',
+                  isDisabled: !isSettingsEnabled,
+                  onTap: onToggleSettings,
+                ),
               ),
               const SizedBox(width: 16),
-              BottomBarActionButton(
-                icon: Icons.palette,
-                label: 'CALIBRATE COLOR',
-                isDisabled: false,
-                onTap: onToggleGpuControls,
+              Testable(
+                entry: kBarCalibrate,
+                child: BottomBarActionButton(
+                  icon: Icons.palette,
+                  label: 'CALIBRATE COLOR',
+                  isDisabled: false,
+                  onTap: onToggleGpuControls,
+                ),
               ),
               const SizedBox(width: 16),
-              BottomBarActionButton(
-                icon: isRecording ? Icons.stop_circle : Icons.fiber_manual_record,
-                label: isRecording ? 'STOP' : 'RECORD',
-                isActive: isRecording,
-                isDisabled: false,
-                onTap: onToggleRecording,
+              Testable(
+                entry: kBarRecord,
+                child: BottomBarActionButton(
+                  icon: isRecording ? Icons.stop_circle : Icons.fiber_manual_record,
+                  label: isRecording ? 'STOP' : 'RECORD',
+                  isActive: isRecording,
+                  isDisabled: false,
+                  onTap: onToggleRecording,
+                ),
               ),
             ],
           ),

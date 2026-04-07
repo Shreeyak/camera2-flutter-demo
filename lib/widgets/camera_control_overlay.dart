@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 
 import '../camera/camera_callbacks.dart';
+import '../testing/testable.dart' show Testable;
+import 'camera_control_keys.dart' show kDialWbSegment;
 import '../camera/camera_settings_values.dart';
 import 'camera_ruler_dial/camera_dial_presets.dart';
 import 'camera_ruler_dial/camera_ruler_dial.dart';
@@ -120,7 +122,9 @@ class _WbControlPanel extends StatelessWidget {
     // wrapping decoration needed. Center it in the 80px overlay slot.
     final cs = Theme.of(context).colorScheme;
     return Center(
-      child: SegmentedButton<bool>(
+      child: Testable(
+        entry: kDialWbSegment,
+        child: SegmentedButton<bool>(
         style: ButtonStyle(
           visualDensity: VisualDensity.compact,
           backgroundColor: WidgetStateProperty.resolveWith((states) {
@@ -146,6 +150,7 @@ class _WbControlPanel extends StatelessWidget {
         onSelectionChanged: (Set<bool> selection) {
           onWbLockChanged(selection.first);
         },
+      ),
       ),
     );
   }

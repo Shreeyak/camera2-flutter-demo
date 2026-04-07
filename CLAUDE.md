@@ -113,3 +113,71 @@ Reference: `backgroundSuspend()`, `backgroundResume()`, `close()`. Never call `t
 - **Match surrounding patterns.** Find 2-3 similar functions and match their threading, error handling, and state notification patterns. Code samples in plans are sketches — the codebase is the source of truth for HOW to implement.
 - **State notifications are mandatory.** Any path that changes camera, recording, or error state MUST notify Dart via `flutterApi.*` posted on `mainHandler`.
 - **Verify before claiming "doesn't exist."** Fields may be far from your edit site in a large file.
+
+## Testing
+
+### Running Integration Tests
+
+```bash
+flutter test integration_test/ -d <device-id>   # Run all on-device tests
+flutter test integration_test/app_test.dart -d <device-id>  # Run specific test file
+```
+
+Tests use `integration_test` (in-process, direct widget access). Do NOT use `flutter_driver` — it was removed from this project because it times out during recording due to continuous frame callbacks.
+
+### Widget Registry
+
+All interactive widgets are registered in `lib/testing/widget_registry.dart`. The registry is the **only** way to create `ValueKey`s for testable widgets. This prevents drift between keys and metadata.
+
+**Key files:**
+- `lib/testing/widget_registry.dart` — `WidgetRegistry` singleton and `WidgetEntry` class
+- `lib/testing/testable.dart` — `Testable` wrapper (applies key + semantics)
+- `lib/testing/test_channel.dart` — Debug-only camera state service extension
+- `lib/widgets/*_keys.dart` — Per-widget-file key registrations
+
+**Naming convention:** dot-separated hierarchy `{area}.{widget}[.{sub}]`
+
+### Widget Map
+
+| ID | Widget | File |
+|----|--------|------|
+| `bar.settings` | Settings button | bottom_bar.dart |
+| `bar.calibrate` | Calibrate color button | bottom_bar.dart |
+| `bar.record` | Record/Stop button | bottom_bar.dart |
+| `bar.close` | Close settings button | camera_settings_bar.dart |
+| `chip.iso` | ISO chip | camera_settings_bar.dart |
+| `chip.shutter` | Shutter chip | camera_settings_bar.dart |
+| `chip.focus` | Focus chip | camera_settings_bar.dart |
+| `chip.wb` | White balance chip | camera_settings_bar.dart |
+| `chip.zoom` | Zoom chip | camera_settings_bar.dart |
+| `dial.auto_toggle` | Auto/manual toggle | main.dart |
+| `dial.wb_segment` | WB auto/lock segment | camera_control_overlay.dart |
+| `gpu.brightness` | Brightness slider | gpu_controls_sidebar.dart |
+| `gpu.contrast` | Contrast slider | gpu_controls_sidebar.dart |
+| `gpu.saturation` | Saturation slider | gpu_controls_sidebar.dart |
+| `gpu.gamma` | Gamma slider | gpu_controls_sidebar.dart |
+| `gpu.black.r` | Black balance red | gpu_controls_sidebar.dart |
+| `gpu.black.g` | Black balance green | gpu_controls_sidebar.dart |
+| `gpu.black.b` | Black balance blue | gpu_controls_sidebar.dart |
+| `gpu.reset_all` | Reset all button | gpu_controls_sidebar.dart |
+| `hud.recording` | Recording HUD | recording_hud.dart |
+
+### Adding New Testable Widgets
+
+1. Register with the registry in a `*_keys.dart` file next to the widget:
+   ```dart
+   final kMyWidget = WidgetRegistry.instance.register(
+     id: 'area.name',
+     label: 'Accessible label',
+     description: 'What it does',
+   );
+   ```
+2. Wrap the widget with `Testable(entry: kMyWidget, child: ...)` in the build method
+3. For sliders: pass `slider: true` and `value: currentValue` to `Testable`
+
+### Testing Patterns
+
+- **During recording:** Use `tester.pump(duration)` instead of `pumpAndSettle()` — continuous frame callbacks prevent settling
+- **Dial values:** Use `tester.state<CameraRulerDialState>(find.byKey(key)).setValue(800)` to set dial values programmatically
+- **Camera state:** Query via `ext.test.cameraState` service extension in debug builds
+- **Semantics verification:** Wrap app with `SemanticsDebugger(child: CameraApp())` during development to visualize what's exposed to accessibility tools and ADB
