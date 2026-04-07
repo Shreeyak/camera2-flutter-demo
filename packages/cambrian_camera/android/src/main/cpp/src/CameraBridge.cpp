@@ -53,7 +53,14 @@ Java_com_cambrian_camera_CameraController_nativeInit(
         return 0;
     }
 
-    auto* pipeline = new cam::ImagePipeline(window);
+    cam::ImagePipeline* pipeline = nullptr;
+    try {
+        pipeline = new cam::ImagePipeline(window);
+    } catch (...) {
+        LOGE("nativeInit: failed to create ImagePipeline");
+        ANativeWindow_release(window);
+        return 0;
+    }
 
     // ImagePipeline::ImagePipeline() acquires its own reference, so we release
     // the one we got from ANativeWindow_fromSurface.
