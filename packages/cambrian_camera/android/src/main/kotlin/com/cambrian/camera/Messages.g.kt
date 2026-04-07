@@ -71,7 +71,11 @@ enum class CamErrorCode(val raw: Int) {
   PIPELINE_ERROR(11),
   SETTINGS_CONFLICT(12),
   FRAME_STALL(13),
-  UNKNOWN(14);
+  CAPTURE_FAILURE(14),
+  FPS_DEGRADED(15),
+  AE_CONVERGENCE_TIMEOUT(16),
+  RECORDING_TRUNCATED(17),
+  UNKNOWN(18);
 
   companion object {
     fun ofRaw(raw: Int): CamErrorCode? {

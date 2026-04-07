@@ -103,6 +103,9 @@ public:
     void addSink(const SinkConfig& config, SinkCallback callback) override;
     void removeSink(const std::string& name) override;
 
+    /// Returns the cumulative number of frames dropped by InputRing due to dimension mismatch.
+    int getDimensionMismatchCount() const { return inputRing_.dimensionMismatchCount_.load(); }
+
 private:
     int debugLevel_ = 0;  ///< 0=errors only, 1=lifecycle, 2=periodic/perf
 

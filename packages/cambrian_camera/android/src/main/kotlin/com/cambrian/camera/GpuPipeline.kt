@@ -64,6 +64,9 @@ open class GpuPipeline(
     private var stalled = false
     var onStallDetected: ((elapsedMs: Long) -> Unit)? = null
 
+    /** Invoked on the GL thread when consecutive eglSwapBuffers failures indicate a stale surface. */
+    var onPreviewRebindNeeded: (() -> Unit)? = null
+
     /** The [Surface] wrapping our [SurfaceTexture] — set as camera capture target. */
     var cameraSurface: Surface? = null
         private set
@@ -264,6 +267,13 @@ open class GpuPipeline(
             /* iso = */ 0,
             displayRotDeg
         )
+
+        // Poll for stale preview surface after each frame (Step 2: auto-rebind).
+        if (nativeGpuNeedsPreviewRebind(handle)) {
+            Log.w(TAG, "preview surface stale — requesting rebind")
+            nativeGpuClearRebindFlag(handle)
+            onPreviewRebindNeeded?.invoke()
+        }
     }
 
     companion object {
@@ -304,6 +314,15 @@ open class GpuPipeline(
 
         @JvmStatic
         external fun nativeGpuRebindPreviewSurface(gpuHandle: Long, newPreviewSurface: Surface?)
+
+        @JvmStatic
+        external fun nativeGpuNeedsPreviewRebind(gpuHandle: Long): Boolean
+
+        @JvmStatic
+        external fun nativeGpuClearRebindFlag(gpuHandle: Long)
+
+        @JvmStatic
+        external fun nativeGetDimensionMismatchCount(pipelineHandle: Long): Int
 
         @JvmStatic
         external fun nativeGpuSetAdjustments(

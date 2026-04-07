@@ -88,7 +88,11 @@ enum CamErrorCode: Int {
   case pipelineError = 11
   case settingsConflict = 12
   case frameStall = 13
-  case unknown = 14
+  case captureFailure = 14
+  case fpsDegraded = 15
+  case aeConvergenceTimeout = 16
+  case recordingTruncated = 17
+  case unknown = 18
 }
 
 /// Generated class from Pigeon that represents data sent in messages.
@@ -754,7 +758,7 @@ class CameraFlutterApi: CameraFlutterApiProtocol {
       if listResponse.count > 1 {
         let code: String = listResponse[0] as! String
         let message: String? = nilOrValue(listResponse[1])
-        let details: String? = nilOrValue(listResponse[2])
+        let details: Any? = listResponse[2]
         completion(.failure(PigeonError(code: code, message: message, details: details)))
       } else {
         completion(.success(Void()))
@@ -772,7 +776,7 @@ class CameraFlutterApi: CameraFlutterApiProtocol {
       if listResponse.count > 1 {
         let code: String = listResponse[0] as! String
         let message: String? = nilOrValue(listResponse[1])
-        let details: String? = nilOrValue(listResponse[2])
+        let details: Any? = listResponse[2]
         completion(.failure(PigeonError(code: code, message: message, details: details)))
       } else {
         completion(.success(Void()))
@@ -790,7 +794,7 @@ class CameraFlutterApi: CameraFlutterApiProtocol {
       if listResponse.count > 1 {
         let code: String = listResponse[0] as! String
         let message: String? = nilOrValue(listResponse[1])
-        let details: String? = nilOrValue(listResponse[2])
+        let details: Any? = listResponse[2]
         completion(.failure(PigeonError(code: code, message: message, details: details)))
       } else {
         completion(.success(Void()))
@@ -810,7 +814,7 @@ class CameraFlutterApi: CameraFlutterApiProtocol {
       if listResponse.count > 1 {
         let code: String = listResponse[0] as! String
         let message: String? = nilOrValue(listResponse[1])
-        let details: String? = nilOrValue(listResponse[2])
+        let details: Any? = listResponse[2]
         completion(.failure(PigeonError(code: code, message: message, details: details)))
       } else {
         completion(.success(Void()))

@@ -137,6 +137,16 @@ class CameraController(
             brightness: Double,
             saturation: Double,
         )
+
+        // Self-healing thresholds
+        /** Number of consecutive HAL REASON_ERROR failures before triggering recovery. */
+        const val HAL_ERROR_THRESHOLD = 5
+        /** FPS below this value for [LOW_FPS_STREAK_LIMIT] heartbeats triggers a degradation alert. */
+        const val LOW_FPS_THRESHOLD = 15.0
+        /** Number of consecutive low-FPS heartbeats before emitting [CamErrorCode.FPS_DEGRADED]. */
+        const val LOW_FPS_STREAK_LIMIT = 3
+        /** Milliseconds AE may stay in SEARCHING before emitting [CamErrorCode.AE_CONVERGENCE_TIMEOUT]. */
+        const val AE_CONVERGENCE_TIMEOUT_MS = 5000L
     }
 
     // -------------------------------------------------------------------------
@@ -233,6 +243,15 @@ class CameraController(
 
     /** Per-interval buffer-lost counter (reset after each heartbeat). */
     private var bufferLostCount = 0L
+
+    /** Consecutive HAL capture errors (REASON_ERROR); reset on any successful frame. */
+    private var consecutiveHalErrors = 0
+
+    /** FPS degradation streak: number of consecutive heartbeats with FPS below threshold. */
+    private var lowFpsStreak = 0
+
+    /** Timestamp (elapsedRealtime ms) when AE entered SEARCHING; 0 when not searching. */
+    private var aeSearchingStartMs = 0L
 
     // 3A state tracking for Tier 1 state-change logs
     @Volatile private var lastAeState: Int? = null
@@ -904,6 +923,16 @@ class CameraController(
                 }
                 return@post
             }
+            if (recorder.wasEosDrainTimedOut()) {
+                Log.w("CC/Cam", "recording may be truncated (EOS drain timeout)")
+                mainHandler.post {
+                    flutterApi.onError(handle, CamError(
+                        CamErrorCode.RECORDING_TRUNCATED,
+                        "Recording may be truncated — EOS drain timed out",
+                        false
+                    )) {}
+                }
+            }
             mainHandler.post { callback(Result.success(uri)) }
         }
     }
@@ -998,6 +1027,15 @@ class CameraController(
             Log.w("CC/Cam", "frame stall reported: ${elapsedMs}ms")
             mainHandler.post {
                 flutterApi.onError(handle, CamError(CamErrorCode.FRAME_STALL, "Frame stall: ${elapsedMs}ms since last frame", false)) {}
+            }
+        }
+        pipeline.onPreviewRebindNeeded = {
+            Log.i("CC/Cam", "rebinding preview surface after swap failures")
+            val newSurface = surfaceProducer?.getSurface()
+            if (newSurface != null) {
+                pipeline.rebindPreviewSurface(newSurface)
+            } else {
+                Log.w("CC/Cam", "no surface available for rebind")
             }
         }
 
@@ -1556,6 +1594,9 @@ class CameraController(
                 request: CaptureRequest,
                 result: TotalCaptureResult,
             ) {
+                // Reset HAL error streak on every successful frame.
+                consecutiveHalErrors = 0
+
                 // Always track the latest sensor values so that switching to manual mode
                 // can seed the partner field with the last live AE value.
                 result.get(CaptureResult.SENSOR_SENSITIVITY)?.let { lastKnownIso = it }
@@ -1592,7 +1633,31 @@ class CameraController(
                 if (newAeState != lastAeState) {
                     Log.i("CC/3A", "[AE] ${aeStateName(lastAeState)} → ${aeStateName(newAeState)}  iso=${result.get(CaptureResult.SENSOR_SENSITIVITY)}  exp=${fmtExpMs(result.get(CaptureResult.SENSOR_EXPOSURE_TIME))}")
                     lastAeState = newAeState
+
+                    // Track when AE enters SEARCHING to detect convergence timeout (Step 4).
+                    if (newAeState == CaptureResult.CONTROL_AE_STATE_SEARCHING) {
+                        aeSearchingStartMs = android.os.SystemClock.elapsedRealtime()
+                    } else {
+                        aeSearchingStartMs = 0L  // converged or locked — reset
+                    }
                 }
+
+                // Check AE convergence timeout even when state hasn't changed.
+                if (lastAeState == CaptureResult.CONTROL_AE_STATE_SEARCHING && aeSearchingStartMs > 0L) {
+                    val elapsed = android.os.SystemClock.elapsedRealtime() - aeSearchingStartMs
+                    if (elapsed >= AE_CONVERGENCE_TIMEOUT_MS) {
+                        Log.w("CC/3A", "AE convergence timeout: stuck in SEARCHING for ${elapsed}ms")
+                        aeSearchingStartMs = 0L  // prevent repeated firing
+                        mainHandler.post {
+                            flutterApi.onError(handle, CamError(
+                                CamErrorCode.AE_CONVERGENCE_TIMEOUT,
+                                "Auto-exposure failed to converge after ${elapsed}ms",
+                                false
+                            )) {}
+                        }
+                    }
+                }
+
                 if (newAfState != lastAfState) {
                     Log.i("CC/3A", "[AF] ${afStateName(lastAfState)} → ${afStateName(newAfState)}  focus=${result.get(CaptureResult.LENS_FOCUS_DISTANCE)?.let { "${it}D" } ?: "null"}")
                     lastAfState = newAfState
@@ -1604,10 +1669,38 @@ class CameraController(
 
                 // Tier 2 — Heartbeat (gated, every 30 results)
                 if (CambrianCameraConfig.verboseDiagnostics && captureResultCount % 30L == 0L) {
-                    val fps = result.get(CaptureResult.SENSOR_FRAME_DURATION)?.let { "%.1f".format(1_000_000_000.0 / it) } ?: "?"
+                    val frameDuration = result.get(CaptureResult.SENSOR_FRAME_DURATION)
+                    val fpsValue = frameDuration?.let { 1_000_000_000.0 / it }
+                    val fps = fpsValue?.let { "%.1f".format(it) } ?: "?"
                     Log.d("CC/3A", "[HB #$captureResultCount] fps=$fps  ae=${aeStateName(newAeState)} iso=${result.get(CaptureResult.SENSOR_SENSITIVITY)} exp=${fmtExpMs(result.get(CaptureResult.SENSOR_EXPOSURE_TIME))}  af=${afStateName(newAfState)} focus=${result.get(CaptureResult.LENS_FOCUS_DISTANCE)?.let { "${it}D" } ?: "-"}  awb=${awbStateName(newAwbState)}  capFail=$captureFailureCount bufLost=$bufferLostCount")
                     captureFailureCount = 0L
                     bufferLostCount = 0L
+
+                    // InputRing dimension mismatch count (Step 6).
+                    val ptr = nativePipelinePtr
+                    if (ptr != 0L) {
+                        val mismatches = GpuPipeline.nativeGetDimensionMismatchCount(ptr)
+                        if (mismatches > 0) {
+                            Log.w("CC/Cam", "InputRing dimension mismatches: $mismatches since last heartbeat")
+                        }
+                    }
+
+                    // FPS degradation detection (Step 3).
+                    if (fpsValue != null && fpsValue < LOW_FPS_THRESHOLD) {
+                        lowFpsStreak++
+                        if (lowFpsStreak == LOW_FPS_STREAK_LIMIT) {
+                            Log.w("CC/Cam", "sustained low FPS: ${"%.1f".format(fpsValue)} for $lowFpsStreak heartbeats")
+                            mainHandler.post {
+                                flutterApi.onError(handle, CamError(
+                                    CamErrorCode.FPS_DEGRADED,
+                                    "FPS degraded to ${"%.1f".format(fpsValue)} for ${lowFpsStreak}s",
+                                    false
+                                )) {}
+                            }
+                        }
+                    } else {
+                        lowFpsStreak = 0
+                    }
                 }
                 if (CambrianCameraConfig.verboseFullResult && captureResultCount % 30L == 0L) {
                     Log.d("CC/3A", "[FULL #$captureResultCount] $result")
@@ -1626,6 +1719,17 @@ class CameraController(
                 }
                 Log.w("CC/Cam", "capture failed: reason=$reason frame=${failure.frameNumber}")
                 captureFailureCount++
+
+                // Trigger recovery on repeated HAL errors; REASON_FLUSHED is expected during
+                // teardown and does not indicate a degraded HAL state.
+                if (failure.reason == CaptureFailure.REASON_ERROR) {
+                    consecutiveHalErrors++
+                    if (consecutiveHalErrors >= HAL_ERROR_THRESHOLD) {
+                        Log.w("CC/Cam", "HAL error threshold reached ($consecutiveHalErrors consecutive failures), triggering recovery")
+                        consecutiveHalErrors = 0
+                        handleNonFatalError(CamErrorCode.CAPTURE_FAILURE, "Repeated HAL capture failures")
+                    }
+                }
             }
 
             override fun onCaptureBufferLost(
