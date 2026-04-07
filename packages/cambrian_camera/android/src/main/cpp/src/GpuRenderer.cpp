@@ -395,9 +395,9 @@ void GpuRenderer::drawAndReadback(
     // Use pboMeta_[readIdx] — the metadata stored when that PBO was written —
     // so the pixel data and metadata always refer to the same frame.
     //
-    // Read the previous frame's GL_TIME_ELAPSED_EXT query result (non-blocking:
-    // the GPU has had a full frame to process it since it was issued at writeIdx).
-    // Then wait explicitly on the fences before mapping with GL_MAP_UNSYNCHRONIZED_BIT.
+    // GL_QUERY_RESULT blocks until the result is ready; since a full frame has
+    // elapsed since the query was issued, the result is expected to be available immediately.
+    // Then wait explicitly on the fences before mapping.
     // -----------------------------------------------------------------------
     if (!firstFrame_) {
         const auto& storedMeta = pboMeta_[readIdx];
@@ -439,7 +439,7 @@ void GpuRenderer::drawAndReadback(
             auto* fullPtr = static_cast<const uint8_t*>(
                 glMapBufferRange(GL_PIXEL_PACK_BUFFER, 0,
                                  static_cast<GLsizeiptr>(width_) * height_ * 4,
-                                 GL_MAP_READ_BIT | GL_MAP_UNSYNCHRONIZED_BIT));
+                                 GL_MAP_READ_BIT));
             if (fullPtr) {
                 fullResCb(fullPtr, width_, height_, width_ * 4,
                           storedMeta.frameId, storedMeta.meta);
@@ -456,7 +456,7 @@ void GpuRenderer::drawAndReadback(
             auto* trackPtr = static_cast<const uint8_t*>(
                 glMapBufferRange(GL_PIXEL_PACK_BUFFER, 0,
                                  static_cast<GLsizeiptr>(trackerWidth_) * trackerHeight_ * 4,
-                                 GL_MAP_READ_BIT | GL_MAP_UNSYNCHRONIZED_BIT));
+                                 GL_MAP_READ_BIT));
             if (trackPtr) {
                 trackerCb(trackPtr, trackerWidth_, trackerHeight_, trackerWidth_ * 4,
                           storedMeta.frameId, storedMeta.meta);
@@ -545,7 +545,7 @@ void GpuRenderer::drawAndReadback(
                 auto* rawPtr = static_cast<const uint8_t*>(
                     glMapBufferRange(GL_PIXEL_PACK_BUFFER, 0,
                                      static_cast<GLsizeiptr>(rawW_) * rawH_ * 4,
-                                     GL_MAP_READ_BIT | GL_MAP_UNSYNCHRONIZED_BIT));
+                                     GL_MAP_READ_BIT));
                 if (rawPtr) {
                     rawCb(rawPtr, rawW_, rawH_, rawW_ * 4,
                           rawMeta.frameId, rawMeta.meta);
