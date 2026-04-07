@@ -113,11 +113,46 @@ class CameraController(
      */
     @Volatile private var backgroundSuspended = false
 
+    /**
+     * True when Dart has explicitly called [pause] and has not yet called [resume].
+     *
+     * Tracks Dart-side intent so that [backgroundResume] does not wastefully reopen the camera
+     * when the user is on a non-camera screen.  If Dart paused the camera (e.g. user navigated
+     * away from the camera page), then the app goes to background and returns, [backgroundResume]
+     * sees this flag and skips the reopen — Dart will call [resume] when the user navigates back.
+     */
+    @Volatile private var dartPaused = false
+
     // -------------------------------------------------------------------------
     // Camera2 resources
     // -------------------------------------------------------------------------
 
     private val cameraManager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
+
+    /**
+     * Monitors camera availability system-wide.
+     *
+     * When our camera is preempted by a higher-priority client (incoming call, another app in
+     * multi-window) and our retry loop exhausts [maxRetries], we enter [State.ERROR] — a terminal
+     * state that the retry loop cannot escape.  This callback provides the escape hatch: when the
+     * camera becomes available again, we reset [retryCount] and trigger a fresh [doReopenCamera].
+     *
+     * Registered once when the controller is first opened; unregistered on [close] / [release].
+     */
+    private val cameraAvailabilityCallback = object : CameraManager.AvailabilityCallback() {
+        override fun onCameraAvailable(cameraId: String) {
+            if (cameraId != resolvedCameraId) return
+            if (released || backgroundSuspended || dartPaused) return
+            if (state != State.ERROR) return
+            Log.i("CC/Cam", "[$handle] camera $cameraId available again — recovering from ERROR")
+            backgroundHandler.post {
+                if (released || backgroundSuspended || dartPaused) return@post
+                if (state != State.ERROR) return@post
+                retryCount = 0
+                doReopenCamera()
+            }
+        }
+    }
 
     /** Serialises concurrent open/close calls so we never open the device twice. */
     private val openLock = Semaphore(1)
@@ -358,6 +393,10 @@ class CameraController(
             return
         }
 
+        // Register once so we learn when the camera becomes available after preemption.
+        // Safe to call repeatedly — CameraManager de-duplicates the same callback instance.
+        cameraManager.registerAvailabilityCallback(cameraAvailabilityCallback, backgroundHandler)
+
         emitState("opening")
         setState(State.OPENING)
 
@@ -459,7 +498,8 @@ class CameraController(
             callback(Result.success(Unit))
             return
         }
-        Log.i("CC/Cam", "[$handle] pausing")
+        Log.i("CC/Cam", "[$handle] pausing (Dart-initiated)")
+        dartPaused = true
         // Tear down only the capture session; keep CameraDevice open for fast resume.
         // OPENING reuses its existing meaning: "device held, no capture session running".
         setState(State.OPENING)
@@ -477,7 +517,20 @@ class CameraController(
      * HAL already closed the device — in that case [onDisconnected] transitions to RECOVERING).
      */
     fun resume(callback: (Result<Unit>) -> Unit) {
+        dartPaused = false
+        // If the controller was background-suspended while Dart-paused, the device is fully
+        // closed.  A lightweight session restart is not possible — do a full reopen instead.
+        if (backgroundSuspended) {
+            Log.i("CC/Cam", "[$handle] resume after background suspend — full reopen")
+            backgroundSuspended = false
+            retryCount = 0
+            backgroundHandler.post { doReopenCamera() }
+            callback(Result.success(Unit))
+            return
+        }
         if (state != State.OPENING || cameraDevice == null) {
+            // Not in a paused state or device was lost — if ERROR, availability callback
+            // will handle recovery; otherwise nothing to do.
             callback(Result.success(Unit))
             return
         }
@@ -522,7 +575,7 @@ class CameraController(
             // that fires while teardown runs sees state != RECOVERING and aborts.
             setState(State.CLOSED)
             teardown()
-            emitState("paused")
+            emitState("suspended")
             mainHandler.post { callback(Result.success(Unit)) }
         }
     }
@@ -535,7 +588,9 @@ class CameraController(
      * rest of the app is unaffected because the reopen happens entirely on the background thread
      * and errors feed into the existing non-fatal recovery path.
      *
-     * No-op if the controller was never suspended or has been permanently released.
+     * No-op if the controller was never suspended, has been permanently released, or if Dart
+     * had explicitly [pause]d the camera before the app went to background (Dart will call
+     * [resume] when it is ready for frames again — no point streaming to a hidden screen).
      */
     fun backgroundResume(callback: (Result<Unit>) -> Unit) {
         if (released) {
@@ -544,6 +599,13 @@ class CameraController(
         }
         backgroundHandler.post {
             if (released || !backgroundSuspended) {
+                mainHandler.post { callback(Result.success(Unit)) }
+                return@post
+            }
+            if (dartPaused) {
+                // Dart explicitly paused the camera before the app went to background.
+                // Stay suspended — Dart will call resume() when it is ready for frames.
+                Log.i("CC/Cam", "[$handle] backgroundResume skipped — Dart-paused")
                 mainHandler.post { callback(Result.success(Unit)) }
                 return@post
             }
@@ -561,11 +623,18 @@ class CameraController(
 
     fun close(callback: (Result<Unit>) -> Unit) {
         released = true
-        teardown()
-        backgroundThread.quitSafely()
-        emitState("closed")
-        setState(State.CLOSED)
-        callback(Result.success(Unit))
+        cameraManager.unregisterAvailabilityCallback(cameraAvailabilityCallback)
+        // Post teardown to backgroundHandler so it serialises with any in-flight
+        // backgroundSuspend / recovery work, avoiding concurrent teardown on two threads.
+        backgroundHandler.post {
+            teardown()
+            backgroundThread.quitSafely()
+            mainHandler.post {
+                emitState("closed")
+                setState(State.CLOSED)
+                callback(Result.success(Unit))
+            }
+        }
     }
 
     /**
@@ -1021,6 +1090,7 @@ class CameraController(
     fun release() {
         Log.i("CC/Cam", "release handle=$handle")
         released = true
+        cameraManager.unregisterAvailabilityCallback(cameraAvailabilityCallback)
         teardown()
         backgroundThread.quitSafely()
     }
@@ -1608,65 +1678,9 @@ class CameraController(
         val retryRunnable = Runnable {
             pendingRetryRunnable = null
             teardown()
-            val id = resolvedCameraId ?: return@Runnable
+            if (resolvedCameraId == null) return@Runnable
             if (state != State.RECOVERING) return@Runnable // Cancelled by explicit close or backgroundSuspend.
-
-            // Check permission again before retrying.
-            if (context.checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
-                handleFatalError(CamErrorCode.PERMISSION_DENIED, "Camera permission lost during recovery")
-                return@Runnable
-            }
-
-            try {
-                openLock.acquire()
-                cameraManager.openCamera(
-                    id,
-                    { command -> backgroundHandler.post(command) },
-                    object : CameraDevice.StateCallback() {
-                        override fun onOpened(camera: CameraDevice) {
-                            openLock.release()
-                            cameraDevice = camera
-                            retryCount = 0
-                            startCaptureSession {}
-                        }
-
-                        override fun onDisconnected(camera: CameraDevice) {
-                            openLock.release()
-                            camera.close()
-                            cameraDevice = null
-                            handleNonFatalError(CamErrorCode.CAMERA_DISCONNECTED, "Camera disconnected during recovery")
-                        }
-
-                        override fun onError(
-                            camera: CameraDevice,
-                            error: Int,
-                        ) {
-                            openLock.release()
-                            camera.close()
-                            cameraDevice = null
-                            val (errCode, errMsg) = errorCodeToMessage(error)
-                            if (isFatalDeviceError(error)) {
-                                handleFatalError(errCode, errMsg)
-                            } else {
-                                handleNonFatalError(errCode, errMsg)
-                            }
-                        }
-                    },
-                )
-            } catch (e: CameraAccessException) {
-                openLock.release()
-                if (isFatalAccessException(e)) {
-                    handleFatalError(CamErrorCode.CAMERA_ACCESS_ERROR, e.message ?: "CameraAccessException")
-                } else {
-                    handleNonFatalError(CamErrorCode.CAMERA_ACCESS_ERROR, e.message ?: "CameraAccessException")
-                }
-            } catch (e: InterruptedException) {
-                // Lock acquire interrupted; give up gracefully.
-            } catch (e: SecurityException) {
-                openLock.release()
-                // Treat as non-fatal for the same OEM-unlock-bug reason as the initial open path.
-                handleNonFatalError(CamErrorCode.CAMERA_ACCESS_ERROR, "SecurityException on camera open (transient): ${e.message}")
-            }
+            doReopenCamera()
         }
         pendingRetryRunnable = retryRunnable
         backgroundHandler.postDelayed(retryRunnable, delayMs)

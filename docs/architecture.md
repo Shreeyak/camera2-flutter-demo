@@ -367,35 +367,51 @@ Implemented in `CameraController.kt`.
                     ┌──────────┐
                     │  CLOSED  │◄─────────────────────────────────────────┐
                     └────┬─────┘                                          │
-                         │ open()                                         │
+                         │ open() / backgroundResume()                    │
                     ┌────▼─────┐                                          │
-                    │ OPENING  │◄────────────────────────┐                │
-                    └────┬─────┘                         │ resume()       │
-                         │ camera opened + session       │                │
-                         │ configured             ┌──────┴───┐           │
-                    ┌────▼──────┐   pause()        │  PAUSED  │           │
-              ┌────►│ STREAMING │────────────────►│          │           │ close()
-              │     └────┬──────┘                  └──────────┘           │
-              │          │ error detected                                  │
-              │     ┌────▼───────┐                                        │
-              │     │ RECOVERING │────────────────────────────────────────┤
-              └─────┤            │ retry succeeded                        │
-                    └────┬───────┘                                        │
-                         │ max retries exceeded                           │
-                    ┌────▼─────┐                                          │
-                    │  ERROR   │──────────────────────────────────────────┘
-                    └──────────┘  (fatal — app must close/reopen)
+              ┌────►│ OPENING  │◄────────────────────────┐                │
+              │     └────┬─────┘                         │ resume()       │
+              │          │ camera opened + session       │                │
+              │          │ configured             ┌──────┴───┐           │
+              │     ┌────▼──────┐   pause()        │  PAUSED  │           │
+              │┌───►│ STREAMING │────────────────►│          │           │ close()
+              ││    └────┬──────┘                  └──────────┘           │
+              ││         │ error detected                                  │
+              ││    ┌────▼───────┐                                        │
+              │└────┤ RECOVERING │────────────────────────────────────────┤
+              │     └────┬───────┘ retry succeeded                        │
+              │          │ max retries exceeded                           │
+              │     ┌────▼─────┐                                          │
+              │     │  ERROR   │──────────────────────────────────────────┘
+              │     └────┬─────┘
+              │          │ onCameraAvailable (AvailabilityCallback)
+              └──────────┘
 ```
 
-**Recovery behavior:** Exponential backoff (500ms → 1s → 2s → 4s → max 8s). After 5 failures: fatal error, state = ERROR.
+**Recovery behavior:** Exponential backoff (500ms → 1s → 2s → 4s → max 8s). After 5 failures: fatal error, state = ERROR. `CameraManager.AvailabilityCallback` provides recovery from ERROR: when the camera becomes available again (e.g. after a phone call ends), `retryCount` is reset and `doReopenCamera()` is triggered automatically.
 
-**PAUSED vs CLOSED:** `pause()` tears down the capture session, GPU pipeline, and native pipeline (`teardownSession()`) but **keeps `CameraDevice` open** and transitions to `OPENING` state. This is cheaper than a full teardown and avoids the slow device reopen on resume. `resume()` calls `startCaptureSession()` on the already-open device. If the HAL closes the device while paused, `onDisconnected` fires → `handleNonFatalError` → recovery, which is the correct response.
+**Dart-initiated pause vs background suspend:**
 
-**Automatic lifecycle pause/resume:** `CambrianCameraPlugin` registers a `DefaultLifecycleObserver` on `ProcessLifecycleOwner` (process-scoped, so config changes don't trigger spurious events). On `onPause`, all active sessions are paused; on `onResume`, all are resumed. This ensures the camera yields the hardware on app background and the watchdog only runs in the foreground.
+| | `pause()` (Dart) | `backgroundSuspend()` (lifecycle) |
+|---|---|---|
+| Trigger | Dart calls `pause()` (e.g. user navigated away from camera screen) | `ProcessLifecycleOwner.onStop` (app fully invisible) |
+| Teardown | Session only (`teardownSession()`) — `CameraDevice` stays open | Full (`teardown()`) — `CameraDevice` closed |
+| Resume | `resume()` → `startCaptureSession()` on existing device (fast) | `backgroundResume()` → `doReopenCamera()` (full reopen) |
+| State emitted | `"paused"` | `"suspended"` |
+| Sets flag | `dartPaused = true` | `backgroundSuspended = true` |
+| Camera available to other apps? | No (device held) | Yes (device fully released) |
 
-**Auto-recoverable:** `ERROR_CAMERA_DEVICE`, `ERROR_CAMERA_SERVICE`, `onDisconnected()`, `onConfigureFailed()`, `onSurfaceAvailable()` (preview rebinding).
+**Automatic lifecycle suspend/resume:** `CambrianCameraPlugin` registers a `DefaultLifecycleObserver` on `ProcessLifecycleOwner` (process-scoped, so config changes like rotation don't trigger spurious events). On `onStop`, all active sessions call `backgroundSuspend()` (full device close); on `onStart`, all call `backgroundResume()` (full device reopen). We use `onStop`/`onStart` rather than `onPause`/`onResume` because in multi-window mode an activity can be PAUSED but still fully visible — releasing the camera on `onPause` would kill the preview while the user is looking at it.
 
-**Fatal (no recovery):** `ERROR_CAMERA_DISABLED`, permission revoked, `ERROR_MAX_CAMERAS_IN_USE`.
+**`dartPaused` flag:** If Dart explicitly paused the camera before the app went to background, `backgroundResume()` skips the reopen — the camera would be streaming wastefully to a hidden screen. Dart will call `resume()` when the user navigates back to the camera screen; `resume()` detects `backgroundSuspended = true` and performs a full reopen via `doReopenCamera()`.
+
+**`CameraManager.AvailabilityCallback`:** Registered once during `open()`, unregistered on `close()`/`release()`. When the camera becomes available and the controller is in ERROR state (retries exhausted), it resets `retryCount` and triggers `doReopenCamera()`. This handles preemption recovery (incoming calls, multi-window camera sharing) where the retry loop alone cannot recover because ERROR is a terminal state.
+
+**Auto-recoverable:** `ERROR_CAMERA_DEVICE`, `ERROR_CAMERA_SERVICE`, `ERROR_CAMERA_IN_USE`, `ERROR_MAX_CAMERAS_IN_USE`, `onDisconnected()`, `onConfigureFailed()`, `onSurfaceAvailable()` (preview rebinding), `SecurityException` on `openCamera` (transient OEM keyguard bug).
+
+**Fatal (no recovery):** `ERROR_CAMERA_DISABLED` (device policy / MDM), permission revoked (`checkSelfPermission` failure).
+
+**Thread safety:** `close()` posts `teardown()` to `backgroundHandler` so it serialises with any in-flight `backgroundSuspend` or recovery work, preventing concurrent teardown on two threads.
 
 #### Self-healing behaviors
 
@@ -410,6 +426,145 @@ In addition to the session-level recovery state machine, the pipeline detects an
 | AE convergence timeout | `aeSearchingStartMs` timestamp checked per result when AE is in `SEARCHING` | >5 000 ms in SEARCHING | Emits non-fatal `aeConvergenceTimeout` error; timer resets to prevent repeated firing |
 | EOS drain timeout | `VideoRecorder.eosDrainTimedOut` flag set when 5-second drain latch expires | Single occurrence | `stopRecording()` emits non-fatal `recordingTruncated` error after returning the URI |
 | InputRing dimension mismatches | `nativeGetDimensionMismatchCount()` always returns 0 (InputRing removed) | — | Legacy diagnostic; retained for API compatibility |
+
+#### App Lifecycle Scenarios
+
+The camera pipeline must handle every way the Android OS can interrupt, suspend, or preempt the camera — and recover cleanly in each case without restarting the rest of the app.
+
+##### ① Home button / task switch / screen lock / screen off
+
+```
+User presses Home (or locks screen, or switches to another app)
+     │
+     ├── ProcessLifecycleOwner.onStop fires
+     │   └── backgroundSuspend() on each session
+     │       ├── backgroundSuspended = true
+     │       ├── cancel pending recovery retries
+     │       ├── teardown() — full CameraDevice close
+     │       └── emit "suspended" to Dart
+     │
+User returns to the app
+     │
+     ├── ProcessLifecycleOwner.onStart fires
+     │   └── backgroundResume() on each session
+     │       ├── if dartPaused → skip (Dart will call resume() when ready)
+     │       ├── backgroundSuspended = false, retryCount = 0
+     │       └── doReopenCamera() → OPENING → STREAMING
+```
+
+The camera device is fully closed while the app is invisible so that other apps (phone dialler, system camera, etc.) can acquire it. Extra startup time on reopen is acceptable; the rest of the app is unaffected.
+
+##### ② Camera preempted while app is in foreground (incoming call, multi-window)
+
+```
+Higher-priority client takes the camera (e.g. phone call overlay)
+     │
+     ├── CameraDevice.StateCallback.onDisconnected fires
+     │   └── handleNonFatalError → RECOVERING → retries with backoff
+     │
+     ├── Retries exhaust (all fail with ERROR_CAMERA_IN_USE) → ERROR (terminal)
+     │
+Phone call ends → camera hardware released
+     │
+     ├── CameraManager.AvailabilityCallback.onCameraAvailable fires
+     │   ├── state == ERROR? yes
+     │   ├── retryCount = 0
+     │   └── doReopenCamera() → OPENING → STREAMING
+```
+
+Without the `AvailabilityCallback`, the controller would be stuck in ERROR permanently. The callback provides the escape hatch from the terminal state.
+
+##### ③ backgroundResume fails because camera is still held
+
+```
+App returns to foreground while another app still holds the camera
+     │
+     ├── backgroundResume() → doReopenCamera()
+     │   └── openCamera() → ERROR_CAMERA_IN_USE → retries exhaust → ERROR
+     │
+Other app releases camera
+     │
+     ├── AvailabilityCallback.onCameraAvailable fires
+     │   └── retryCount = 0, doReopenCamera() → STREAMING
+```
+
+Same recovery path as scenario ②.
+
+##### ④ Dart-paused camera survives background round-trip
+
+```
+Dart calls pause() (user navigated away from camera screen within the app)
+     │
+     ├── dartPaused = true, session torn down, CameraDevice held
+     │
+App goes to background (user presses Home)
+     │
+     ├── backgroundSuspend() → full teardown (device closed)
+     │
+App returns to foreground
+     │
+     ├── backgroundResume() → dartPaused == true → skip reopen
+     │   (camera stays closed — no wasted streaming to a hidden screen)
+     │
+Dart calls resume() (user navigates back to camera screen)
+     │
+     ├── dartPaused = false
+     ├── backgroundSuspended still true → full reopen via doReopenCamera()
+     └── STREAMING
+```
+
+The `dartPaused` flag preserves Dart's intent across background/foreground cycles.
+
+##### ⑤ Thread-safe close() during background transitions
+
+```
+close() from Dart (main thread)               backgroundSuspend (backgroundHandler)
+     │                                              │
+     ├── released = true (volatile)                 │
+     ├── unregister AvailabilityCallback            │
+     ├── post teardown to backgroundHandler ────────┤
+     │                                              │
+     └── (backgroundHandler serialises both)        ▼
+         teardown runs exactly once, sequentially
+```
+
+`close()` posts its `teardown()` to `backgroundHandler` rather than running it inline on the main thread, so it cannot race with a concurrent `backgroundSuspend` or recovery retry.
+
+##### ⑥ SecurityException after screen unlock (OEM bug)
+
+Some OEMs throw `SecurityException` from `openCamera()` immediately after keyguard dismissal even though `checkSelfPermission()` returns `GRANTED`. All three `openCamera` call sites (initial `open()`, recovery retry, `doReopenCamera`) treat this as a non-fatal error. The recovery loop retries after backoff, and the second attempt typically succeeds.
+
+##### ⑦ Permission revoked while backgrounded
+
+```
+App is backgrounded → camera closed (backgroundSuspend)
+User revokes camera permission via Settings
+App returns to foreground
+     │
+     ├── backgroundResume() → doReopenCamera()
+     │   └── checkSelfPermission fails → handleFatalError(PERMISSION_DENIED)
+     │       └── state = ERROR, emit "error" to Dart
+```
+
+The app must re-request permission before the camera can be reopened.
+
+##### ⑧ OS kills app for memory
+
+No lifecycle callbacks are fired. The kernel reclaims all camera resources when the process dies — there is no resource leak. On relaunch, the app starts fresh (full `open()` flow).
+
+##### ⑨ Rotation
+
+- **Default (no `configChanges`):** Activity is destroyed and recreated. `ProcessLifecycleOwner` does NOT fire `onStop` for configuration changes, so the camera stays alive through the rotation.
+- **With `configChanges=orientation|screenSize`:** `onConfigurationChanged()` fires. The camera device does not need to be reopened — only the preview surface transform needs updating.
+- **180° rotation:** Neither `onConfigurationChanged` nor lifecycle callbacks fire. Use `DisplayManager.DisplayListener` to detect and update JPEG orientation.
+
+##### ⑩ Rapid background/foreground cycling
+
+All lifecycle callbacks (`backgroundSuspend`, `backgroundResume`) post work to the same `backgroundHandler`, so they execute serially regardless of how fast the user switches. If `doReopenCamera` is mid-flight when a suspend arrives, `startCaptureSession` checks `backgroundSuspended` and suppresses the session start, closing the just-opened device cleanly.
+
+##### ⑪ ERROR_MAX_CAMERAS_IN_USE
+
+Treated as non-fatal (retryable). This error simply means another app currently holds the camera. The recovery loop retries with backoff. If retries exhaust, `AvailabilityCallback` provides recovery when the camera is released (same as scenario ②).
 
 #### Preview rebinding
 
