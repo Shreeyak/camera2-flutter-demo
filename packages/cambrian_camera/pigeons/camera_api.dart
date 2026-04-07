@@ -184,6 +184,10 @@ enum CamErrorCode {
   pipelineError,       // C++ processing pipeline error
   settingsConflict,    // invalid settings combination (e.g. mixed manual/auto ISO+exposure)
   frameStall,          // GPU pipeline stopped receiving frames
+  captureFailure,      // HAL reported repeated capture failures
+  fpsDegraded,         // sustained FPS drop below acceptable threshold
+  aeConvergenceTimeout, // auto-exposure failed to converge within timeout
+  recordingTruncated,  // recording stopped but EOS drain timed out — file may be truncated
   unknown,             // catch-all; keep last
 }
 

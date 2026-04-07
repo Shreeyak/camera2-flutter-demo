@@ -262,6 +262,10 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
     if (error.code == CameraErrorCode.settingsConflict) {
       setState(() => _values = _values.copyWith(isoAuto: true, exposureAuto: true));
       _showError('Camera not ready — settings reverted to auto');
+    } else if (error.code == CameraErrorCode.fpsDegraded) {
+      _showError('FPS degraded: ${error.message}');
+    } else if (error.code == CameraErrorCode.aeConvergenceTimeout) {
+      _showError('Auto-exposure struggling — try more light or manual mode');
     }
   }
 

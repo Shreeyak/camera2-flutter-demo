@@ -6,6 +6,7 @@
 
 #include "cambrian_camera_native.h"
 
+#include <atomic>
 #include <condition_variable>
 #include <cstdint>
 #include <mutex>
@@ -52,6 +53,10 @@ public:
 
     /// Signal the processing thread to exit. Wakes any blocked pop() call.
     void shutdown();
+
+    /// Cumulative count of frames dropped due to dimension mismatch.
+    /// Atomic so it can be read from any thread without holding mu_.
+    std::atomic<int> dimensionMismatchCount_{0};
 
 private:
     int width_;

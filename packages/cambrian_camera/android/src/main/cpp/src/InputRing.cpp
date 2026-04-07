@@ -33,6 +33,7 @@ void InputRing::push(const uint8_t* y,  int yRowStride,
     if (width != width_ || height != height_) {
         LOGD("InputRing::push: dimension mismatch (%dx%d vs %dx%d), dropping frame",
              width, height, width_, height_);
+        dimensionMismatchCount_++;
         return;
     }
     if (count_ >= static_cast<int>(slots_.size())) {

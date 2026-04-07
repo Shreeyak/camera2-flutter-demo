@@ -45,6 +45,10 @@ enum CamErrorCode {
   pipelineError,
   settingsConflict,
   frameStall,
+  captureFailure,
+  fpsDegraded,
+  aeConvergenceTimeout,
+  recordingTruncated,
   unknown,
 }
 

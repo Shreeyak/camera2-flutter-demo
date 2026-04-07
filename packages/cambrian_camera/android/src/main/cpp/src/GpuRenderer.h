@@ -114,7 +114,16 @@ public:
     int trackerWidth()  const { return trackerWidth_; }
     int trackerHeight() const { return trackerHeight_; }
 
+    /// Returns true when consecutive eglSwapBuffers failures have exceeded the threshold,
+    /// indicating the preview surface is stale and should be rebound.
+    bool needsPreviewRebind() const { return consecutiveSwapFailures_ >= kSwapFailureThreshold; }
+
+    /// Reset the swap failure counter after rebinding the preview surface.
+    void clearRebindFlag() { consecutiveSwapFailures_ = 0; }
+
 private:
+    int consecutiveSwapFailures_ = 0;
+    static constexpr int kSwapFailureThreshold = 3;
     int debugLevel_ = 0;  ///< 0=errors only, 1=lifecycle, 2=periodic/perf
     int width_;
     int height_;

@@ -104,6 +104,9 @@ class VideoRecorder(private val context: Context) {
      */
     @Volatile private var drainError: Exception? = null
 
+    /** Set to true by [stop] when the EOS drain latch timed out. Read by [wasEosDrainTimedOut]. */
+    @Volatile private var eosDrainTimedOut = false
+
     // -------------------------------------------------------------------------
     // Public API
     // -------------------------------------------------------------------------
@@ -279,6 +282,7 @@ class VideoRecorder(private val context: Context) {
     fun stop(): String {
         check(state == State.RECORDING) { "stop() called in wrong state: $state" }
         state = State.STOPPING
+        eosDrainTimedOut = false
 
         val uri = outputUri
             ?: throw IllegalStateException("VideoRecorder: outputUri is null at stop()")
@@ -296,6 +300,7 @@ class VideoRecorder(private val context: Context) {
             val drained = latch.await(5, TimeUnit.SECONDS)
             if (!drained) {
                 Log.w(TAG, "VideoRecorder: EOS drain timeout, forcing stop")
+                eosDrainTimedOut = true
             }
         }
 
@@ -379,6 +384,12 @@ class VideoRecorder(private val context: Context) {
         Log.d(TAG, "stop: done, uri=$uri")
         return uri.toString()
     }
+
+    /**
+     * Returns true if the most recent [stop] call experienced an EOS drain timeout,
+     * meaning the recording may be truncated. Reset to false at the start of each [stop].
+     */
+    fun wasEosDrainTimedOut(): Boolean = eosDrainTimedOut
 
     /**
      * Releases the codec.

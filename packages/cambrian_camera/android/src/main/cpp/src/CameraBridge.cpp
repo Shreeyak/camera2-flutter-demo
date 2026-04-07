@@ -778,4 +778,43 @@ Java_com_cambrian_camera_GpuPipelineTestBridge_nativeGetLastDeliveredRgba(
     return result;
 }
 
+// ---------------------------------------------------------------------------
+// nativeGpuNeedsPreviewRebind / nativeGpuClearRebindFlag
+//
+// Polled by GpuPipeline.kt after each frame to detect stale EGL preview surfaces.
+// ---------------------------------------------------------------------------
+
+JNIEXPORT jboolean JNICALL
+Java_com_cambrian_camera_GpuPipeline_nativeGpuNeedsPreviewRebind(
+    JNIEnv*, jclass, jlong gpuHandle
+) {
+    auto* renderer = reinterpret_cast<cam::GpuRenderer*>(gpuHandle);
+    if (!renderer) return JNI_FALSE;
+    return renderer->needsPreviewRebind() ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT void JNICALL
+Java_com_cambrian_camera_GpuPipeline_nativeGpuClearRebindFlag(
+    JNIEnv*, jclass, jlong gpuHandle
+) {
+    auto* renderer = reinterpret_cast<cam::GpuRenderer*>(gpuHandle);
+    if (renderer) renderer->clearRebindFlag();
+}
+
+// ---------------------------------------------------------------------------
+// nativeGetDimensionMismatchCount
+//
+// Returns the cumulative InputRing dimension mismatch counter from the
+// ImagePipeline. Polled in the heartbeat to detect resolution negotiation bugs.
+// ---------------------------------------------------------------------------
+
+JNIEXPORT jint JNICALL
+Java_com_cambrian_camera_GpuPipeline_nativeGetDimensionMismatchCount(
+    JNIEnv*, jclass, jlong pipelineHandle
+) {
+    auto* pipeline = reinterpret_cast<cam::ImagePipeline*>(pipelineHandle);
+    if (!pipeline) return 0;
+    return pipeline->getDimensionMismatchCount();
+}
+
 } // extern "C"

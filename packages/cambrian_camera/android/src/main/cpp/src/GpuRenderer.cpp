@@ -283,9 +283,12 @@ void GpuRenderer::drawAndReadback(
             if (!eglSwapBuffers(eglDisplay_, eglWindowSurface_)) {
                 EGLint err = eglGetError();
                 LOGE("drawAndReadback: eglSwapBuffers (processed) failed: 0x%x", err);
+                consecutiveSwapFailures_++;
                 if (err == EGL_BAD_SURFACE || err == EGL_BAD_NATIVE_WINDOW) {
                     eglWindowSurface_ = EGL_NO_SURFACE;
                 }
+            } else {
+                consecutiveSwapFailures_ = 0;
             }
         }
 
