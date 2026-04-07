@@ -373,14 +373,13 @@ Implemented in `CameraController.kt`.
                     │ OPENING  │
                     └────┬─────┘
                          │ camera opened + session configured
-                    ┌────▼──────┐
-              ┌────►│ STREAMING │◄────────────────┐
-              │     └────┬──────┘                  │
-              │          │ error detected           │
-              │     ┌────▼───────┐                 │
-              │     │ RECOVERING │─────────────────┘
-              │     └────┬───────┘  success (retry)
-              │          │ max retries exceeded
+                    ┌────▼──────┐      pause()      ┌────────┐
+              ┌────►│ STREAMING │──────────────────►│ PAUSED │
+              │     └────┬──────┘                   └───┬────┘
+              │          │ error detected    resume()    │
+              │     ┌────▼───────┐                 ┌────▼─────┐
+              │     │ RECOVERING │                 │ OPENING  │
+              │     └────┬───────┘─────────────────┘(re-open) │
               │     ┌────▼─────┐
               │     │  ERROR   │  (fatal — app must close/reopen)
               │     └──────────┘
@@ -389,6 +388,8 @@ Implemented in `CameraController.kt`.
 ```
 
 **Recovery behavior:** Exponential backoff (500ms → 1s → 2s → 4s → max 8s). After 5 failures: fatal error, state = ERROR.
+
+**PAUSED vs CLOSED:** `pause()` releases Camera2 resources (device, session, GPU pipeline) but keeps the `CameraController` instance alive (no `released=true`, background thread stays running). `resume()` re-runs `open()` with the cached `resolvedCameraId` and `pendingSettings`. This is faster than a full close/reopen cycle and is the correct response to Android app lifecycle events (minimize, screen lock, task switch).
 
 **Auto-recoverable:** `ERROR_CAMERA_DEVICE`, `ERROR_CAMERA_SERVICE`, `onDisconnected()`, `onConfigureFailed()`, `onSurfaceAvailable()` (preview rebinding).
 
