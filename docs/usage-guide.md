@@ -574,6 +574,10 @@ camera.errorStream.listen((error) {
 | `pipelineError` | No | C++ processing error |
 | `settingsConflict` | No | Invalid settings combination — see note below |
 | `frameStall` | No | GPU pipeline stopped receiving frames (>3 s with no frame) |
+| `captureFailure` | No | HAL reported 5+ consecutive `REASON_ERROR` failures; recovery triggered automatically |
+| `fpsDegraded` | No | Sustained FPS below 15 for 3+ consecutive heartbeat intervals (~3 s) |
+| `aeConvergenceTimeout` | No | Auto-exposure stuck in `SEARCHING` for >5 s |
+| `recordingTruncated` | No | EOS drain timed out during `stopRecording()`; saved file may be incomplete |
 | `permissionDenied` | **Yes** | Camera permission revoked |
 | `cameraDisabled` | **Yes** | Camera disabled by system policy |
 | `maxCamerasInUse` | **Yes** | Too many cameras open in the system |

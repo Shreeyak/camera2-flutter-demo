@@ -284,6 +284,10 @@ enum CamErrorCode {
   pipelineError,         // C++ processing pipeline error
   settingsConflict,      // invalid settings combination
   frameStall,            // GPU pipeline stopped receiving frames
+  captureFailure,        // HAL reported repeated capture failures (self-healed)
+  fpsDegraded,           // sustained FPS below 15 for 3+ heartbeats
+  aeConvergenceTimeout,  // auto-exposure stuck in SEARCHING >5 s
+  recordingTruncated,    // EOS drain timed out; recording file may be incomplete
   unknown,               // catch-all; keep last
 }
 
@@ -390,6 +394,19 @@ Implemented in `CameraController.kt`.
 
 **Fatal (no recovery):** `ERROR_CAMERA_DISABLED`, permission revoked, `ERROR_MAX_CAMERAS_IN_USE`.
 
+#### Self-healing behaviors
+
+In addition to the session-level recovery state machine, the pipeline detects and responds to subtler degraded states without tearing down the session. All emit non-fatal errors to Dart via `errorStream` so the app can surface feedback when appropriate.
+
+| Fault | Detector | Threshold | Response |
+|-------|----------|-----------|----------|
+| Repeated HAL capture failures | `onCaptureFailed(REASON_ERROR)` counter in `repeatingCaptureCallback` | 5 consecutive | Calls `handleNonFatalError(CAPTURE_FAILURE)` → enters existing recovery state machine; emits `captureFailure` error |
+| Stale EGL preview surface | `GpuRenderer.consecutiveSwapFailures_` polled by `GpuPipeline` after each frame | 3 consecutive swap failures | `onPreviewRebindNeeded` callback → `CameraController` rebinds surface via `GpuPipeline.rebindPreviewSurface()`; emits nothing (transparent) |
+| FPS degradation | `SENSOR_FRAME_DURATION` checked in heartbeat (every 30 results, `verboseDiagnostics` gate) | FPS < 15 for 3 heartbeats | Emits non-fatal `fpsDegraded` error to Dart |
+| AE convergence timeout | `aeSearchingStartMs` timestamp checked per result when AE is in `SEARCHING` | >5 000 ms in SEARCHING | Emits non-fatal `aeConvergenceTimeout` error; timer resets to prevent repeated firing |
+| EOS drain timeout | `VideoRecorder.eosDrainTimedOut` flag set when 5-second drain latch expires | Single occurrence | `stopRecording()` emits non-fatal `recordingTruncated` error after returning the URI |
+| InputRing dimension mismatches | `InputRing.dimensionMismatchCount_` atomic counter, polled via `nativeGetDimensionMismatchCount()` | Non-zero count at heartbeat | Logged as warning; informational only — no auto-recovery |
+
 #### Preview rebinding
 
 When `SurfaceProducer` is invalidated (hot restart, activity recreation):
@@ -440,7 +457,7 @@ Dart stopRecording()
 | Start fails (state invalid, codec init) | Emit error immediately | `RecordingState.error` |
 | Disk full during drain | Store exception, rethrow on `stop()` | `RecordingState.error` |
 | Muxer failure on `stop()` | Delete pending entry, rethrow | `RecordingState.error` |
-| EOS drain timeout (5 sec) | Force stop, continue cleanup | `RecordingState.idle` (best-effort) |
+| EOS drain timeout (5 sec) | Force stop, continue cleanup; emit non-fatal `recordingTruncated` error | `RecordingState.idle` (best-effort) |
 | Force-stop during teardown | Emit error, delete or finalize entry | `RecordingState.error` |
 
 #### Threading model
