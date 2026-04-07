@@ -7,37 +7,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```bash
 flutter pub get              # Install dependencies
 flutter run                 # Run app (will prompt for device selection)
-flutter run -d <device_id>  # Run on specific device/emulator
+flutter build apk --debug   # Build debug APK (verification)
+flutter test                # Run all tests
+flutter analyze             # Run Dart analyzer
 ```
 
-## Building & Running
-
-**Development:**
-```bash
-flutter run                    # Debug mode (default)
-flutter run -d chrome         # Run on web (requires web support)
-flutter run --release        # Release mode
-```
-
-**Android:**
-```bash
-flutter build apk            # Build APK
-flutter build appbundle      # Build App Bundle for Play Store
-```
-
-**iOS:**
-```bash
-flutter build ios            # Build iOS app
-flutter build ipa            # Build IPA for App Store
-```
-
-## Testing & Linting
-
-```bash
-flutter test                 # Run all tests in test/ directory
-flutter analyze              # Run Dart analyzer (uses flutter_lints rules)
-dart format lib/            # Format code to match Flutter conventions
-```
+**Never use `--release`** for builds or `flutter run`. Debug builds are sufficient for verification and avoid release-signing complications.
 
 ## Project Structure
 
@@ -61,17 +36,16 @@ Use the `camera2-docs` skill when looking up Camera2 API details while coding.
 
 ## Living Documents
 
-These two files must be kept up to date whenever the architecture or public API changes:
+Read these before making changes to the plugin internals:
 
-- **`docs/architecture.md`** — plugin architecture, data flow, component relationships. Update when adding/removing components, changing how data flows between Kotlin/C++/Dart layers, or restructuring the pipeline.
-- **`docs/usage-guide.md`** — public API and usage patterns for consumers of the library. Update when the Dart API changes, new streams or parameters are added, or usage patterns change.
+- **`docs/architecture.md`** — plugin architecture, data flow, component relationships. **Read before modifying any Kotlin or C++ file.**
+- **`docs/usage-guide.md`** — public API and usage patterns. **Read before modifying Dart-facing APIs.**
 
-After implementing any architectural change, review both files and update any sections that are no longer accurate.
+Keep both files up to date whenever the architecture or public API changes.
 
 ## Important Notes
 
 - This is a Flutter demo project for the camera2 library
-- **Preview layout**: The app shows dual previews (raw + processed) for debugging. Most users will need only the tone-mapped stream; remove the raw preview by deleting it from the `Row` in `main.dart`. Use `StreamBuilder<CameraTextureInfo>` with the `toneMappedTexture` or `rawTexture` streams to bind texture data to Flutter's `Texture` widget. See `packages/cambrian_camera/README.md` for usage examples.
 - Platform-specific implementations belong in `android/` and `ios/` directories
 - Follow Flutter style conventions enforced by `flutter_lints`
 - Do not use wildcard imports; always import explicit symbols
@@ -79,16 +53,6 @@ After implementing any architectural change, review both files and update any se
   - **Kotlin/Java:** no wildcard imports (e.g. avoid `import x.y.*`)
 - Use `flutter pub get` after modifying `pubspec.yaml`
 - Always create a todo list to track progress and remain on track
-- **Diagrams in chat**: Use ASCII flow diagrams inside code blocks. Prefer the numbered-branch style with Unicode box-drawing characters (`│`, `├──`, `└──`, `►`) and circled digits (①②③) for steps. Example style:
-  ```text
-  Input
-       │
-       ├──① Step one
-       │
-       ├──② Step two ──────────────────► Output A
-       │
-       └──③ Step three ─────────────────► Output B
-  ```
 
 ## Pigeon Codegen
 
@@ -114,8 +78,38 @@ Replace `<OPENCV_ANDROID_SDK_PATH>` with the absolute path to your OpenCV Androi
 
 Run this once per worktree clone. The symlink is git-ignored. Without it, the NDK build will fail with a missing `OpenCV_DIR` error.
 
-## Useful Flutter Commands
+## CameraController Threading Model
 
-- `flutter doctor` — Verify Flutter setup
-- `flutter devices` — List available devices/emulators
-- `flutter pub upgrade` — Update dependencies to latest versions
+`CameraController.kt` uses two `Handler` threads with strict rules:
+
+- **`backgroundHandler`** — All Camera2 operations (open, configure, capture, teardown). The capture callback, stall watchdog, and recovery logic all run here. Any new method that touches Camera2 state (`captureSession`, `cameraDevice`, surfaces, `state` enum) must wrap its body in `backgroundHandler.post { ... }`.
+- **`mainHandler`** — All Dart/Flutter callbacks (`flutterApi.*`, `emitState()`, Pigeon callbacks). Never call Pigeon APIs from `backgroundHandler` directly.
+
+**Pattern for new public methods:**
+```kotlin
+fun myMethod(callback: (Result<Unit>) -> Unit) {
+    backgroundHandler.post {
+        // ... Camera2 work ...
+        mainHandler.post { callback(Result.success(Unit)) }
+    }
+}
+```
+
+Reference: `backgroundSuspend()`, `backgroundResume()`, `close()`. Never call `teardown()` directly from the main thread.
+
+## Key Internal State (CameraController.kt)
+
+| Field | Type | Purpose |
+|-------|------|---------|
+| `state` | `State` enum | Lifecycle: CLOSED, OPENING, STREAMING, RECOVERING |
+| `gpuPipeline` | `GpuPipeline?` | GPU processing pipeline; manages OpenGL surfaces |
+| `videoRecorder` | `VideoRecorder?` | MediaRecorder wrapper for video capture |
+| `isRecording` | `Boolean` | Guards recording teardown in `pause()` and `teardown()` |
+| `lastCaptureResultMs` | `Long` | Monotonic timestamp for stall detection |
+
+## Rules for AI Agents
+
+- **Never leave TODOs for required behavior.** If a plan says to call an API and you can't find it, search broadly (`grep -r` across `packages/cambrian_camera/`). Only report NEEDS_CONTEXT after exhaustive search. Do not comment out calls or stub them.
+- **Match surrounding patterns.** Find 2-3 similar functions and match their threading, error handling, and state notification patterns. Code samples in plans are sketches — the codebase is the source of truth for HOW to implement.
+- **State notifications are mandatory.** Any path that changes camera, recording, or error state MUST notify Dart via `flutterApi.*` posted on `mainHandler`.
+- **Verify before claiming "doesn't exist."** Fields may be far from your edit site in a large file.
