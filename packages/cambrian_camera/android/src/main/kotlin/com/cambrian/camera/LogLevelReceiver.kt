@@ -3,6 +3,7 @@ package com.cambrian.camera
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ApplicationInfo
 import android.util.Log
 
 /**
@@ -25,6 +26,10 @@ import android.util.Log
  */
 class LogLevelReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
+        if (context.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE == 0) {
+            Log.w(TAG, "SET_LOG_LEVEL broadcast ignored in release build")
+            return
+        }
         val level = intent.getIntExtra("level", -1)
         if (level < 0) {
             Log.w(TAG, "SET_LOG_LEVEL: missing or invalid 'level' extra")
