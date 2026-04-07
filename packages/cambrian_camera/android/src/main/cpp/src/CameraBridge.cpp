@@ -98,8 +98,14 @@ extern "C" {
 JNIEXPORT jlong JNICALL
 Java_com_cambrian_camera_CameraController_nativeInit(
         JNIEnv* /*env*/, jclass /*clazz*/) {
-    auto* pipeline = new cam::ImagePipeline();
-    LOGD("nativeInit: pipeline=%p", pipeline);
+    cam::ImagePipeline* pipeline = nullptr;
+    try {
+        pipeline = new cam::ImagePipeline();
+    } catch (...) {
+        LOGE("nativeInit: failed to create ImagePipeline");
+        return 0;
+    }
+    LOGD("nativeInit: pipeline created at %p", pipeline);
     return static_cast<jlong>(reinterpret_cast<uintptr_t>(pipeline));
 }
 
