@@ -505,7 +505,7 @@ class CameraController(
      * without marking the controller as released. The instance can be resumed
      * with [resume].
      *
-     * Emits a [CameraState.PAUSED] state event.
+     * Emits a "paused" state event to Dart.
      */
     fun pause(callback: (Result<Unit>) -> Unit) {
         if (state != State.STREAMING) {
