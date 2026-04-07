@@ -93,11 +93,23 @@ class CambrianCameraPlugin : FlutterPlugin, ActivityAware, CameraHostApi {
     private val lifecycleObserver = object : DefaultLifecycleObserver {
         override fun onStop(owner: LifecycleOwner) {
             Log.i(TAG, "ProcessLifecycle onStop — suspending ${sessions.size} session(s)")
-            sessions.values.forEach { it.controller.backgroundSuspend { } }
+            sessions.values.forEach { session ->
+                session.controller.backgroundSuspend { result ->
+                    result.exceptionOrNull()?.let { e ->
+                        Log.e(TAG, "backgroundSuspend failed for session ${session.producer.id()}", e)
+                    }
+                }
+            }
         }
         override fun onStart(owner: LifecycleOwner) {
             Log.i(TAG, "ProcessLifecycle onStart — resuming ${sessions.size} session(s)")
-            sessions.values.forEach { it.controller.backgroundResume { } }
+            sessions.values.forEach { session ->
+                session.controller.backgroundResume { result ->
+                    result.exceptionOrNull()?.let { e ->
+                        Log.e(TAG, "backgroundResume failed for session ${session.producer.id()}", e)
+                    }
+                }
+            }
         }
     }
 
