@@ -129,7 +129,6 @@ static bool waitFence(GLsync& fence, const char* label) {
     }
     if (result == GL_TIMEOUT_EXPIRED) {
         // DMA not done yet — wait up to 8ms before giving up
-        LOGW("PBO fence stall: %s — waiting up to 8ms", label);
         result = glClientWaitSync(fence, GL_SYNC_FLUSH_COMMANDS_BIT, 8'000'000);
         if (result == GL_TIMEOUT_EXPIRED) {
             LOGE("PBO fence timeout after 8ms: %s — skipping readback", label);
@@ -359,13 +358,13 @@ void GpuRenderer::drawAndReadback(
 
     // -----------------------------------------------------------------------
     // 5. Issue async PBO readbacks (GPU→PBO DMA, no CPU stall)
-    //    Wrap all readPixels calls with a GL_TIME_ELAPSED_EXT query to measure
+    //    Wrap processed-path readPixels calls with a GL_TIME_ELAPSED_EXT query to measure
     //    how long the GPU spent setting up the DMA transfer.
     //    Insert explicit GL sync fences after each readback so we can wait on
     //    them precisely before mapping (see step 6).
     // -----------------------------------------------------------------------
 
-    glBeginQuery(GL_TIME_ELAPSED_EXT, timeQuery_[writeIdx]);
+    if (hasTimerQuery_) glBeginQuery(GL_TIME_ELAPSED_EXT, timeQuery_[writeIdx]);
 
     // Full-res readback
     glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo_);
@@ -384,7 +383,7 @@ void GpuRenderer::drawAndReadback(
     checkGlError("PBO readback tracker");
 
     glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
-    glEndQuery(GL_TIME_ELAPSED_EXT);
+    if (hasTimerQuery_) glEndQuery(GL_TIME_ELAPSED_EXT);
 
     // Store metadata for the frame whose readback was just issued
     pboMeta_[writeIdx] = {frameId, meta};
@@ -406,7 +405,7 @@ void GpuRenderer::drawAndReadback(
         // Use 32-bit variant (GLES3 does not expose glGetQueryObjectui64v);
         // a GLuint holds up to ~4.3s in nanoseconds — sufficient for per-frame DMA timing.
         GLuint dmaEnqueueNs32 = 0;
-        glGetQueryObjectuiv(timeQuery_[readIdx], GL_QUERY_RESULT, &dmaEnqueueNs32);
+        if (hasTimerQuery_) glGetQueryObjectuiv(timeQuery_[readIdx], GL_QUERY_RESULT, &dmaEnqueueNs32);
         const double dmaEnqueueNs = static_cast<double>(dmaEnqueueNs32);
 
         // Wait on fences; measure CPU stall time.
@@ -425,7 +424,7 @@ void GpuRenderer::drawAndReadback(
                  100.0 * stallCount_ / frameCount_);
         }
 
-        if (frameCount_ % 300 == 0) {  // every ~10s at 30fps
+        if (debugLevel_ >= 1 && frameCount_ % 300 == 0) {  // every ~10s at 30fps
             LOGI("PBO diagnostics: dma_enqueue=%.2f ms  stall_rate=%.1f%%  "
                  "stalls=%" PRIu64 "/%" PRIu64,
                  dmaEnqueueNs / 1e6,
@@ -840,8 +839,15 @@ bool GpuRenderer::initGl() {
     checkGlError("tracker PBOs");
 
     // --- Timing queries (double-buffered GL_TIME_ELAPSED_EXT) ---
-    glGenQueries(2, timeQuery_);
-    checkGlError("timing queries");
+    // Only allocate queries when the extension is actually available.
+    {
+        const char* exts = reinterpret_cast<const char*>(glGetString(GL_EXTENSIONS));
+        hasTimerQuery_ = exts && strstr(exts, "GL_EXT_disjoint_timer_query");
+    }
+    if (hasTimerQuery_) {
+        glGenQueries(2, timeQuery_);
+        checkGlError("timing queries");
+    }
 
     // --- Raw stream resources (only when raw dimensions were set in initEgl) ---
     if (rawW_ > 0 && rawH_ > 0) {
@@ -923,17 +929,19 @@ bool GpuRenderer::initGl() {
 
 void GpuRenderer::releaseGl() {
     // Log lifetime stall summary before teardown
-    LOGI("GpuRenderer teardown: total frames=%" PRIu64 "  pbo_stalls=%" PRIu64
-         "  stall_rate=%.1f%%",
-         frameCount_, stallCount_,
-         frameCount_ > 0 ? 100.0 * stallCount_ / frameCount_ : 0.0);
+    if (debugLevel_ > 0) {
+        LOGI("GpuRenderer teardown: total frames=%" PRIu64 "  pbo_stalls=%" PRIu64
+             "  stall_rate=%.1f%%",
+             frameCount_, stallCount_,
+             frameCount_ > 0 ? 100.0 * stallCount_ / frameCount_ : 0.0);
+    }
 
     // Delete explicit fences and timing queries
     for (int i = 0; i < 2; ++i) {
         if (fullResFence_[i])  { glDeleteSync(fullResFence_[i]);     fullResFence_[i]  = nullptr; }
         if (trackerFence_[i])  { glDeleteSync(trackerFence_[i]);     trackerFence_[i]  = nullptr; }
         if (rawFence_[i])      { glDeleteSync(rawFence_[i]);          rawFence_[i]      = nullptr; }
-        if (timeQuery_[i])     { glDeleteQueries(1, &timeQuery_[i]);  timeQuery_[i]     = 0; }
+        if (hasTimerQuery_ && timeQuery_[i]) { glDeleteQueries(1, &timeQuery_[i]);  timeQuery_[i] = 0; }
     }
 
     // Raw stream resources
