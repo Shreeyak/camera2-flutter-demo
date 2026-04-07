@@ -21,8 +21,22 @@ internal class SettingsStore(context: Context) {
     // CamSettings
     // -----------------------------------------------------------------
 
-    /** Returns true if settings have ever been persisted. */
-    fun hasSavedSettings(): Boolean = prefs.contains(KEY_ISO_MODE)
+    /** Returns true if any camera setting has been persisted. */
+    fun hasSavedSettings(): Boolean =
+        prefs.contains(KEY_ISO_MODE) ||
+            prefs.contains(KEY_ISO) ||
+            prefs.contains(KEY_EXPOSURE_MODE) ||
+            prefs.contains(KEY_EXPOSURE_TIME_NS) ||
+            prefs.contains(KEY_FOCUS_MODE) ||
+            prefs.contains(KEY_FOCUS_DISTANCE) ||
+            prefs.contains(KEY_WB_MODE) ||
+            prefs.contains(KEY_WB_GAIN_R) ||
+            prefs.contains(KEY_WB_GAIN_G) ||
+            prefs.contains(KEY_WB_GAIN_B) ||
+            prefs.contains(KEY_ZOOM_RATIO) ||
+            prefs.contains(KEY_NOISE_REDUCTION) ||
+            prefs.contains(KEY_EDGE_MODE) ||
+            prefs.contains(KEY_EV_COMPENSATION)
 
     fun saveSettings(s: CamSettings) {
         prefs.edit()
