@@ -16,9 +16,15 @@ enum CameraState {
   /// The app may show a "reconnecting…" indicator.
   recovering,
 
-  /// Camera resources are released but the instance is alive.
-  /// Call [CambrianCamera.resume] to restart streaming with the same configuration.
+  /// Camera session is paused (Dart-initiated). The [CameraDevice] is still
+  /// held open for fast resume. Call [CambrianCamera.resume] to restart.
   paused,
+
+  /// Camera is fully released because the app moved to the background
+  /// (process [onStop]). The device is closed so other apps can use it.
+  /// The library will automatically reopen when the app returns to the
+  /// foreground, or when Dart calls [CambrianCamera.resume].
+  suspended,
 
   /// A fatal error occurred. The app must call [CambrianCamera.close] and
   /// optionally reopen the camera.
@@ -30,6 +36,7 @@ enum CameraState {
         'streaming' => streaming,
         'recovering' => recovering,
         'paused' => paused,
+        'suspended' => suspended,
         'error' => error,
         _ => error,
       };
