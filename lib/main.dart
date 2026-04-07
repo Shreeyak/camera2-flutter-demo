@@ -172,8 +172,9 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
       final camera = await CambrianCamera.open(
         settings: _kInitialSettings,
       );
-      // Default parameters (all identity values).
-      final initialParams = ProcessingParams();
+      // Restore processing params from previous session, or use identity defaults.
+      final persisted = await camera.getPersistedProcessingParams();
+      final initialParams = persisted ?? ProcessingParams();
       await camera.setProcessingParams(initialParams);
       final caps = camera.capabilities;
       final ranges = CameraRanges(
@@ -195,7 +196,7 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
         _camera = camera;
         _ranges = ranges;
         _values = CameraSettingsValues.fromSettings(_kInitialSettings, ranges);
-        _processingParams = initialParams; // sidebar sliders reflect the initial values
+        _processingParams = initialParams; // sidebar sliders reflect persisted or default values
       });
       _frameResultSub = camera.frameResultStream.listen(_onFrameResult);
       _errorSub = camera.errorStream.listen(_onCameraError);

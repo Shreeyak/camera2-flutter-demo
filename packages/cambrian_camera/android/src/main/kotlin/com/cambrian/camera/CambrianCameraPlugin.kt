@@ -74,20 +74,30 @@ class CambrianCameraPlugin : FlutterPlugin, ActivityAware, CameraHostApi {
     private var activity: Activity? = null
 
     /**
-     * Observes the process lifecycle to pause/resume all camera sessions automatically
-     * when the app goes to the background or returns to the foreground.
+     * Observes the process lifecycle to fully release / reacquire the camera device when the
+     * app moves to the background or returns to the foreground.
      *
      * [ProcessLifecycleOwner] is process-scoped, so configuration changes (e.g. rotation)
-     * do not trigger spurious pause/resume events.
+     * do not trigger spurious suspend/resume events.
+     *
+     * We hook [onStop]/[onStart] rather than [onPause]/[onResume]:
+     * - In multi-window mode an activity can be PAUSED but still fully visible; releasing the
+     *   camera in onPause would kill the preview while the user is looking at it.
+     * - [onStop] fires only when the activity is fully invisible (home button, task switch,
+     *   screen lock), which is the right moment to give up the camera so other apps can use it.
+     *
+     * [CameraController.backgroundSuspend] does a full device close (not just session teardown),
+     * so the camera hardware is available to the phone dialler, system camera, etc. while we are
+     * in the background. [CameraController.backgroundResume] performs a full reopen on return.
      */
     private val lifecycleObserver = object : DefaultLifecycleObserver {
-        override fun onPause(owner: LifecycleOwner) {
-            Log.i(TAG, "ProcessLifecycle onPause — pausing ${sessions.size} session(s)")
-            sessions.values.forEach { it.controller.pause { } }
+        override fun onStop(owner: LifecycleOwner) {
+            Log.i(TAG, "ProcessLifecycle onStop — suspending ${sessions.size} session(s)")
+            sessions.values.forEach { it.controller.backgroundSuspend { } }
         }
-        override fun onResume(owner: LifecycleOwner) {
-            Log.i(TAG, "ProcessLifecycle onResume — resuming ${sessions.size} session(s)")
-            sessions.values.forEach { it.controller.resume { } }
+        override fun onStart(owner: LifecycleOwner) {
+            Log.i(TAG, "ProcessLifecycle onStart — resuming ${sessions.size} session(s)")
+            sessions.values.forEach { it.controller.backgroundResume { } }
         }
     }
 
@@ -309,6 +319,11 @@ class CambrianCameraPlugin : FlutterPlugin, ActivityAware, CameraHostApi {
             return
         }
         controller.getNativePipelineHandle(callback)
+    }
+
+    override fun getPersistedProcessingParams(handle: Long): CamProcessingParams? {
+        val controller = sessions[handle]?.controller ?: return null
+        return controller.getPersistedProcessingParams()
     }
 
     /**

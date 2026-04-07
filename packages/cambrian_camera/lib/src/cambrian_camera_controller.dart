@@ -302,6 +302,24 @@ class CambrianCamera {
     return _hostApi.setProcessingParams(_handle, params.toCam());
   }
 
+  /// Returns processing params persisted from a previous session, or null if none exist.
+  ///
+  /// Call after [open] to initialize slider UI with the user's last-known values
+  /// instead of overwriting persisted state with defaults.
+  Future<ProcessingParams?> getPersistedProcessingParams() async {
+    final cam = await _hostApi.getPersistedProcessingParams(_handle);
+    if (cam == null) return null;
+    return ProcessingParams(
+      blackR: cam.blackR,
+      blackG: cam.blackG,
+      blackB: cam.blackB,
+      gamma: cam.gamma,
+      brightness: cam.brightness,
+      contrast: cam.contrast,
+      saturation: cam.saturation,
+    );
+  }
+
   /// Captures a high-quality still image and returns its file path.
   ///
   /// Uses a dedicated JPEG ImageReader pre-allocated at session setup time.

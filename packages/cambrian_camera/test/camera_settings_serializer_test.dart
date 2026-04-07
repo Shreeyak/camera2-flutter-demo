@@ -295,6 +295,8 @@ void main() {
       expect(CameraState.fromString('opening'), CameraState.opening);
       expect(CameraState.fromString('streaming'), CameraState.streaming);
       expect(CameraState.fromString('recovering'), CameraState.recovering);
+      expect(CameraState.fromString('paused'), CameraState.paused);
+      expect(CameraState.fromString('suspended'), CameraState.suspended);
       expect(CameraState.fromString('error'), CameraState.error);
     });
 

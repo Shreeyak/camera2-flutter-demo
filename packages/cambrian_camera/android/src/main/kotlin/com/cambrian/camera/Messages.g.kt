@@ -486,6 +486,13 @@ interface CameraHostApi {
   fun pause(handle: Long, callback: (Result<Unit>) -> Unit)
   fun resume(handle: Long, callback: (Result<Unit>) -> Unit)
   /**
+   * Returns persisted processing params from a previous session, or null if none exist.
+   *
+   * Dart should call this after [open] to initialize slider UI with the user's last-known
+   * values instead of sending default zeros that would overwrite the persisted state.
+   */
+  fun getPersistedProcessingParams(handle: Long): CamProcessingParams?
+  /**
    * Returns the current display rotation in degrees CW from portrait: 0, 90, 180, or 270.
    *
    * Used by Dart preview widgets to select the correct [RotatedBox.quarterTurns]
@@ -718,6 +725,23 @@ interface CameraHostApi {
                 reply.reply(wrapResult(null))
               }
             }
+          }
+        } else {
+          channel.setMessageHandler(null)
+        }
+      }
+      run {
+        val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.cambrian_camera.CameraHostApi.getPersistedProcessingParams$separatedMessageChannelSuffix", codec)
+        if (api != null) {
+          channel.setMessageHandler { message, reply ->
+            val args = message as List<Any?>
+            val handleArg = args[0] as Long
+            val wrapped: List<Any?> = try {
+              listOf(api.getPersistedProcessingParams(handleArg))
+            } catch (exception: Throwable) {
+              wrapError(exception)
+            }
+            reply.reply(wrapped)
           }
         } else {
           channel.setMessageHandler(null)

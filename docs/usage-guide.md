@@ -140,24 +140,23 @@ Future<void> pause()
 Future<void> resume()
 ```
 
-`pause()` releases Camera2 resources (device, session, GPU pipeline) while keeping the `CambrianCamera` instance alive. The camera state transitions to `CameraState.paused`. `resume()` reopens the camera with the original configuration, transitioning through `opening` back to `streaming`.
+`pause()` tears down the capture session and GPU pipeline but keeps the `CameraDevice` open for fast restart. The camera state transitions to `CameraState.paused`. `resume()` restarts the capture session on the already-open device, transitioning through `opening` back to `streaming`.
 
 - `pause()` is a no-op if the camera is not streaming.
-- `resume()` is a no-op if the camera is not in the paused state.
-- These are the correct methods to call from `didChangeAppLifecycleState` (see App Lifecycle section below).
+- `resume()` is a no-op if the camera is not in the paused state (unless the app was backgrounded while paused — see below).
+- Use these for **in-app navigation** (e.g. switching away from the camera screen while the app stays in the foreground).
+
+**Background lifecycle is automatic.** You do **not** need to call `pause()`/`resume()` from `didChangeAppLifecycleState`. The plugin registers a `ProcessLifecycleOwner` observer that fully releases the camera device when the app goes to the background (`onStop`) and reopens it when the app returns (`onStart`). This ensures other apps can use the camera while yours is invisible.
+
+If Dart calls `pause()` and the app then goes to background, the plugin remembers the Dart-paused intent. On foreground return, the camera is **not** automatically reopened — Dart must call `resume()` when it is ready for frames (e.g. when the user navigates back to the camera screen). `resume()` detects that the device was fully closed during the background cycle and performs a full reopen.
 
 ```dart
-@override
-void didChangeAppLifecycleState(AppLifecycleState state) {
-  switch (state) {
-    case AppLifecycleState.paused:
-    case AppLifecycleState.hidden: // screen locked or covered on Android 14+
-      _camera?.pause();
-    case AppLifecycleState.resumed:
-      _camera?.resume();
-    default:
-      break;
-  }
+// In-app navigation example:
+void onLeaveCameraScreen() {
+  _camera?.pause();   // fast: session-only teardown
+}
+void onReturnToCameraScreen() {
+  _camera?.resume();  // fast if app stayed foreground; full reopen if backgrounded
 }
 ```
 
@@ -407,6 +406,24 @@ camera.setProcessingParams(ProcessingParams(
 ));
 ```
 
+#### `camera.getPersistedProcessingParams()`
+
+```dart
+Future<ProcessingParams?> getPersistedProcessingParams()
+```
+
+Returns processing params persisted from a previous session, or `null` on first run. Call this after `open()` to initialize your UI (e.g. slider positions) with the user's last-known values instead of sending default zeros that would overwrite the persisted state.
+
+```dart
+final camera = await CambrianCamera.open();
+final persisted = await camera.getPersistedProcessingParams();
+final params = persisted ?? ProcessingParams();
+await camera.setProcessingParams(params);
+// Initialize slider UI with `params`
+```
+
+See [Settings Persistence](#settings-persistence) for full details.
+
 ---
 
 ### Still Capture
@@ -557,8 +574,9 @@ camera.stateStream.listen((state) {
 | `opening` | Initializing (opening device, configuring session) |
 | `streaming` | Actively delivering frames |
 | `recovering` | Non-fatal error occurred; auto-recovering with exponential backoff |
-| `paused` | Resources released; instance alive — call `resume()` to restart |
-| `error` | Fatal error; app must call `close()` and optionally reopen |
+| `paused` | Dart-initiated pause (in-app navigation). Session torn down, device still held. Call `resume()` to restart |
+| `suspended` | App moved to background. Camera device fully released so other apps can use it. Automatically reopens on foreground return (unless Dart-paused) |
+| `error` | Fatal error, or retries exhausted. Automatically recovers when the camera becomes available again (via `AvailabilityCallback`). Call `close()` to give up permanently |
 
 #### `camera.errorStream`
 
@@ -1096,12 +1114,15 @@ The plugin manages everything below the Dart API line. Your app interacts only w
 
 The plugin handles transient camera errors internally:
 
-1. Non-fatal error detected (device error, disconnect, config failure)
+1. Non-fatal error detected (device error, disconnect, config failure, camera in use)
 2. State transitions to `recovering` (visible via `stateStream`)
 3. Resources torn down, then retry with exponential backoff (500ms, 1s, 2s, 4s, 8s)
-4. After 5 failed retries, state transitions to `error` (fatal)
+4. After 5 failed retries, state transitions to `error`
+5. When the camera becomes available again (e.g. phone call ends, other app releases it), a `CameraManager.AvailabilityCallback` automatically triggers a fresh recovery from `error` — no app restart needed
 
-Your app does not need to implement retry logic. Just listen to `stateStream` and show appropriate UI feedback during `recovering`.
+Your app does not need to implement retry logic. Just listen to `stateStream` and show appropriate UI feedback during `recovering`. Even `error` state is not permanent — the plugin recovers automatically when the camera hardware is free.
+
+The only truly fatal error is `ERROR_CAMERA_DISABLED` (device policy / MDM), which requires admin intervention.
 
 ---
 
@@ -1114,6 +1135,72 @@ The plugin uses two different strategies depending on the parameter type:
 **ProcessingParams (C++ pipeline)** — Fire-and-forget. A direct pass-through to native code. The next frame picks up the new values atomically. No queuing.
 
 You can safely call `updateSettings()` on every slider tick without worrying about request accumulation or losing other settings.
+
+---
+
+## App Lifecycle
+
+The plugin automatically manages the camera across all Android lifecycle transitions. **No manual lifecycle code is needed in your app.**
+
+### What happens automatically
+
+| Event | Plugin behavior | State emitted |
+|-------|----------------|---------------|
+| Home button / task switch / screen lock | Full `CameraDevice` close (other apps can use camera) | `suspended` |
+| App returns to foreground | Full device reopen with previous settings | `opening` → `streaming` |
+| Incoming call preempts camera | Recovery retries with backoff; `AvailabilityCallback` recovers from `error` | `recovering` → `error` → `opening` |
+| Another app takes camera (multi-window) | Same as incoming call | `recovering` → `error` → `opening` |
+| OS kills app for memory | Kernel reclaims resources; no leak | (fresh start) |
+| Screen rotation | Camera stays alive (ProcessLifecycleOwner ignores config changes) | (no change) |
+
+### Dart-paused + background round-trip
+
+If your app calls `pause()` (e.g. user navigated to a settings screen) and the app then goes to background:
+
+1. The plugin fully closes the camera device (emits `suspended`)
+2. On foreground return, the plugin sees Dart had paused — it does **not** reopen
+3. When Dart calls `resume()`, a full reopen happens automatically
+
+This prevents wasteful streaming to a screen the user isn't looking at.
+
+### What your app should do
+
+- Listen to `stateStream` for UI feedback (show "Camera paused" overlay during `suspended`, "Reconnecting..." during `recovering`)
+- Use `pause()` / `resume()` only for in-app navigation (leave/return to camera screen)
+- Do **not** call `pause()`/`resume()` from `didChangeAppLifecycleState` — the plugin handles this
+
+---
+
+## Settings Persistence
+
+Both `CameraSettings` (ISP parameters) and `ProcessingParams` (GPU shader adjustments) are automatically persisted to `SharedPreferences` on every change. This means:
+
+- Settings survive a full process kill (OS reclaims memory, user force-stops the app)
+- On the next app start, `open()` restores the persisted ISP settings (zoom, focus mode, exposure mode, WB, etc.) and applies them to the first `CaptureRequest`
+- Processing params (brightness, contrast, saturation, gamma, black levels) are also restored
+
+### Restoring processing params in your UI
+
+After `open()`, call `getPersistedProcessingParams()` to get the user's last-known values. Use these to initialize your slider UI:
+
+```dart
+final camera = await CambrianCamera.open(settings: myInitialSettings);
+
+// Restore persisted GPU params (or use defaults on first run).
+final persisted = await camera.getPersistedProcessingParams();
+final params = persisted ?? ProcessingParams();
+await camera.setProcessingParams(params);
+
+setState(() {
+  _processingParams = params;  // sliders show correct values
+});
+```
+
+If you skip this step and send `ProcessingParams()` (all defaults), the persisted values are overwritten and the user's adjustments are lost.
+
+### ISP settings persistence
+
+ISP settings (`CameraSettings`) are persisted and restored automatically inside `open()`. The incoming settings from Dart are merged with persisted values: incoming non-null fields take priority, persisted values fill in unspecified fields.
 
 ---
 
