@@ -28,7 +28,8 @@ namespace cam {
 class GpuRenderer {
 public:
     /// Construct with stream dimensions. Does not allocate GL resources.
-    GpuRenderer(int width, int height);
+    /// @param debugLevel  0=errors only, 1=lifecycle, 2=periodic/perf
+    GpuRenderer(int width, int height, int debugLevel = 0);
     ~GpuRenderer();
 
     // Non-copyable, non-movable.
@@ -114,6 +115,7 @@ public:
     int trackerHeight() const { return trackerHeight_; }
 
 private:
+    int debugLevel_ = 0;  ///< 0=errors only, 1=lifecycle, 2=periodic/perf
     int width_;
     int height_;
     int trackerWidth_;

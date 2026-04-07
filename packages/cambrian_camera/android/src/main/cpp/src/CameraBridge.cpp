@@ -106,7 +106,8 @@ JNIEXPORT jlong JNICALL
 Java_com_cambrian_camera_CameraController_nativeInit(
         JNIEnv* env, jclass /*clazz*/,
         jobject previewSurface,
-        jint width, jint height) {
+        jint width, jint height,
+        jint debugLevel) {
     ANativeWindow* window = nullptr;
     if (previewSurface) {
         window = ANativeWindow_fromSurface(env, previewSurface);
@@ -120,7 +121,8 @@ Java_com_cambrian_camera_CameraController_nativeInit(
     try {
         pipeline = new cam::ImagePipeline(window,
                                           static_cast<int>(width),
-                                          static_cast<int>(height));
+                                          static_cast<int>(height),
+                                          static_cast<int>(debugLevel));
     } catch (const std::exception& e) {
         LOGE("nativeInit: ImagePipeline construction failed: %s", e.what());
         if (window) ANativeWindow_release(window);
@@ -325,9 +327,11 @@ Java_com_cambrian_camera_GpuPipeline_nativeGpuInit(
         jobject previewSurface,
         jint width, jint height,
         jobject rawPreviewSurface,
-        jint rawW, jint rawH) {
+        jint rawW, jint rawH,
+        jint debugLevel) {
     auto* renderer = new cam::GpuRenderer(static_cast<int>(width),
-                                          static_cast<int>(height));
+                                          static_cast<int>(height),
+                                          static_cast<int>(debugLevel));
 
     ANativeWindow* nativeWindow = nullptr;
     if (previewSurface) {

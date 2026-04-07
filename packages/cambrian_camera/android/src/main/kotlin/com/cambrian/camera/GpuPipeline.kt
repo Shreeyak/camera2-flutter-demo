@@ -85,18 +85,14 @@ open class GpuPipeline(
         val latch = CountDownLatch(1)
         glHandler.post {
             // 1. Initialize GpuRenderer (creates EGL context, FBOs, PBOs, shader).
-            if (CambrianCameraConfig.debugDataFlow) {
-                Log.i(TAG, "Initializing GpuPipeline: ${width}x${height}, raw: ${rawW}x${rawH}")
-            }
-            gpuHandle = nativeGpuInit(previewSurface, width, height, rawPreviewSurface, rawW, rawH)
+            Log.i(TAG, "Initializing GpuPipeline: ${width}x${height}, raw: ${rawW}x${rawH}")
+            gpuHandle = nativeGpuInit(previewSurface, width, height, rawPreviewSurface, rawW, rawH, computeDebugLevel())
             if (gpuHandle == 0L) {
                 Log.e(TAG, "nativeGpuInit failed")
                 latch.countDown()
                 return@post
             }
-            if (CambrianCameraConfig.debugDataFlow) {
-                Log.i(TAG, "GpuPipeline initialized successfully")
-            }
+            Log.i(TAG, "GpuPipeline initialized successfully")
 
             // 2. Generate an OES texture name in the now-active GL context.
             val texNames = IntArray(1)
@@ -278,17 +274,24 @@ open class GpuPipeline(
         init {
             try {
                 System.loadLibrary("cambrian_camera")
-            } catch (_: UnsatisfiedLinkError) {
-                // Library not available in JVM unit tests; JNI calls will throw at runtime
-                // if invoked without the native library loaded.
+            } catch (e: UnsatisfiedLinkError) {
+                Log.w("CC/Gpu", "Native library not loaded (expected in JVM unit tests): ${e.message}")
             }
         }
 
         @JvmStatic
         external fun nativeGpuInit(
             previewSurface: Surface?, width: Int, height: Int,
-            rawPreviewSurface: Surface?, rawW: Int, rawH: Int
+            rawPreviewSurface: Surface?, rawW: Int, rawH: Int,
+            debugLevel: Int
         ): Long
+
+        fun computeDebugLevel(): Int = when {
+            CambrianCameraConfig.verboseFullResult -> 2
+            CambrianCameraConfig.debugDataFlow -> 2
+            CambrianCameraConfig.verboseDiagnostics -> 1
+            else -> 0
+        }
 
         @JvmStatic
         external fun nativeGpuRelease(gpuHandle: Long)

@@ -10,6 +10,7 @@ import android.hardware.camera2.CameraCaptureSession
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraDevice
 import android.hardware.camera2.CameraManager
+import android.hardware.camera2.CaptureFailure
 import android.hardware.camera2.CaptureRequest
 import android.hardware.camera2.CaptureResult
 import android.hardware.camera2.TotalCaptureResult
@@ -75,7 +76,7 @@ class CameraController(
         }
 
         /** Initialises the native pipeline and pre-allocates the input ring for the given dims. */
-        @JvmStatic external fun nativeInit(previewSurface: Surface?, width: Int, height: Int): Long
+        @JvmStatic external fun nativeInit(previewSurface: Surface?, width: Int, height: Int, debugLevel: Int): Long
 
         // YUV layout constants — kept in sync with InputRing.h.
         const val YUV_FORMAT_UNKNOWN = 0
@@ -225,6 +226,13 @@ class CameraController(
 
     /** Capture-result counter used for periodic diagnostics. */
     @Volatile private var captureResultCount: Long = 0L
+
+    // Accessed only from backgroundHandler thread via CaptureCallback — no synchronization needed.
+    /** Per-interval capture failure counter (reset after each heartbeat). */
+    private var captureFailureCount = 0L
+
+    /** Per-interval buffer-lost counter (reset after each heartbeat). */
+    private var bufferLostCount = 0L
 
     // 3A state tracking for Tier 1 state-change logs
     @Volatile private var lastAeState: Int? = null
@@ -392,8 +400,12 @@ class CameraController(
                     override fun onOpened(camera: CameraDevice) {
                         openLock.release()
                         cameraDevice = camera
+                        if (retryCount > 0) {
+                            Log.i("CC/Cam", "device reopened after recovery (retries=$retryCount)")
+                        } else {
+                            Log.i("CC/Cam", "device opened")
+                        }
                         retryCount = 0 // Reset backoff counter on successful open.
-                        Log.i("CC/Cam", "device opened")
                         startCaptureSession(safeCallback)
                     }
 
@@ -933,6 +945,8 @@ class CameraController(
 
         val (streamFormat, streamWidth, streamHeight) = resolveStreamFormat(device)
         captureResultCount = 0L
+        captureFailureCount = 0L
+        bufferLostCount = 0L
         detectedYuvFormat = YUV_FORMAT_UNKNOWN
 
         previewWidth = streamWidth
@@ -957,7 +971,7 @@ class CameraController(
 
         // Pass null: ImagePipeline is used only for sink dispatch in the GPU path.
         // GpuRenderer owns the preview surface via EGL.
-        nativePipelinePtr = nativeInit(null, streamWidth, streamHeight)
+        nativePipelinePtr = nativeInit(null, streamWidth, streamHeight, GpuPipeline.computeDebugLevel())
         if (nativePipelinePtr == 0L) {
             Log.e("CC/Cam", "startCaptureSession: nativeInit failed — aborting session startup")
             jpegImageReader = null
@@ -1043,7 +1057,8 @@ class CameraController(
                     }
 
                     override fun onConfigureFailed(session: CameraCaptureSession) {
-                        Log.e("CC/Cam", "session configure failed")
+                        val surfaceDesc = surfaces.joinToString { describeTargetSurface(it) }
+                        Log.e("CC/Cam", "session configure failed: surfaces=[$surfaceDesc] preview=${previewWidth}×${previewHeight}")
                         handleNonFatalError(CamErrorCode.CONFIGURATION_FAILED, "CaptureSession configuration failed")
                         mainHandler.post {
                             openCallback(
@@ -1387,6 +1402,8 @@ class CameraController(
         jpegImageReader = null
         repeatingTargetSurface = null
         captureResultCount = 0L
+        captureFailureCount = 0L
+        bufferLostCount = 0L
         detectedYuvFormat = YUV_FORMAT_UNKNOWN
         lastKnownIso = null
         lastKnownExposureTimeNs = null
@@ -1588,11 +1605,45 @@ class CameraController(
                 // Tier 2 — Heartbeat (gated, every 30 results)
                 if (CambrianCameraConfig.verboseDiagnostics && captureResultCount % 30L == 0L) {
                     val fps = result.get(CaptureResult.SENSOR_FRAME_DURATION)?.let { "%.1f".format(1_000_000_000.0 / it) } ?: "?"
-                    Log.d("CC/3A", "[HB #$captureResultCount] fps=$fps  ae=${aeStateName(newAeState)} iso=${result.get(CaptureResult.SENSOR_SENSITIVITY)} exp=${fmtExpMs(result.get(CaptureResult.SENSOR_EXPOSURE_TIME))}  af=${afStateName(newAfState)} focus=${result.get(CaptureResult.LENS_FOCUS_DISTANCE)?.let { "${it}D" } ?: "-"}  awb=${awbStateName(newAwbState)}")
+                    Log.d("CC/3A", "[HB #$captureResultCount] fps=$fps  ae=${aeStateName(newAeState)} iso=${result.get(CaptureResult.SENSOR_SENSITIVITY)} exp=${fmtExpMs(result.get(CaptureResult.SENSOR_EXPOSURE_TIME))}  af=${afStateName(newAfState)} focus=${result.get(CaptureResult.LENS_FOCUS_DISTANCE)?.let { "${it}D" } ?: "-"}  awb=${awbStateName(newAwbState)}  capFail=$captureFailureCount bufLost=$bufferLostCount")
+                    captureFailureCount = 0L
+                    bufferLostCount = 0L
                 }
                 if (CambrianCameraConfig.verboseFullResult && captureResultCount % 30L == 0L) {
                     Log.d("CC/3A", "[FULL #$captureResultCount] $result")
                 }
+            }
+
+            override fun onCaptureFailed(
+                session: CameraCaptureSession,
+                request: CaptureRequest,
+                failure: CaptureFailure,
+            ) {
+                val reason = when (failure.reason) {
+                    CaptureFailure.REASON_ERROR -> "ERROR"
+                    CaptureFailure.REASON_FLUSHED -> "FLUSHED"
+                    else -> "UNKNOWN(${failure.reason})"
+                }
+                Log.w("CC/Cam", "capture failed: reason=$reason frame=${failure.frameNumber}")
+                captureFailureCount++
+            }
+
+            override fun onCaptureBufferLost(
+                session: CameraCaptureSession,
+                request: CaptureRequest,
+                target: Surface,
+                frameNumber: Long,
+            ) {
+                val surfaceName = describeTargetSurface(target)
+                Log.w("CC/Cam", "buffer lost: surface=$surfaceName frame=$frameNumber")
+                bufferLostCount++
+            }
+
+            override fun onCaptureSequenceAborted(
+                session: CameraCaptureSession,
+                sequenceId: Int,
+            ) {
+                Log.w("CC/Cam", "capture sequence aborted: seq=$sequenceId")
             }
         }
 

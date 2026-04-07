@@ -56,7 +56,8 @@ using SharedFrame = std::shared_ptr<Frame>;
 class ImagePipeline : public IImagePipeline {
 public:
     /// Construct with a preview window and stream dimensions for InputRing pre-allocation.
-    ImagePipeline(ANativeWindow* window, int width, int height);
+    /// @param debugLevel  0=errors only, 1=lifecycle, 2=periodic/perf
+    ImagePipeline(ANativeWindow* window, int width, int height, int debugLevel = 0);
 
     /// Shuts down processing thread and all consumer threads, releases the window.
     ~ImagePipeline() override;
@@ -103,6 +104,8 @@ public:
     void removeSink(const std::string& name) override;
 
 private:
+    int debugLevel_ = 0;  ///< 0=errors only, 1=lifecycle, 2=periodic/perf
+
     // -- Preview windows ---------------------------------------------------------
     std::mutex windowMu_;
     ANativeWindow* previewWindow_    = nullptr;  ///< processed output (post-saturation)

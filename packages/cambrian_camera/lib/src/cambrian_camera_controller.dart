@@ -287,6 +287,7 @@ class CambrianCamera {
   /// Uses latest-value-wins: rapid calls do not pile up stale requests.
   /// The change takes effect on the next Camera2 capture request.
   Future<void> updateSettings(CameraSettings settings) async {
+    if (kDebugMode) debugPrint('CC/Dart: updateSettings handle=$_handle $settings');
     _serializer.send(settings);
   }
 
@@ -296,8 +297,10 @@ class CambrianCamera {
   /// finishes. Callers may await it to observe channel errors, or ignore it
   /// for fire-and-forget semantics. No queuing is applied; the new parameters
   /// are picked up on the next processed frame.
-  Future<void> setProcessingParams(ProcessingParams params) =>
-      _hostApi.setProcessingParams(_handle, params.toCam());
+  Future<void> setProcessingParams(ProcessingParams params) {
+    if (kDebugMode) debugPrint('CC/Dart: setProcessingParams handle=$_handle $params');
+    return _hostApi.setProcessingParams(_handle, params.toCam());
+  }
 
   /// Captures a high-quality still image and returns its file path.
   ///
@@ -323,15 +326,21 @@ class CambrianCamera {
     final raw = await _hostApi.startRecording(_handle, outputDirectory, fileName, bitrate, fps);
     // Split on the first '|' only — the display name may itself contain '|'.
     final separatorIndex = raw.indexOf('|');
+    final uri = raw.substring(0, separatorIndex == -1 ? raw.length : separatorIndex);
+    if (kDebugMode) debugPrint('CC/Dart: startRecording handle=$_handle → $uri');
     if (separatorIndex == -1) return (raw, '');
-    return (raw.substring(0, separatorIndex), raw.substring(separatorIndex + 1));
+    return (uri, raw.substring(separatorIndex + 1));
   }
 
   /// Stops recording and finalizes the MP4. Returns the content URI of the finalized file.
   ///
   /// Recording state changes are delivered via [recordingStateStream].
   /// Throws [PlatformException] if no recording is in progress.
-  Future<String> stopRecording() => _hostApi.stopRecording(_handle);
+  Future<String> stopRecording() async {
+    final uri = await _hostApi.stopRecording(_handle);
+    if (kDebugMode) debugPrint('CC/Dart: stopRecording handle=$_handle → $uri');
+    return uri;
+  }
 
   /// Returns the native `IImagePipeline*` pointer as an int64, or null if the
   /// pipeline is not yet initialized.
@@ -395,6 +404,7 @@ class CambrianCamera {
   }
 
   void _onRecordingStateChanged(String state) {
+    if (kDebugMode) debugPrint('CC/Dart: recordingState=$state handle=$_handle');
     _recordingStateController.add(RecordingState.fromString(state));
   }
 }

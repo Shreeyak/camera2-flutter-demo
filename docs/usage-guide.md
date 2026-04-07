@@ -1081,3 +1081,43 @@ The plugin uses two different strategies depending on the parameter type:
 **ProcessingParams (C++ pipeline)** — Fire-and-forget. A direct pass-through to native code. The next frame picks up the new values atomically. No queuing.
 
 You can safely call `updateSettings()` on every slider tick without worrying about request accumulation or losing other settings.
+
+---
+
+## Debugging
+
+### Log filtering
+
+All plugin log tags share a `CC/` prefix. Filter with:
+
+```bash
+adb logcat | grep "CC/"
+```
+
+Key tags: `CC/Cam` (camera lifecycle, capture failures), `CC/3A` (3A state + heartbeat), `CC/Gpu` (GPU pipeline), `CC/Dart` (Dart layer, debug builds only).
+
+### Runtime log-level toggling
+
+Increase log verbosity in the field without rebuilding by sending an ADB broadcast:
+
+```bash
+adb shell am broadcast -a com.cambrian.camera.SET_LOG_LEVEL --ei level 2
+```
+
+| Level | Effect |
+|-------|--------|
+| 0 | Quiet — errors and lifecycle transitions only |
+| 1 | Default — adds `verboseSettings` and `verboseDiagnostics` (3A heartbeat every 30 frames) |
+| 2 | Verbose — adds `debugDataFlow` (C++ perf logs, GPU frame counter) |
+| 3 | Full — adds `verboseFullResult` (full `TotalCaptureResult` dump every 30 frames) |
+
+**Limitation:** Runtime toggling takes effect immediately for Kotlin-side logging (CameraController, GpuPipeline). C++ components (`ImagePipeline`, `GpuRenderer`) receive their log level once at pipeline construction; changing the level after construction has no effect on C++ output. To change C++ log verbosity, restart the pipeline (`close()` then `open()` on `CambrianCamera`).
+
+### Diagnostic string representations
+
+`CameraSettings` and `ProcessingParams` both implement `toString()` that summarizes non-null / non-identity fields. These appear automatically in `CC/Dart` log lines:
+
+```
+CC/Dart: updateSettings handle=1 CameraSettings(iso=manual(400), focus=auto)
+CC/Dart: setProcessingParams handle=1 ProcessingParams(black=[0.0,0.0,0.0] gamma=1.2 brightness=0.1 contrast=0.0 saturation=0.0)
+```
