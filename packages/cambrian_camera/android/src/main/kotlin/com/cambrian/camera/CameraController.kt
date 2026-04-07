@@ -652,6 +652,27 @@ class CameraController(
     }
 
     /**
+     * Pauses the camera session by tearing down Camera2 resources without closing the controller.
+     *
+     * If a recording is in progress it is stopped first to avoid leaving the recorder running
+     * with no incoming frames. Emits a "paused" state event to Dart after teardown completes.
+     */
+    fun pause() {
+        if (isRecording) {
+            Log.w("CC/Cam", "[$handle] auto-stopping recording before pause")
+            isRecording = false
+            gpuPipeline?.setEncoderSurface(null)
+            try { videoRecorder?.stop() } catch (e: Exception) {
+                Log.w("CC/Cam", "recording stop on pause failed: ${e.message}")
+            }
+            mainHandler.post { flutterApi.onRecordingStateChanged(handle, "idle") {} }
+        }
+        teardown()
+        emitState("paused")
+        setState(State.CLOSED)
+    }
+
+    /**
      * Queries [CameraCharacteristics] and returns real hardware capabilities.
      *
      * Reports the three largest JPEG output sizes, sensor sensitivity and exposure ranges,
@@ -1586,21 +1607,12 @@ class CameraController(
         backgroundHandler.removeCallbacks(stallWatchdog)
 
         // Stop any active recording before tearing down the session.
-        // Offload the blocking drain wait to backgroundHandler so close()/release() callers
-        // are not stalled for up to 5 seconds on the main/plugin thread.
         if (isRecording) {
+            Log.w("CC/Cam", "[$handle] stopping active recording during teardown")
             isRecording = false
             gpuPipeline?.setEncoderSurface(null)
-            val recorderToStop = videoRecorder
-            if (recorderToStop != null) {
-                backgroundHandler.post {
-                    try { recorderToStop.stop() } catch (e: Exception) {
-                        Log.w("CC/Cam", "teardown: error stopping recording: ${e.message}")
-                    }
-                    mainHandler.post { flutterApi.onRecordingStateChanged(handle, "error") {} }
-                }
-            } else {
-                mainHandler.post { flutterApi.onRecordingStateChanged(handle, "error") {} }
+            try { videoRecorder?.stop() } catch (e: Exception) {
+                Log.w("CC/Cam", "recording stop on teardown failed: ${e.message}")
             }
         }
 
@@ -1807,6 +1819,38 @@ class CameraController(
 
     private val repeatingCaptureCallback =
         object : CameraCaptureSession.CaptureCallback() {
+            override fun onCaptureFailed(
+                session: CameraCaptureSession,
+                request: CaptureRequest,
+                failure: CaptureFailure,
+            ) {
+                val reason = when (failure.reason) {
+                    CaptureFailure.REASON_ERROR -> "ERROR"
+                    CaptureFailure.REASON_FLUSHED -> "FLUSHED"
+                    else -> "UNKNOWN(${failure.reason})"
+                }
+                Log.w("CC/Cam", "[$handle] capture failed: reason=$reason frame=${failure.frameNumber}")
+                captureFailureCount++
+
+                // Ignore additional HAL failures while already recovering — they would enqueue
+                // duplicate recovery retries that each delay and re-open the camera.
+                if (state == State.RECOVERING) {
+                    Log.d("CC/Cam", "[$handle] ignoring HAL capture failure while already recovering")
+                    return
+                }
+
+                // Trigger recovery on repeated HAL errors; REASON_FLUSHED is expected during
+                // teardown and does not indicate a degraded HAL state.
+                if (failure.reason == CaptureFailure.REASON_ERROR) {
+                    consecutiveHalErrors++
+                    if (consecutiveHalErrors >= HAL_ERROR_THRESHOLD) {
+                        Log.w("CC/Cam", "HAL error threshold reached ($consecutiveHalErrors consecutive failures), triggering recovery")
+                        consecutiveHalErrors = 0
+                        handleNonFatalError(CamErrorCode.CAPTURE_FAILURE, "Repeated HAL capture failures")
+                    }
+                }
+            }
+
             override fun onCaptureCompleted(
                 session: CameraCaptureSession,
                 request: CaptureRequest,
@@ -1816,6 +1860,7 @@ class CameraController(
                 consecutiveHalErrors = 0
                 // Update stall watchdog timestamp so it knows frames are still arriving.
                 lastCaptureResultMs = android.os.SystemClock.elapsedRealtime()
+
 
                 // Always track the latest sensor values so that switching to manual mode
                 // can seed the partner field with the last live AE value.
@@ -1928,31 +1973,6 @@ class CameraController(
                 }
                 if (CambrianCameraConfig.verboseFullResult && captureResultCount % 30L == 0L) {
                     Log.d("CC/3A", "[FULL #$captureResultCount] $result")
-                }
-            }
-
-            override fun onCaptureFailed(
-                session: CameraCaptureSession,
-                request: CaptureRequest,
-                failure: CaptureFailure,
-            ) {
-                val reason = when (failure.reason) {
-                    CaptureFailure.REASON_ERROR -> "ERROR"
-                    CaptureFailure.REASON_FLUSHED -> "FLUSHED"
-                    else -> "UNKNOWN(${failure.reason})"
-                }
-                Log.w("CC/Cam", "capture failed: reason=$reason frame=${failure.frameNumber}")
-                captureFailureCount++
-
-                // Trigger recovery on repeated HAL errors; REASON_FLUSHED is expected during
-                // teardown and does not indicate a degraded HAL state.
-                if (failure.reason == CaptureFailure.REASON_ERROR) {
-                    consecutiveHalErrors++
-                    if (consecutiveHalErrors >= HAL_ERROR_THRESHOLD) {
-                        Log.w("CC/Cam", "HAL error threshold reached ($consecutiveHalErrors consecutive failures), triggering recovery")
-                        consecutiveHalErrors = 0
-                        handleNonFatalError(CamErrorCode.CAPTURE_FAILURE, "Repeated HAL capture failures")
-                    }
                 }
             }
 
