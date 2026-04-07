@@ -296,6 +296,16 @@ open class GpuPipeline(
             debugLevel: Int
         ): Long
 
+        /**
+         * Backward-compatible overload used by instrumentation tests.
+         * Delegates to the 7-argument form with [debugLevel] defaulting to 0.
+         */
+        @JvmStatic
+        fun nativeGpuInit(
+            previewSurface: Surface?, width: Int, height: Int,
+            rawPreviewSurface: Surface?, rawW: Int, rawH: Int
+        ): Long = nativeGpuInit(previewSurface, width, height, rawPreviewSurface, rawW, rawH, 0)
+
         fun computeDebugLevel(): Int = when {
             CambrianCameraConfig.verboseFullResult -> 2
             CambrianCameraConfig.debugDataFlow -> 2

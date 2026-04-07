@@ -77,6 +77,16 @@ class CameraController(
         /** Initialises the native ImagePipeline and returns an opaque handle. */
         @JvmStatic external fun nativeInit(): Long
 
+        /**
+         * Backward-compatible overload used by instrumentation tests.
+         * The [previewSurface], [width], and [height] parameters are accepted for API
+         * compatibility but are not forwarded to the native layer (the pipeline is
+         * headless at init time; surfaces are bound later via [GpuPipeline.nativeGpuInit]).
+         */
+        @JvmStatic
+        fun nativeInit(previewSurface: android.view.Surface?, width: Int, height: Int): Long =
+            nativeInit()
+
         /** Releases all resources held by the native pipeline. */
         @JvmStatic external fun nativeRelease(pipelinePtr: Long)
 
