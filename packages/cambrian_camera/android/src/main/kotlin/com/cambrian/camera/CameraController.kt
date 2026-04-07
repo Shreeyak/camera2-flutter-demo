@@ -1887,25 +1887,12 @@ class CameraController(
                     lastAwbState = newAwbState
                 }
 
-                // Tier 2 — Heartbeat (gated, every 30 results)
-                if (CambrianCameraConfig.verboseDiagnostics && captureResultCount % 30L == 0L) {
+                // Tier 2 — Heartbeat (every 30 results)
+                if (captureResultCount % 30L == 0L) {
                     val frameDuration = result.get(CaptureResult.SENSOR_FRAME_DURATION)
                     val fpsValue = frameDuration?.let { 1_000_000_000.0 / it }
-                    val fps = fpsValue?.let { "%.1f".format(it) } ?: "?"
-                    Log.d("CC/3A", "[HB #$captureResultCount] fps=$fps  ae=${aeStateName(newAeState)} iso=${result.get(CaptureResult.SENSOR_SENSITIVITY)} exp=${fmtExpMs(result.get(CaptureResult.SENSOR_EXPOSURE_TIME))}  af=${afStateName(newAfState)} focus=${result.get(CaptureResult.LENS_FOCUS_DISTANCE)?.let { "${it}D" } ?: "-"}  awb=${awbStateName(newAwbState)}  capFail=$captureFailureCount bufLost=$bufferLostCount")
-                    captureFailureCount = 0L
-                    bufferLostCount = 0L
 
-                    // InputRing dimension mismatch count (Step 6).
-                    val ptr = nativePipelinePtr
-                    if (ptr != 0L) {
-                        val mismatches = GpuPipeline.nativeGetDimensionMismatchCount(ptr)
-                        if (mismatches > 0) {
-                            Log.w("CC/Cam", "InputRing dimension mismatches: $mismatches since last heartbeat")
-                        }
-                    }
-
-                    // FPS degradation detection (Step 3).
+                    // FPS degradation detection (always runs, regardless of verboseDiagnostics).
                     if (fpsValue != null && fpsValue < LOW_FPS_THRESHOLD) {
                         lowFpsStreak++
                         if (lowFpsStreak == LOW_FPS_STREAK_LIMIT) {
@@ -1920,6 +1907,23 @@ class CameraController(
                         }
                     } else {
                         lowFpsStreak = 0
+                    }
+
+                    // Verbose heartbeat log (gated).
+                    if (CambrianCameraConfig.verboseDiagnostics) {
+                        val fps = fpsValue?.let { "%.1f".format(it) } ?: "?"
+                        Log.d("CC/3A", "[HB #$captureResultCount] fps=$fps  ae=${aeStateName(newAeState)} iso=${result.get(CaptureResult.SENSOR_SENSITIVITY)} exp=${fmtExpMs(result.get(CaptureResult.SENSOR_EXPOSURE_TIME))}  af=${afStateName(newAfState)} focus=${result.get(CaptureResult.LENS_FOCUS_DISTANCE)?.let { "${it}D" } ?: "-"}  awb=${awbStateName(newAwbState)}  capFail=$captureFailureCount bufLost=$bufferLostCount")
+                        captureFailureCount = 0L
+                        bufferLostCount = 0L
+
+                        // InputRing dimension mismatch count (Step 6).
+                        val ptr = nativePipelinePtr
+                        if (ptr != 0L) {
+                            val mismatches = GpuPipeline.nativeGetDimensionMismatchCount(ptr)
+                            if (mismatches > 0) {
+                                Log.w("CC/Cam", "InputRing dimension mismatches: $mismatches since last heartbeat")
+                            }
+                        }
                     }
                 }
                 if (CambrianCameraConfig.verboseFullResult && captureResultCount % 30L == 0L) {
