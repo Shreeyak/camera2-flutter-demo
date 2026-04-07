@@ -154,7 +154,7 @@ class CameraController(
     // -------------------------------------------------------------------------
 
     /** Internal camera lifecycle state. */
-    private enum class State { CLOSED, OPENING, STREAMING, RECOVERING, ERROR }
+    private enum class State { CLOSED, OPENING, STREAMING, RECOVERING, PAUSED, ERROR }
 
     @Volatile private var state: State = State.CLOSED
 
@@ -482,6 +482,32 @@ class CameraController(
      *
      * @param callback Invoked with [Result.success] after resources are released.
      */
+    fun pause(callback: (Result<Unit>) -> Unit) {
+        if (state != State.STREAMING) {
+            callback(Result.success(Unit))
+            return
+        }
+        teardown()
+        // NOTE: do NOT set released=true and do NOT quit backgroundThread — instance stays alive
+        emitState("paused")
+        setState(State.PAUSED)
+        callback(Result.success(Unit))
+    }
+
+    fun resume(callback: (Result<Unit>) -> Unit) {
+        if (state != State.PAUSED) {
+            callback(Result.success(Unit))
+            return
+        }
+        // Re-use the camera ID and settings cached from the original open() call
+        open(resolvedCameraId, pendingSettings) { result ->
+            result.fold(
+                onSuccess = { callback(Result.success(Unit)) },
+                onFailure = { callback(Result.failure(it)) },
+            )
+        }
+    }
+
     fun close(callback: (Result<Unit>) -> Unit) {
         released = true
         teardown()

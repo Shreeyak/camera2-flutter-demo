@@ -483,6 +483,8 @@ interface CameraHostApi {
   fun startRecording(handle: Long, outputDirectory: String?, fileName: String?, bitrate: Long?, fps: Long?, callback: (Result<String>) -> Unit)
   fun stopRecording(handle: Long, callback: (Result<String>) -> Unit)
   fun close(handle: Long, callback: (Result<Unit>) -> Unit)
+  fun pause(handle: Long, callback: (Result<Unit>) -> Unit)
+  fun resume(handle: Long, callback: (Result<Unit>) -> Unit)
   /**
    * Returns the current display rotation in degrees CW from portrait: 0, 90, 180, or 270.
    *
@@ -671,6 +673,44 @@ interface CameraHostApi {
             val args = message as List<Any?>
             val handleArg = args[0] as Long
             api.close(handleArg) { result: Result<Unit> ->
+              val error = result.exceptionOrNull()
+              if (error != null) {
+                reply.reply(wrapError(error))
+              } else {
+                reply.reply(wrapResult(null))
+              }
+            }
+          }
+        } else {
+          channel.setMessageHandler(null)
+        }
+      }
+      run {
+        val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.cambrian_camera.CameraHostApi.pause$separatedMessageChannelSuffix", codec)
+        if (api != null) {
+          channel.setMessageHandler { message, reply ->
+            val args = message as List<Any?>
+            val handleArg = args[0] as Long
+            api.pause(handleArg) { result: Result<Unit> ->
+              val error = result.exceptionOrNull()
+              if (error != null) {
+                reply.reply(wrapError(error))
+              } else {
+                reply.reply(wrapResult(null))
+              }
+            }
+          }
+        } else {
+          channel.setMessageHandler(null)
+        }
+      }
+      run {
+        val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.cambrian_camera.CameraHostApi.resume$separatedMessageChannelSuffix", codec)
+        if (api != null) {
+          channel.setMessageHandler { message, reply ->
+            val args = message as List<Any?>
+            val handleArg = args[0] as Long
+            api.resume(handleArg) { result: Result<Unit> ->
               val error = result.exceptionOrNull()
               if (error != null) {
                 reply.reply(wrapError(error))

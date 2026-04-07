@@ -355,6 +355,20 @@ class CambrianCamera {
   ///
   /// After this call the instance must not be used again.
   /// Safe to call multiple times; subsequent calls are no-ops.
+  /// Pauses the camera: releases Camera2 resources but keeps the instance alive.
+  /// Call [resume] to restart streaming with the same configuration.
+  /// No-op if the camera is not currently streaming.
+  Future<void> pause() async {
+    if (_closed) return;
+    await _hostApi.pause(_handle);
+  }
+
+  /// Resumes a paused camera. No-op if not in the paused state.
+  Future<void> resume() async {
+    if (_closed) return;
+    await _hostApi.resume(_handle);
+  }
+
   Future<void> close() async {
     if (_closed) return;
     if (kDebugMode) debugPrint('CC/Dart: close handle=$_handle');

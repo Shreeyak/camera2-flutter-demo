@@ -369,6 +369,27 @@ class CambrianCameraPlugin : FlutterPlugin, ActivityAware, CameraHostApi {
      * @param callback Invoked with [Result.success] on success, or [Result.failure] if the
      *   handle is not found.
      */
+    override fun pause(handle: Long, callback: (Result<Unit>) -> Unit) {
+        Log.i(TAG, "pause handle=$handle")
+        val controller = sessions[handle]?.controller ?: run {
+            callback(Result.failure(FlutterError("invalid_handle", "No camera for handle $handle", null)))
+            return
+        }
+        controller.pause(callback)
+    }
+
+    override fun resume(handle: Long, callback: (Result<Unit>) -> Unit) {
+        Log.i(TAG, "resume handle=$handle")
+        val controller = sessions[handle]?.controller ?: run {
+            callback(Result.failure(FlutterError("invalid_handle", "No camera for handle $handle", null)))
+            return
+        }
+        controller.resume { result ->
+            result.onSuccess { callback(Result.success(Unit)) }
+            result.onFailure { callback(Result.failure(it)) }
+        }
+    }
+
     override fun close(handle: Long, callback: (Result<Unit>) -> Unit) {
         Log.i(TAG, "close handle=$handle")
         val session = sessions.remove(handle)
