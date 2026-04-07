@@ -154,7 +154,7 @@ class CameraController(
     // -------------------------------------------------------------------------
 
     /** Internal camera lifecycle state. */
-    private enum class State { CLOSED, OPENING, STREAMING, RECOVERING, ERROR }
+    private enum class State { CLOSED, OPENING, STREAMING, RECOVERING, PAUSED, ERROR }
 
     @Volatile private var state: State = State.CLOSED
 
@@ -476,12 +476,44 @@ class CameraController(
     }
 
     /**
-     * Closes the camera session and releases all Camera2 resources.
+     * Pauses the camera: tears down the capture session and Camera2 resources
+     * without marking the controller as released. The instance can be resumed
+     * with [resume].
      *
-     * Emits a `"closed"` state event to Dart after teardown completes.
-     *
-     * @param callback Invoked with [Result.success] after resources are released.
+     * Emits a [CameraState.PAUSED] state event.
      */
+    fun pause(callback: (Result<Unit>) -> Unit) {
+        if (state != State.STREAMING) {
+            callback(Result.success(Unit))
+            return
+        }
+        teardown()
+        // NOTE: do NOT set released=true and do NOT quit backgroundThread — instance stays alive
+        emitState("paused")
+        setState(State.PAUSED)
+        callback(Result.success(Unit))
+    }
+
+    /**
+     * Resumes the camera after [pause]: reopens the camera device and restores
+     * the capture session with the last-known settings.
+     *
+     * No-op if the controller is not currently paused.
+     */
+    fun resume(callback: (Result<Unit>) -> Unit) {
+        if (state != State.PAUSED) {
+            callback(Result.success(Unit))
+            return
+        }
+        // Re-use the camera ID and settings cached from the original open() call
+        open(resolvedCameraId, pendingSettings) { result ->
+            result.fold(
+                onSuccess = { callback(Result.success(Unit)) },
+                onFailure = { callback(Result.failure(it)) },
+            )
+        }
+    }
+
     fun close(callback: (Result<Unit>) -> Unit) {
         released = true
         teardown()

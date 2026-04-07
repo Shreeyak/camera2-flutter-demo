@@ -16,6 +16,10 @@ enum CameraState {
   /// The app may show a "reconnecting…" indicator.
   recovering,
 
+  /// Camera resources are released but the instance is alive.
+  /// Call [CambrianCamera.resume] to restart streaming with the same configuration.
+  paused,
+
   /// A fatal error occurred. The app must call [CambrianCamera.close] and
   /// optionally reopen the camera.
   error;
@@ -25,6 +29,7 @@ enum CameraState {
         'opening' => opening,
         'streaming' => streaming,
         'recovering' => recovering,
+        'paused' => paused,
         'error' => error,
         _ => error,
       };

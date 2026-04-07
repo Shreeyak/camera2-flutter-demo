@@ -262,6 +262,12 @@ abstract class CameraHostApi {
   @async
   void close(int handle);
 
+  @async
+  void pause(int handle);
+
+  @async
+  void resume(int handle);
+
   /// Returns the current display rotation in degrees CW from portrait: 0, 90, 180, or 270.
   ///
   /// Used by Dart preview widgets to select the correct [RotatedBox.quarterTurns]

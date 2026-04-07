@@ -134,10 +134,19 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.paused && _isRecording) {
-      _camera?.stopRecording().catchError((Object e) {
-        debugPrint('auto-stop on background failed: $e');
-      });
+    switch (state) {
+      case AppLifecycleState.paused:
+      case AppLifecycleState.hidden: // screen locked or covered on Android 14+
+        if (_isRecording) {
+          _camera?.stopRecording().catchError((Object e) {
+            debugPrint('auto-stop on background failed: $e');
+          });
+        }
+        _camera?.pause();
+      case AppLifecycleState.resumed:
+        _camera?.resume();
+      default:
+        break;
     }
   }
 

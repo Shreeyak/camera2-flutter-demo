@@ -133,6 +133,34 @@ Future<void> close()
 
 Closes the camera and releases all native resources. The instance must not be used after this call.
 
+#### `camera.pause()` / `camera.resume()`
+
+```dart
+Future<void> pause()
+Future<void> resume()
+```
+
+`pause()` releases Camera2 resources (device, session, GPU pipeline) while keeping the `CambrianCamera` instance alive. The camera state transitions to `CameraState.paused`. `resume()` reopens the camera with the original configuration, transitioning through `opening` back to `streaming`.
+
+- `pause()` is a no-op if the camera is not streaming.
+- `resume()` is a no-op if the camera is not in the paused state.
+- These are the correct methods to call from `didChangeAppLifecycleState` (see App Lifecycle section below).
+
+```dart
+@override
+void didChangeAppLifecycleState(AppLifecycleState state) {
+  switch (state) {
+    case AppLifecycleState.paused:
+    case AppLifecycleState.hidden: // screen locked or covered on Android 14+
+      _camera?.pause();
+    case AppLifecycleState.resumed:
+      _camera?.resume();
+    default:
+      break;
+  }
+}
+```
+
 ---
 
 ### Preview Streams
@@ -529,6 +557,7 @@ camera.stateStream.listen((state) {
 | `opening` | Initializing (opening device, configuring session) |
 | `streaming` | Actively delivering frames |
 | `recovering` | Non-fatal error occurred; auto-recovering with exponential backoff |
+| `paused` | Resources released; instance alive — call `resume()` to restart |
 | `error` | Fatal error; app must call `close()` and optionally reopen |
 
 #### `camera.errorStream`

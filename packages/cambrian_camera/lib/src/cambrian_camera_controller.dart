@@ -351,6 +351,21 @@ class CambrianCamera {
       _hostApi.getNativePipelineHandle(_handle);
 
 
+  /// Pauses the camera: releases Camera2 resources but keeps the instance alive.
+  ///
+  /// Call [resume] to restart streaming with the same configuration.
+  /// No-op if the camera is not currently streaming.
+  Future<void> pause() async {
+    if (_closed) return;
+    await _hostApi.pause(_handle);
+  }
+
+  /// Resumes a paused camera. No-op if not in the paused state.
+  Future<void> resume() async {
+    if (_closed) return;
+    await _hostApi.resume(_handle);
+  }
+
   /// Closes the camera and releases all native resources.
   ///
   /// After this call the instance must not be used again.

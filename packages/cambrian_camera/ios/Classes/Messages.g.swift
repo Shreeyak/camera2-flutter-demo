@@ -538,6 +538,8 @@ protocol CameraHostApi {
   func startRecording(handle: Int64, outputDirectory: String?, fileName: String?, bitrate: Int64?, fps: Int64?, completion: @escaping (Result<String, Error>) -> Void)
   func stopRecording(handle: Int64, completion: @escaping (Result<String, Error>) -> Void)
   func close(handle: Int64, completion: @escaping (Result<Void, Error>) -> Void)
+  func pause(handle: Int64, completion: @escaping (Result<Void, Error>) -> Void)
+  func resume(handle: Int64, completion: @escaping (Result<Void, Error>) -> Void)
   /// Returns the current display rotation in degrees CW from portrait: 0, 90, 180, or 270.
   ///
   /// Used by Dart preview widgets to select the correct [RotatedBox.quarterTurns]
@@ -707,6 +709,40 @@ class CameraHostApiSetup {
       }
     } else {
       closeChannel.setMessageHandler(nil)
+    }
+    let pauseChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.cambrian_camera.CameraHostApi.pause\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
+    if let api = api {
+      pauseChannel.setMessageHandler { message, reply in
+        let args = message as! [Any?]
+        let handleArg = args[0] as! Int64
+        api.pause(handle: handleArg) { result in
+          switch result {
+          case .success:
+            reply(wrapResult(nil))
+          case .failure(let error):
+            reply(wrapError(error))
+          }
+        }
+      }
+    } else {
+      pauseChannel.setMessageHandler(nil)
+    }
+    let resumeChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.cambrian_camera.CameraHostApi.resume\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
+    if let api = api {
+      resumeChannel.setMessageHandler { message, reply in
+        let args = message as! [Any?]
+        let handleArg = args[0] as! Int64
+        api.resume(handle: handleArg) { result in
+          switch result {
+          case .success:
+            reply(wrapResult(nil))
+          case .failure(let error):
+            reply(wrapError(error))
+          }
+        }
+      }
+    } else {
+      resumeChannel.setMessageHandler(nil)
     }
     /// Returns the current display rotation in degrees CW from portrait: 0, 90, 180, or 270.
     ///
