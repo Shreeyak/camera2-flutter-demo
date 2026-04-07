@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../camera/camera_callbacks.dart';
 import '../testing/testable.dart' show Testable;
-import 'camera_control_keys.dart' show kDialWbSegment;
+import '../testing/keys/camera_control_keys.dart' show kDialWbSegment;
 import '../camera/camera_settings_values.dart';
 import 'camera_ruler_dial/camera_dial_presets.dart';
 import 'camera_ruler_dial/camera_ruler_dial.dart';

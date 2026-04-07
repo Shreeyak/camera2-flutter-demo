@@ -1,5 +1,5 @@
-// lib/widgets/bottom_bar_keys.dart
-import '../testing/widget_registry.dart' show WidgetRegistry;
+// lib/testing/keys/bottom_bar_keys.dart
+import '../widget_registry.dart' show WidgetRegistry;
 
 final kBarSettings = WidgetRegistry.instance.register(
   id: 'bar.settings',

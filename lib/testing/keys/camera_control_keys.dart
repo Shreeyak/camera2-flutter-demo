@@ -1,5 +1,5 @@
-// lib/widgets/camera_control_keys.dart
-import '../testing/widget_registry.dart' show WidgetRegistry;
+// lib/testing/keys/camera_control_keys.dart
+import '../widget_registry.dart' show WidgetRegistry;
 
 final kDialAutoToggle = WidgetRegistry.instance.register(
   id: 'dial.auto_toggle',

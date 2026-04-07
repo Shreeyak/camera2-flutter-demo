@@ -1,5 +1,5 @@
-// lib/widgets/camera_settings_bar_keys.dart
-import '../testing/widget_registry.dart' show WidgetRegistry;
+// lib/testing/keys/camera_settings_bar_keys.dart
+import '../widget_registry.dart' show WidgetRegistry;
 
 final kBarClose = WidgetRegistry.instance.register(
   id: 'bar.close',

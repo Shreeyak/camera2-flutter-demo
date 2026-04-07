@@ -5,7 +5,7 @@ import '../camera/camera_format_utils.dart' show formatShutterNs;
 import '../camera/camera_settings_values.dart' show CameraSettingType, CameraSettingsValues;
 import 'bottom_bar_buttons.dart';
 import '../testing/testable.dart' show Testable;
-import 'camera_settings_bar_keys.dart'
+import '../testing/keys/camera_settings_bar_keys.dart'
     show kBarClose, kChipIso, kChipShutter, kChipFocus, kChipWb, kChipZoom;
 
 class CameraSettingsBar extends StatelessWidget {

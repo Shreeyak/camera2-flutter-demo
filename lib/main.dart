@@ -1,4 +1,5 @@
 import 'dart:async' show StreamSubscription;
+import 'package:flutter/services.dart' show PlatformException;
 import 'dart:math' show max;
 
 import 'package:cambrian_camera/cambrian_camera.dart'
@@ -29,7 +30,7 @@ import 'widgets/gpu_controls_sidebar.dart' show GpuControlsSidebar;
 import 'widgets/recording_hud.dart' show RecordingHud;
 import 'testing/test_channel.dart' show TestChannel;
 import 'testing/testable.dart' show Testable;
-import 'widgets/camera_control_keys.dart' show kDialAutoToggle, kHudRecording;
+import 'testing/keys/camera_control_keys.dart' show kDialAutoToggle, kHudRecording;
 
 /// Horizontal offset from the left edge of the dial to the auto-toggle button.
 const _kAutoToggleOffset = 60.0;
@@ -176,7 +177,20 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
   int get _quarterTurns => quarterTurnsFromDisplayRotation(_displayRotationDeg);
 
   Future<void> _openCamera() async {
-    final status = await Permission.camera.request();
+    // Check first — skips the dialog if already granted (avoids "request already
+    // running" races when multiple _CameraScreenState instances start concurrently,
+    // e.g. during integration tests where app.main() is called once per test).
+    PermissionStatus status;
+    try {
+      final existing = await Permission.camera.status;
+      status = existing.isGranted ? existing : await Permission.camera.request();
+    } on PlatformException catch (e) {
+      // Another request is already in flight (common in tests). Wait for it and
+      // re-read status; if still not granted we bail out below.
+      debugPrint('Camera permission: concurrent request detected (${e.message}), retrying status check');
+      await Future<void>.delayed(const Duration(milliseconds: 500));
+      status = await Permission.camera.status;
+    }
     if (!status.isGranted) {
       debugPrint('Camera permission denied: $status');
       return;

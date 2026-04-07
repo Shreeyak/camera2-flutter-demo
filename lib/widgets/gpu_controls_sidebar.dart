@@ -33,7 +33,7 @@ import 'package:flutter/material.dart'
     Widget;
 import 'package:cambrian_camera/cambrian_camera.dart' show ProcessingParams;
 import '../testing/testable.dart' show Testable;
-import 'gpu_controls_sidebar_keys.dart'
+import '../testing/keys/gpu_controls_sidebar_keys.dart'
     show kGpuBrightness, kGpuContrast, kGpuSaturation, kGpuGamma,
          kGpuBlackR, kGpuBlackG, kGpuBlackB, kGpuResetAll;
 

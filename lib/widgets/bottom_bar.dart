@@ -3,7 +3,7 @@ import '../camera/camera_settings_values.dart';
 import '../camera/camera_callbacks.dart';
 import '../testing/testable.dart' show Testable;
 import 'bottom_bar_buttons.dart';
-import 'bottom_bar_keys.dart' show kBarCalibrate, kBarRecord, kBarSettings;
+import '../testing/keys/bottom_bar_keys.dart' show kBarCalibrate, kBarRecord, kBarSettings;
 import 'camera_settings_bar.dart';
 
 class BottomBar extends StatelessWidget {

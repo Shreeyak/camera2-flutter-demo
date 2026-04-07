@@ -1,5 +1,5 @@
-// lib/widgets/gpu_controls_sidebar_keys.dart
-import '../testing/widget_registry.dart' show WidgetRegistry;
+// lib/testing/keys/gpu_controls_sidebar_keys.dart
+import '../widget_registry.dart' show WidgetRegistry;
 
 final kGpuBrightness = WidgetRegistry.instance.register(
   id: 'gpu.brightness',

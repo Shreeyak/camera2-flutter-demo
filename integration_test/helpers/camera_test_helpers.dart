@@ -1,9 +1,9 @@
 // integration_test/helpers/camera_test_helpers.dart
 import 'package:flutter_test/flutter_test.dart' show WidgetTester, find;
 
-import 'package:camera2_flutter_demo/widgets/bottom_bar_keys.dart'
+import 'package:camera2_flutter_demo/testing/keys/bottom_bar_keys.dart'
     show kBarSettings, kBarCalibrate, kBarRecord;
-import 'package:camera2_flutter_demo/widgets/camera_settings_bar_keys.dart'
+import 'package:camera2_flutter_demo/testing/keys/camera_settings_bar_keys.dart'
     show kBarClose;
 import 'package:camera2_flutter_demo/testing/widget_registry.dart'
     show WidgetEntry;
@@ -26,8 +26,12 @@ Future<void> tapEntryNonSettling(
 }
 
 /// Opens the camera settings panel.
+///
+/// Pumps an extra 500 ms after settling so the slide-in animation fully
+/// completes and any IgnorePointer covers are removed before tapping chips.
 Future<void> openSettings(WidgetTester tester) async {
   await tapEntry(tester, kBarSettings);
+  await tester.pump(const Duration(milliseconds: 500));
 }
 
 /// Closes the camera settings panel.

@@ -34,7 +34,7 @@ fi
 
 # ── Check lock state ──────────────────────────────────────────────────────────
 
-LOCKED=$($ADB shell dumpsys window | grep -m1 'mDreamingLockscreen=' | tr -d ' \r' | cut -d= -f2)
+LOCKED=$($ADB shell dumpsys window | grep -oE 'mDreamingLockscreen=(true|false)' | head -1 | cut -d= -f2)
 echo "Lockscreen: $LOCKED"
 
 if [[ "$LOCKED" == "true" ]]; then
@@ -46,7 +46,7 @@ fi
 
 # ── Verify we're unlocked ─────────────────────────────────────────────────────
 
-LOCKED_AFTER=$($ADB shell dumpsys window | grep -m1 'mDreamingLockscreen=' | tr -d ' \r' | cut -d= -f2)
+LOCKED_AFTER=$($ADB shell dumpsys window | grep -oE 'mDreamingLockscreen=(true|false)' | head -1 | cut -d= -f2)
 if [[ "$LOCKED_AFTER" == "true" ]]; then
   echo "WARNING: Device still shows lockscreen — may have PIN/pattern lock."
   echo "Unlock manually and re-run, or use 'adb shell wm dismiss-keyguard' on debug builds."

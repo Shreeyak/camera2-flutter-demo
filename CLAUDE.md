@@ -118,15 +118,17 @@ Reference: `backgroundSuspend()`, `backgroundResume()`, `close()`. Never call `t
 
 ### Running Integration Tests
 
-**Always wake and unlock the device first**, otherwise the test runner will launch into a black/locked screen and fail:
+**Always use the test runner script** — it wakes the device, installs the APK, grants camera permission (avoids the permission dialog), and runs tests:
 
 ```bash
-./scripts/wake_and_launch.sh [device-id]        # wake screen + swipe-unlock + launch app
-flutter test integration_test/ -d <device-id>   # run all on-device tests
-flutter test integration_test/app_test.dart -d <device-id>  # run specific test file
+./scripts/run_tests.sh [device-id] [test-file]           # recommended: full test run
+./scripts/run_tests.sh 192.168.1.19:35025                # specific device
+./scripts/run_tests.sh 192.168.1.19:35025 integration_test/app_test.dart  # specific file
 ```
 
-The script checks `dumpsys power` (screen on/off) and `dumpsys window` (keyguard state) before launching. It handles swipe-to-unlock screens automatically. If the device has a PIN/pattern lock, unlock manually first or use `adb shell wm dismiss-keyguard` (debug builds only).
+Do NOT run `flutter test integration_test/` directly — it reinstalls the APK on every run, which resets runtime permissions and triggers the camera permission dialog mid-test.
+
+`wake_and_launch.sh` is used internally by `run_tests.sh` but can also be used standalone to wake/unlock the device and launch the app manually.
 
 Tests use `integration_test` (in-process, direct widget access). Do NOT use `flutter_driver` — it was removed from this project because it times out during recording due to continuous frame callbacks.
 
@@ -138,7 +140,7 @@ All interactive widgets are registered in `lib/testing/widget_registry.dart`. Th
 - `lib/testing/widget_registry.dart` — `WidgetRegistry` singleton and `WidgetEntry` class
 - `lib/testing/testable.dart` — `Testable` wrapper (applies key + semantics)
 - `lib/testing/test_channel.dart` — Debug-only camera state service extension
-- `lib/widgets/*_keys.dart` — Per-widget-file key registrations
+- `lib/testing/keys/*_keys.dart` — Per-widget-group key registrations (kept in `lib/testing/` to separate test infrastructure from core widget code)
 
 **Naming convention:** dot-separated hierarchy `{area}.{widget}[.{sub}]`
 
