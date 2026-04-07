@@ -658,18 +658,22 @@ class CameraController(
      * with no incoming frames. Emits a "paused" state event to Dart after teardown completes.
      */
     fun pause() {
-        if (isRecording) {
-            Log.w("CC/Cam", "[$handle] auto-stopping recording before pause")
-            isRecording = false
-            gpuPipeline?.setEncoderSurface(null)
-            try { videoRecorder?.stop() } catch (e: Exception) {
-                Log.w("CC/Cam", "recording stop on pause failed: ${e.message}")
+        backgroundHandler.post {
+            if (isRecording) {
+                Log.w("CC/Cam", "[$handle] auto-stopping recording before pause")
+                isRecording = false
+                gpuPipeline?.setEncoderSurface(null)
+                try { videoRecorder?.stop() } catch (e: Exception) {
+                    Log.w("CC/Cam", "recording stop on pause failed: ${e.message}")
+                }
+                mainHandler.post { flutterApi.onRecordingStateChanged(handle, "idle") {} }
             }
-            mainHandler.post { flutterApi.onRecordingStateChanged(handle, "idle") {} }
+            teardown()
+            mainHandler.post {
+                emitState("paused")
+                setState(State.CLOSED)
+            }
         }
-        teardown()
-        emitState("paused")
-        setState(State.CLOSED)
     }
 
     /**
@@ -1614,6 +1618,7 @@ class CameraController(
             try { videoRecorder?.stop() } catch (e: Exception) {
                 Log.w("CC/Cam", "recording stop on teardown failed: ${e.message}")
             }
+            mainHandler.post { flutterApi.onRecordingStateChanged(handle, "idle") {} }
         }
 
         // Close capture session first to stop frame delivery before closing the device.
@@ -1860,7 +1865,6 @@ class CameraController(
                 consecutiveHalErrors = 0
                 // Update stall watchdog timestamp so it knows frames are still arriving.
                 lastCaptureResultMs = android.os.SystemClock.elapsedRealtime()
-
 
                 // Always track the latest sensor values so that switching to manual mode
                 // can seed the partner field with the last live AE value.
