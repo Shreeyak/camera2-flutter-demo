@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # run_tests.sh
 #
-# Builds the debug APK, installs it, grants camera permission, then runs
-# integration tests. This avoids the runtime permission dialog that appears
-# when flutter test reinstalls the APK and resets permissions.
+# Builds the debug APK, grants camera permission, then runs integration tests.
+#
+# The app is compiled with --dart-define=RUNNING_TESTS=true so it never shows
+# the system permission dialog. Permissions must be pre-granted here before the
+# app launches — if they aren't, the camera won't open and tests will fail.
 #
 # Usage:
 #   ./scripts/run_tests.sh [device-id] [test-file]
@@ -18,6 +20,7 @@ set -euo pipefail
 PACKAGE="com.example.camera2_flutter_demo"
 DEVICE="${1:-}"
 TEST_TARGET="${2:-integration_test/}"
+DART_DEFINES="--dart-define=RUNNING_TESTS=true"
 
 # ── Resolve device ────────────────────────────────────────────────────────────
 
@@ -38,26 +41,34 @@ echo "Waking device..."
 "$(dirname "$0")/wake_and_launch.sh" "$DEVICE" 2>/dev/null || true
 
 # ── Build APK ─────────────────────────────────────────────────────────────────
+# Built with RUNNING_TESTS=true so the app never shows the permission dialog.
+# Permissions are granted at install time below instead.
 
 echo ""
-echo "Building debug APK..."
-flutter build apk --debug
+echo "Building debug APK (RUNNING_TESTS=true)..."
+flutter build apk --debug $DART_DEFINES
 
 APK="build/app/outputs/flutter-apk/app-debug.apk"
 
-# ── Install APK ───────────────────────────────────────────────────────────────
+# ── Grant Permissions ─────────────────────────────────────────────────────────
+# Install with -g to auto-grant ALL runtime permissions at install time.
+# This is the ONLY place permissions are granted — the app will not show any
+# permission dialog because it is compiled with RUNNING_TESTS=true.
+#
+# -r  replace existing install (preserves data)
+# -g  grant all runtime permissions declared in AndroidManifest.xml
+#
+# Works on Android 6+ including Android 16. Does not require root.
 
-echo "Installing APK (with -g to auto-grant all runtime permissions)..."
-# -g grants all runtime permissions at install time, avoiding mid-test dialogs.
-# Works on Android 6+ and does not require elevated ADB privileges.
+echo ""
+echo "Installing APK + granting runtime permissions (adb install -r -g)..."
 $ADB install -r -g "$APK"
 
-# ── Run tests (skip reinstall via --use-application-binary) ──────────────────
+echo "Permissions granted for: $PACKAGE"
+
+# ── Run Tests ─────────────────────────────────────────────────────────────────
 
 echo ""
 echo "Running tests: $TEST_TARGET"
 echo "────────────────────────────────────────────"
-# flutter test preserves runtime permissions when reinstalling with the same
-# debug signing key (adb install -r keeps granted permissions). The -g install
-# above ensures permissions are granted on a truly fresh install.
-flutter test "$TEST_TARGET" --device-id "$DEVICE"
+flutter test "$TEST_TARGET" --device-id "$DEVICE" $DART_DEFINES

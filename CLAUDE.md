@@ -126,7 +126,12 @@ Reference: `backgroundSuspend()`, `backgroundResume()`, `close()`. Never call `t
 ./scripts/run_tests.sh 192.168.1.19:35025 integration_test/app_test.dart  # specific file
 ```
 
-Do NOT run `flutter test integration_test/` directly — it reinstalls the APK on every run, which resets runtime permissions and triggers the camera permission dialog mid-test.
+Do NOT run `flutter test integration_test/` directly — it reinstalls the APK without `--dart-define=RUNNING_TESTS=true` and without `-g` permission grant, causing the camera permission dialog to appear mid-test.
+
+**How permission-free tests work:**
+- The APK is built with `--dart-define=RUNNING_TESTS=true`, which compiles `_kRunningTests = true` into the app
+- When that constant is true, `_openCamera()` in `main.dart` only calls `Permission.camera.status` — it never calls `Permission.camera.request()`, so no dialog can appear
+- `adb install -r -g` grants the camera permission at the OS level so `status` returns `granted`
 
 `wake_and_launch.sh` is used internally by `run_tests.sh` but can also be used standalone to wake/unlock the device and launch the app manually.
 

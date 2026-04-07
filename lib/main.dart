@@ -177,23 +177,37 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
   int get _quarterTurns => quarterTurnsFromDisplayRotation(_displayRotationDeg);
 
   Future<void> _openCamera() async {
-    // Check first — skips the dialog if already granted (avoids "request already
-    // running" races when multiple _CameraScreenState instances start concurrently,
-    // e.g. during integration tests where app.main() is called once per test).
+    // In test builds (--dart-define=RUNNING_TESTS=true) never show the system
+    // dialog. Permissions must be pre-granted by run_tests.sh via
+    // `adb install -r -g`. If they weren't, fail fast with a clear message.
+    const bool runningTests = bool.fromEnvironment('RUNNING_TESTS');
     PermissionStatus status;
-    try {
-      final existing = await Permission.camera.status;
-      status = existing.isGranted ? existing : await Permission.camera.request();
-    } on PlatformException catch (e) {
-      // Another request is already in flight (common in tests). Wait for it and
-      // re-read status; if still not granted we bail out below.
-      debugPrint('Camera permission: concurrent request detected (${e.message}), retrying status check');
-      await Future<void>.delayed(const Duration(milliseconds: 500));
+    if (runningTests) {
       status = await Permission.camera.status;
-    }
-    if (!status.isGranted) {
-      debugPrint('Camera permission denied: $status');
-      return;
+      if (!status.isGranted) {
+        debugPrint(
+          'TEST MODE: camera permission not granted. '
+          'Run tests via scripts/run_tests.sh — it pre-grants permissions '
+          'with `adb install -r -g`.',
+        );
+        return;
+      }
+    } else {
+      // Normal app flow: check first, request only if needed. The early status
+      // check avoids "request already running" races during hot-restart.
+      try {
+        final existing = await Permission.camera.status;
+        status = existing.isGranted ? existing : await Permission.camera.request();
+      } on PlatformException catch (e) {
+        // Another request is already in flight. Wait and re-read.
+        debugPrint('Camera permission: concurrent request (${e.message}), retrying');
+        await Future<void>.delayed(const Duration(milliseconds: 500));
+        status = await Permission.camera.status;
+      }
+      if (!status.isGranted) {
+        debugPrint('Camera permission denied: $status');
+        return;
+      }
     }
     try {
       final camera = await CambrianCamera.open(
