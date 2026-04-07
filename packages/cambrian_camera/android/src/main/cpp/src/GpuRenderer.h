@@ -165,6 +165,8 @@ private:
     GLsync rawFence_[2]      = {nullptr, nullptr};
 
     // GL_TIME_ELAPSED timing queries (double-buffered) — measure DMA enqueue cost.
+    // Only used when GL_EXT_disjoint_timer_query is available (see hasTimerQuery_).
+    bool     hasTimerQuery_ = false;  ///< true if GL_EXT_disjoint_timer_query is supported
     GLuint   timeQuery_[2]  = {0, 0};
     uint64_t stallCount_    = 0;  ///< frames where fence was not yet signalled at map time
 
