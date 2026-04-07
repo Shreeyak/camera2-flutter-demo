@@ -802,6 +802,32 @@ class CameraHostApi {
     }
   }
 
+  /// Returns persisted processing params from a previous session, or null if none exist.
+  ///
+  /// Dart should call this after [open] to initialize slider UI with the user's last-known
+  /// values instead of sending default zeros that would overwrite the persisted state.
+  Future<CamProcessingParams?> getPersistedProcessingParams(int handle) async {
+    final String pigeonVar_channelName = 'dev.flutter.pigeon.cambrian_camera.CameraHostApi.getPersistedProcessingParams$pigeonVar_messageChannelSuffix';
+    final BasicMessageChannel<Object?> pigeonVar_channel = BasicMessageChannel<Object?>(
+      pigeonVar_channelName,
+      pigeonChannelCodec,
+      binaryMessenger: pigeonVar_binaryMessenger,
+    );
+    final List<Object?>? pigeonVar_replyList =
+        await pigeonVar_channel.send(<Object?>[handle]) as List<Object?>?;
+    if (pigeonVar_replyList == null) {
+      throw _createConnectionError(pigeonVar_channelName);
+    } else if (pigeonVar_replyList.length > 1) {
+      throw PlatformException(
+        code: pigeonVar_replyList[0]! as String,
+        message: pigeonVar_replyList[1] as String?,
+        details: pigeonVar_replyList[2],
+      );
+    } else {
+      return (pigeonVar_replyList[0] as CamProcessingParams?);
+    }
+  }
+
   /// Returns the current display rotation in degrees CW from portrait: 0, 90, 180, or 270.
   ///
   /// Used by Dart preview widgets to select the correct [RotatedBox.quarterTurns]

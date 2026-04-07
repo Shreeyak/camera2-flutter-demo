@@ -197,6 +197,9 @@ class CameraController(
     /** Last processing params applied via [setProcessingParams]; replayed after pipeline recreation. */
     @Volatile private var lastProcessingParams: CamProcessingParams? = null
 
+    /** Persists capture settings and processing params across full process restarts. */
+    private val settingsStore = SettingsStore(context)
+
     /** Latest preview dimensions configured on [surfaceProducer]. */
     @Volatile private var previewWidth: Int = 0
 
@@ -384,7 +387,18 @@ class CameraController(
             return
         }
 
-        pendingSettings = settings
+        // Merge incoming settings with any persisted settings from a previous session.
+        // Incoming settings (from Dart open() call) take priority; persisted values fill in
+        // any fields not explicitly set, so the user's last-known configuration is restored
+        // across a full process kill.
+        val persisted = if (settingsStore.hasSavedSettings()) settingsStore.loadSettings() else CamSettings()
+        val merged = if (settings != null) mergeSettings(persisted, settings) else persisted
+        pendingSettings = merged
+        appliedSettings = merged
+        // Restore processing params from previous session if not yet set.
+        if (lastProcessingParams == null && settingsStore.hasSavedProcessingParams()) {
+            lastProcessingParams = settingsStore.loadProcessingParams()
+        }
         resolvedCameraId = cameraId ?: selectDefaultCameraId()
 
         val id = resolvedCameraId
@@ -792,6 +806,7 @@ class CameraController(
         val prevSettings = appliedSettings
         appliedSettings = merged
         pendingSettings = merged
+        settingsStore.saveSettings(merged)
         val session = captureSession ?: return
         val device = cameraDevice ?: return
         val targetSurface = repeatingTargetSurface ?: gpuPipeline?.cameraSurface ?: return
@@ -864,8 +879,16 @@ class CameraController(
      *
      * @param params Image processing parameters (black balance, brightness, contrast, saturation, etc.).
      */
+    /**
+     * Returns persisted processing params from a previous session, or null if none were saved.
+     * Called by Dart to initialize slider UI with last-known values.
+     */
+    fun getPersistedProcessingParams(): CamProcessingParams? =
+        if (settingsStore.hasSavedProcessingParams()) settingsStore.loadProcessingParams() else null
+
     fun setProcessingParams(params: CamProcessingParams) {
         lastProcessingParams = params
+        settingsStore.saveProcessingParams(params)
         if (CambrianCameraConfig.debugDataFlow) {
             Log.d("CC/Cam", "Processing params: brightness=${params.brightness} contrast=${params.contrast} saturation=${params.saturation}")
         }

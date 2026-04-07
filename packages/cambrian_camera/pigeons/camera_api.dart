@@ -268,6 +268,12 @@ abstract class CameraHostApi {
   @async
   void resume(int handle);
 
+  /// Returns persisted processing params from a previous session, or null if none exist.
+  ///
+  /// Dart should call this after [open] to initialize slider UI with the user's last-known
+  /// values instead of sending default zeros that would overwrite the persisted state.
+  CamProcessingParams? getPersistedProcessingParams(int handle);
+
   /// Returns the current display rotation in degrees CW from portrait: 0, 90, 180, or 270.
   ///
   /// Used by Dart preview widgets to select the correct [RotatedBox.quarterTurns]

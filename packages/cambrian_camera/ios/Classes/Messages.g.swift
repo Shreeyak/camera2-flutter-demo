@@ -540,6 +540,11 @@ protocol CameraHostApi {
   func close(handle: Int64, completion: @escaping (Result<Void, Error>) -> Void)
   func pause(handle: Int64, completion: @escaping (Result<Void, Error>) -> Void)
   func resume(handle: Int64, completion: @escaping (Result<Void, Error>) -> Void)
+  /// Returns persisted processing params from a previous session, or null if none exist.
+  ///
+  /// Dart should call this after [open] to initialize slider UI with the user's last-known
+  /// values instead of sending default zeros that would overwrite the persisted state.
+  func getPersistedProcessingParams(handle: Int64) throws -> CamProcessingParams?
   /// Returns the current display rotation in degrees CW from portrait: 0, 90, 180, or 270.
   ///
   /// Used by Dart preview widgets to select the correct [RotatedBox.quarterTurns]
@@ -743,6 +748,25 @@ class CameraHostApiSetup {
       }
     } else {
       resumeChannel.setMessageHandler(nil)
+    }
+    /// Returns persisted processing params from a previous session, or null if none exist.
+    ///
+    /// Dart should call this after [open] to initialize slider UI with the user's last-known
+    /// values instead of sending default zeros that would overwrite the persisted state.
+    let getPersistedProcessingParamsChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.cambrian_camera.CameraHostApi.getPersistedProcessingParams\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
+    if let api = api {
+      getPersistedProcessingParamsChannel.setMessageHandler { message, reply in
+        let args = message as! [Any?]
+        let handleArg = args[0] as! Int64
+        do {
+          let result = try api.getPersistedProcessingParams(handle: handleArg)
+          reply(wrapResult(result))
+        } catch {
+          reply(wrapError(error))
+        }
+      }
+    } else {
+      getPersistedProcessingParamsChannel.setMessageHandler(nil)
     }
     /// Returns the current display rotation in degrees CW from portrait: 0, 90, 180, or 270.
     ///

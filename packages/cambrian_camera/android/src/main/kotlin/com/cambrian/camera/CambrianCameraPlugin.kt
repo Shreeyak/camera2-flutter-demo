@@ -321,6 +321,11 @@ class CambrianCameraPlugin : FlutterPlugin, ActivityAware, CameraHostApi {
         controller.getNativePipelineHandle(callback)
     }
 
+    override fun getPersistedProcessingParams(handle: Long): CamProcessingParams? {
+        val controller = sessions[handle]?.controller ?: return null
+        return controller.getPersistedProcessingParams()
+    }
+
     /**
      * Returns the current display rotation in degrees CW from portrait: 0, 90, 180, or 270.
      *
