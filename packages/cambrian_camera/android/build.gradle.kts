@@ -63,6 +63,8 @@ dependencies {
     // script injects flutter.jar (FlutterPlugin, ActivityAware, TextureRegistry, etc.)
     // as compileOnly automatically when this module is included by the host app.
     compileOnly("androidx.lifecycle:lifecycle-common:2.7.0")
+    // ProcessLifecycleOwner (used for automatic camera pause/resume on app background).
+    implementation("androidx.lifecycle:lifecycle-process:2.7.0")
     androidTestImplementation("androidx.test.ext:junit:1.1.5")
     androidTestImplementation("androidx.test:runner:1.5.2")
     testImplementation("org.mockito:mockito-core:5.3.1")

@@ -390,7 +390,9 @@ Implemented in `CameraController.kt`.
 
 **Recovery behavior:** Exponential backoff (500ms → 1s → 2s → 4s → max 8s). After 5 failures: fatal error, state = ERROR.
 
-**PAUSED vs CLOSED:** `pause()` releases Camera2 resources (device, session, GPU pipeline) but keeps the `CameraController` instance alive (no `released=true`, background thread stays running). `resume()` re-runs `open()` with the cached `resolvedCameraId` and `pendingSettings`. This is faster than a full close/reopen cycle and is the correct response to Android app lifecycle events (minimize, screen lock, task switch).
+**PAUSED vs CLOSED:** `pause()` tears down the capture session, GPU pipeline, and native pipeline (`teardownSession()`) but **keeps `CameraDevice` open** and transitions to `OPENING` state. This is cheaper than a full teardown and avoids the slow device reopen on resume. `resume()` calls `startCaptureSession()` on the already-open device. If the HAL closes the device while paused, `onDisconnected` fires → `handleNonFatalError` → recovery, which is the correct response.
+
+**Automatic lifecycle pause/resume:** `CambrianCameraPlugin` registers a `DefaultLifecycleObserver` on `ProcessLifecycleOwner` (process-scoped, so config changes don't trigger spurious events). On `onPause`, all active sessions are paused; on `onResume`, all are resumed. This ensures the camera yields the hardware on app background and the watchdog only runs in the foreground.
 
 **Auto-recoverable:** `ERROR_CAMERA_DEVICE`, `ERROR_CAMERA_SERVICE`, `onDisconnected()`, `onConfigureFailed()`, `onSurfaceAvailable()` (preview rebinding).
 
@@ -403,6 +405,7 @@ In addition to the session-level recovery state machine, the pipeline detects an
 | Fault | Detector | Threshold | Response |
 |-------|----------|-----------|----------|
 | Repeated HAL capture failures | `onCaptureFailed(REASON_ERROR)` counter in `repeatingCaptureCallback` | 5 consecutive | Calls `handleNonFatalError(captureFailure)` → enters existing recovery state machine; emits `captureFailure` error |
+| Foreground frame stall | `stallWatchdog` runnable checks `lastCaptureResultMs` every 3 s; only active while `STREAMING` | >5 000 ms since last `onCaptureCompleted` | Calls `handleNonFatalError(pipelineError)` → recovery. Watchdog is stopped on `pause()` so background pauses are not misidentified as stalls |
 | Stale EGL preview surface | `GpuRenderer.consecutiveSwapFailures_` polled by `GpuPipeline` after each frame | 3 consecutive swap failures | `onPreviewRebindNeeded` callback → `CameraController` rebinds surface via `GpuPipeline.rebindPreviewSurface()`; emits nothing (transparent) |
 | FPS degradation | `SENSOR_FRAME_DURATION` checked in heartbeat (every 30 results, `verboseDiagnostics` gate) | FPS < 15 for 3 heartbeats | Emits non-fatal `fpsDegraded` error to Dart |
 | AE convergence timeout | `aeSearchingStartMs` timestamp checked per result when AE is in `SEARCHING` | >5 000 ms in SEARCHING | Emits non-fatal `aeConvergenceTimeout` error; timer resets to prevent repeated firing |

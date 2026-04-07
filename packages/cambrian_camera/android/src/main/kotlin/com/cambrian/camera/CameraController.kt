@@ -275,6 +275,30 @@ class CameraController(
     @Volatile private var lastKnownExposureTimeNs: Long? = null
 
     // -------------------------------------------------------------------------
+    // Frame stall watchdog
+    // -------------------------------------------------------------------------
+
+    /** Timestamp (elapsedRealtime ms) of the last successful capture result; 0 before first frame. */
+    @Volatile private var lastCaptureResultMs: Long = 0L
+    private val stallCheckIntervalMs = 3_000L
+    private val stallTimeoutMs       = 5_000L
+
+    private val stallWatchdog = object : Runnable {
+        override fun run() {
+            if (released || state != State.STREAMING) return
+            val elapsed = android.os.SystemClock.elapsedRealtime() - lastCaptureResultMs
+            if (lastCaptureResultMs > 0L && elapsed > stallTimeoutMs) {
+                Log.w("CC/Cam", "[$handle] Frame stall detected: ${elapsed}ms — triggering recovery")
+                handleNonFatalError(CamErrorCode.PIPELINE_ERROR, "Frame delivery stalled (${elapsed}ms)")
+                // Watchdog does not re-post itself here. Recovery always routes through
+                // startCaptureSession(), which re-posts the watchdog after entering STREAMING.
+                return
+            }
+            backgroundHandler.postDelayed(this, stallCheckIntervalMs)
+        }
+    }
+
+    // -------------------------------------------------------------------------
     // Auto-recovery
     // -------------------------------------------------------------------------
 
@@ -487,29 +511,33 @@ class CameraController(
             callback(Result.success(Unit))
             return
         }
-        teardown()
+        Log.i("CC/Cam", "[$handle] pausing")
+        // Tear down only the capture session; keep CameraDevice open for fast resume.
+        // OPENING reuses its existing meaning: "device held, no capture session running".
+        setState(State.OPENING)
+        teardownSession()
         // NOTE: do NOT set released=true and do NOT quit backgroundThread — instance stays alive
         emitState("paused")
-        setState(State.PAUSED)
         callback(Result.success(Unit))
     }
 
     /**
-     * Resumes the camera after [pause]: reopens the camera device and restores
-     * the capture session with the last-known settings.
+     * Resumes the camera after [pause]: restarts the capture session on the already-open
+     * [CameraDevice]. Much faster than a full reopen.
      *
-     * No-op if the controller is not currently paused.
+     * No-op if the controller is not in [State.OPENING] (i.e. not currently paused or the
+     * HAL already closed the device — in that case [onDisconnected] transitions to RECOVERING).
      */
     fun resume(callback: (Result<Unit>) -> Unit) {
-        if (state != State.PAUSED) {
+        if (state != State.OPENING || cameraDevice == null) {
             callback(Result.success(Unit))
             return
         }
-        // Re-use the camera ID and settings cached from the original open() call
-        open(resolvedCameraId, pendingSettings) { result ->
+        Log.i("CC/Cam", "[$handle] resuming")
+        startCaptureSession { result ->
             result.fold(
                 onSuccess = { callback(Result.success(Unit)) },
-                onFailure = { callback(Result.failure(it)) },
+                onFailure = { e -> callback(Result.failure(e)) },
             )
         }
     }
@@ -1119,6 +1147,9 @@ class CameraController(
                             session.setRepeatingRequest(request, repeatingCaptureCallback, backgroundHandler)
                             setState(State.STREAMING)
                             emitState("streaming")
+                            // Start the frame stall watchdog now that streaming is active.
+                            lastCaptureResultMs = 0L
+                            backgroundHandler.postDelayed(stallWatchdog, stallCheckIntervalMs)
                             mainHandler.post { openCallback(Result.success(handle)) }
                         } catch (e: CameraAccessException) {
                             handleNonFatalError(CamErrorCode.CAMERA_ACCESS_ERROR, e.message ?: "CameraAccessException")
@@ -1416,11 +1447,53 @@ class CameraController(
     // -------------------------------------------------------------------------
 
     /**
-     * Closes all Camera2 resources and resets internal references.
+     * Tears down the capture session and GPU/native pipeline, but **keeps [cameraDevice] open**.
      *
-     * Safe to call from any state. Does NOT emit state events (callers must do that).
+     * Used by [pause] to cheaply release the session when the app backgrounds, so that
+     * [resume] can restart the session without the latency of reopening the camera device.
+     *
+     * If the HAL closes the device while paused, the existing [CameraDevice.StateCallback.onDisconnected]
+     * callback fires → [handleNonFatalError] → full recovery.
+     */
+    private fun teardownSession() {
+        backgroundHandler.removeCallbacks(stallWatchdog)
+
+        // Thread-safety note: Camera2's captureSession.close() and imageReader.close() are
+        // thread-safe per the Camera2 API contract. Callbacks running on backgroundHandler
+        // null-check captureSession/imageReader before use, so the race is benign.
+        // This mirrors the pattern in teardown() (pre-existing design decision).
+        try { captureSession?.close() } catch (_: Exception) {}
+        captureSession = null
+
+        try { imageReader?.close() } catch (_: Exception) {}
+        imageReader = null
+
+        try { gpuPipeline?.stop() } catch (_: Exception) {}
+        gpuPipeline = null
+
+        try { jpegImageReader?.close() } catch (_: Exception) {}
+        jpegImageReader = null
+        repeatingTargetSurface = null
+        lastCaptureResultMs = 0L
+        captureResultCount = 0L
+        detectedYuvFormat = YUV_FORMAT_UNKNOWN
+
+        synchronized(pipelineLock) {
+            val ptr = nativePipelinePtr
+            if (ptr != 0L) {
+                nativePipelinePtr = 0L
+                nativeRelease(ptr)
+            }
+        }
+    }
+
+    /**
+     * Closes all Camera2 resources and marks this controller as released.
+     * After this call the controller cannot be reused.
      */
     private fun teardown() {
+        backgroundHandler.removeCallbacks(stallWatchdog)
+
         // Stop any active recording before tearing down the session.
         // Offload the blocking drain wait to backgroundHandler so close()/release() callers
         // are not stalled for up to 5 seconds on the main/plugin thread.
@@ -1631,6 +1704,8 @@ class CameraController(
             ) {
                 // Reset HAL error streak on every successful frame.
                 consecutiveHalErrors = 0
+                // Update stall watchdog timestamp so it knows frames are still arriving.
+                lastCaptureResultMs = android.os.SystemClock.elapsedRealtime()
 
                 // Always track the latest sensor values so that switching to manual mode
                 // can seed the partner field with the last live AE value.
