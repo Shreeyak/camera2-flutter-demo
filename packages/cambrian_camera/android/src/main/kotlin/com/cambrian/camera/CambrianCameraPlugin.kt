@@ -7,6 +7,9 @@ import android.os.Build
 import android.provider.MediaStore
 import android.util.Log
 import android.view.Surface
+import androidx.lifecycle.DefaultLifecycleObserver
+import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.ProcessLifecycleOwner
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.embedding.engine.plugins.activity.ActivityAware
 import io.flutter.embedding.engine.plugins.activity.ActivityPluginBinding
@@ -69,6 +72,24 @@ class CambrianCameraPlugin : FlutterPlugin, ActivityAware, CameraHostApi {
 
     /** Current activity, used as context for Camera2 and permission checks. */
     private var activity: Activity? = null
+
+    /**
+     * Observes the process lifecycle to pause/resume all camera sessions automatically
+     * when the app goes to the background or returns to the foreground.
+     *
+     * [ProcessLifecycleOwner] is process-scoped, so configuration changes (e.g. rotation)
+     * do not trigger spurious pause/resume events.
+     */
+    private val lifecycleObserver = object : DefaultLifecycleObserver {
+        override fun onPause(owner: LifecycleOwner) {
+            Log.i(TAG, "ProcessLifecycle onPause — pausing ${sessions.size} session(s)")
+            sessions.values.forEach { it.controller.pause { } }
+        }
+        override fun onResume(owner: LifecycleOwner) {
+            Log.i(TAG, "ProcessLifecycle onResume — resuming ${sessions.size} session(s)")
+            sessions.values.forEach { it.controller.resume { } }
+        }
+    }
 
     // -------------------------------------------------------------------------
     // FlutterPlugin
@@ -150,20 +171,24 @@ class CambrianCameraPlugin : FlutterPlugin, ActivityAware, CameraHostApi {
     /** Stores the activity reference when the plugin is first bound to an activity. */
     override fun onAttachedToActivity(binding: ActivityPluginBinding) {
         activity = binding.activity
+        ProcessLifecycleOwner.get().lifecycle.addObserver(lifecycleObserver)
     }
 
     /** Clears the activity reference when configuration changes require rebinding. */
     override fun onDetachedFromActivityForConfigChanges() {
+        ProcessLifecycleOwner.get().lifecycle.removeObserver(lifecycleObserver)
         activity = null
     }
 
     /** Restores the activity reference after a configuration change. */
     override fun onReattachedToActivityForConfigChanges(binding: ActivityPluginBinding) {
         activity = binding.activity
+        ProcessLifecycleOwner.get().lifecycle.addObserver(lifecycleObserver)
     }
 
     /** Clears the activity reference when the plugin is permanently detached from the activity. */
     override fun onDetachedFromActivity() {
+        ProcessLifecycleOwner.get().lifecycle.removeObserver(lifecycleObserver)
         activity = null
     }
 
