@@ -158,6 +158,16 @@ private:
     bool   loggedFirstFrame_ = true; // one-time first-frame log flag (per instance)
     uint64_t frameCount_    = 0;
 
+    // Explicit GL sync fences — one per PBO slot, for full-res, tracker, and raw streams.
+    // Inserted immediately after glReadPixels; waited on before glMapBufferRange.
+    GLsync fullResFence_[2]  = {nullptr, nullptr};
+    GLsync trackerFence_[2]  = {nullptr, nullptr};
+    GLsync rawFence_[2]      = {nullptr, nullptr};
+
+    // GL_TIME_ELAPSED timing queries (double-buffered) — measure DMA enqueue cost.
+    GLuint   timeQuery_[2]  = {0, 0};
+    uint64_t stallCount_    = 0;  ///< frames where fence was not yet signalled at map time
+
     // Metadata stored alongside each PBO write to avoid off-by-one delivery
     struct PboMeta { uint64_t frameId; cam::FrameMetadata meta; };
     PboMeta pboMeta_[2] = {};
@@ -168,8 +178,8 @@ private:
     GLuint rawProgram_    = 0;
     GLuint rawFbo_        = 0;
     GLuint rawFboTexture_ = 0;
-    GLuint rawPbo_[2]     = {0, 0};
-    bool   rawFirstFrame_ = true;
+    GLuint rawPbo_[2]      = {0, 0};
+    bool   rawFirstFrame_  = true;
     PboMeta rawPboMeta_[2] = {};
     EGLSurface rawEGLSurface_ = EGL_NO_SURFACE;
 

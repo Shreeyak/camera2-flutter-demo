@@ -13,6 +13,7 @@
 #include "GpuRenderer.h"
 
 #include <android/log.h>
+#include <chrono>
 #include <cinttypes>
 #include <cstring>
 
@@ -108,6 +109,43 @@ static void checkGlError(const char* tag) {
     while ((err = glGetError()) != GL_NO_ERROR) {
         LOGE("%s: GL error 0x%x", tag, err);
     }
+}
+
+// ---------------------------------------------------------------------------
+// Explicit fence wait helper
+//
+// Returns true if the fence is signalled (or was null — first frame).
+// Returns false if the DMA timed out or the wait failed; caller must skip map.
+// ---------------------------------------------------------------------------
+
+static bool waitFence(GLsync& fence, const char* label) {
+    if (!fence) return true;  // no fence yet (first frame)
+    GLenum result = glClientWaitSync(fence, GL_SYNC_FLUSH_COMMANDS_BIT, 0);
+    if (result == GL_WAIT_FAILED) {
+        LOGE("PBO fence wait failed: %s — skipping readback", label);
+        glDeleteSync(fence);
+        fence = nullptr;
+        return false;
+    }
+    if (result == GL_TIMEOUT_EXPIRED) {
+        // DMA not done yet — wait up to 8ms before giving up
+        LOGW("PBO fence stall: %s — waiting up to 8ms", label);
+        result = glClientWaitSync(fence, GL_SYNC_FLUSH_COMMANDS_BIT, 8'000'000);
+        if (result == GL_TIMEOUT_EXPIRED) {
+            LOGE("PBO fence timeout after 8ms: %s — skipping readback", label);
+            // Do not delete the fence here; leave it so releaseGl() cleans it up.
+            return false;
+        }
+        if (result == GL_WAIT_FAILED) {
+            LOGE("PBO fence wait failed (retry): %s — skipping readback", label);
+            glDeleteSync(fence);
+            fence = nullptr;
+            return false;
+        }
+    }
+    glDeleteSync(fence);
+    fence = nullptr;
+    return true;
 }
 
 } // anonymous namespace
@@ -321,21 +359,32 @@ void GpuRenderer::drawAndReadback(
 
     // -----------------------------------------------------------------------
     // 5. Issue async PBO readbacks (GPU→PBO DMA, no CPU stall)
+    //    Wrap all readPixels calls with a GL_TIME_ELAPSED_EXT query to measure
+    //    how long the GPU spent setting up the DMA transfer.
+    //    Insert explicit GL sync fences after each readback so we can wait on
+    //    them precisely before mapping (see step 6).
     // -----------------------------------------------------------------------
+
+    glBeginQuery(GL_TIME_ELAPSED_EXT, timeQuery_[writeIdx]);
 
     // Full-res readback
     glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo_);
     glBindBuffer(GL_PIXEL_PACK_BUFFER, fullResPbo_[writeIdx]);
     glReadPixels(0, 0, width_, height_, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    if (fullResFence_[writeIdx]) glDeleteSync(fullResFence_[writeIdx]);
+    fullResFence_[writeIdx] = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
     checkGlError("PBO readback full-res");
 
     // Tracker readback
     glBindFramebuffer(GL_READ_FRAMEBUFFER, trackerFbo_);
     glBindBuffer(GL_PIXEL_PACK_BUFFER, trackerPbo_[writeIdx]);
     glReadPixels(0, 0, trackerWidth_, trackerHeight_, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    if (trackerFence_[writeIdx]) glDeleteSync(trackerFence_[writeIdx]);
+    trackerFence_[writeIdx] = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
     checkGlError("PBO readback tracker");
 
     glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+    glEndQuery(GL_TIME_ELAPSED_EXT);
 
     // Store metadata for the frame whose readback was just issued
     pboMeta_[writeIdx] = {frameId, meta};
@@ -345,39 +394,78 @@ void GpuRenderer::drawAndReadback(
     //
     // Use pboMeta_[readIdx] — the metadata stored when that PBO was written —
     // so the pixel data and metadata always refer to the same frame.
+    //
+    // Read the previous frame's GL_TIME_ELAPSED_EXT query result (non-blocking:
+    // the GPU has had a full frame to process it since it was issued at writeIdx).
+    // Then wait explicitly on the fences before mapping with GL_MAP_UNSYNCHRONIZED_BIT.
     // -----------------------------------------------------------------------
     if (!firstFrame_) {
         const auto& storedMeta = pboMeta_[readIdx];
 
-        // Full-res callback
-        glBindBuffer(GL_PIXEL_PACK_BUFFER, fullResPbo_[readIdx]);
-        auto* fullPtr = static_cast<const uint8_t*>(
-            glMapBufferRange(GL_PIXEL_PACK_BUFFER, 0,
-                             static_cast<GLsizeiptr>(width_) * height_ * 4,
-                             GL_MAP_READ_BIT));
-        if (fullPtr) {
-            fullResCb(fullPtr, width_, height_, width_ * 4,
-                      storedMeta.frameId, storedMeta.meta);
-            glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
-        } else {
-            LOGE("drawAndReadback: failed to map full-res PBO[%d]", readIdx);
+        // Read timing query for the readIdx slot (issued one full frame ago).
+        // Use 32-bit variant (GLES3 does not expose glGetQueryObjectui64v);
+        // a GLuint holds up to ~4.3s in nanoseconds — sufficient for per-frame DMA timing.
+        GLuint dmaEnqueueNs32 = 0;
+        glGetQueryObjectuiv(timeQuery_[readIdx], GL_QUERY_RESULT, &dmaEnqueueNs32);
+        const double dmaEnqueueNs = static_cast<double>(dmaEnqueueNs32);
+
+        // Wait on fences; measure CPU stall time.
+        auto t0 = std::chrono::steady_clock::now();
+
+        bool fullResReady = waitFence(fullResFence_[readIdx], "full-res");
+        bool trackerReady = waitFence(trackerFence_[readIdx], "tracker");
+
+        auto stallNs = std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now() - t0).count();
+
+        if (stallNs > 500'000) {  // > 0.5ms — fence was not yet signalled
+            stallCount_++;
+            LOGW("PBO stall: waited %.2f ms (frame %" PRIu64 ", stall rate %.1f%%)",
+                 stallNs / 1e6, frameId,
+                 100.0 * stallCount_ / frameCount_);
         }
-        checkGlError("map full-res PBO");
+
+        if (frameCount_ % 300 == 0) {  // every ~10s at 30fps
+            LOGI("PBO diagnostics: dma_enqueue=%.2f ms  stall_rate=%.1f%%  "
+                 "stalls=%" PRIu64 "/%" PRIu64,
+                 dmaEnqueueNs / 1e6,
+                 100.0 * stallCount_ / frameCount_,
+                 stallCount_, frameCount_);
+        }
+
+        // Full-res callback
+        if (fullResReady) {
+            glBindBuffer(GL_PIXEL_PACK_BUFFER, fullResPbo_[readIdx]);
+            auto* fullPtr = static_cast<const uint8_t*>(
+                glMapBufferRange(GL_PIXEL_PACK_BUFFER, 0,
+                                 static_cast<GLsizeiptr>(width_) * height_ * 4,
+                                 GL_MAP_READ_BIT | GL_MAP_UNSYNCHRONIZED_BIT));
+            if (fullPtr) {
+                fullResCb(fullPtr, width_, height_, width_ * 4,
+                          storedMeta.frameId, storedMeta.meta);
+                glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
+            } else {
+                LOGE("drawAndReadback: failed to map full-res PBO[%d]", readIdx);
+            }
+            checkGlError("map full-res PBO");
+        }
 
         // Tracker callback
-        glBindBuffer(GL_PIXEL_PACK_BUFFER, trackerPbo_[readIdx]);
-        auto* trackPtr = static_cast<const uint8_t*>(
-            glMapBufferRange(GL_PIXEL_PACK_BUFFER, 0,
-                             static_cast<GLsizeiptr>(trackerWidth_) * trackerHeight_ * 4,
-                             GL_MAP_READ_BIT));
-        if (trackPtr) {
-            trackerCb(trackPtr, trackerWidth_, trackerHeight_, trackerWidth_ * 4,
-                      storedMeta.frameId, storedMeta.meta);
-            glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
-        } else {
-            LOGE("drawAndReadback: failed to map tracker PBO[%d]", readIdx);
+        if (trackerReady) {
+            glBindBuffer(GL_PIXEL_PACK_BUFFER, trackerPbo_[readIdx]);
+            auto* trackPtr = static_cast<const uint8_t*>(
+                glMapBufferRange(GL_PIXEL_PACK_BUFFER, 0,
+                                 static_cast<GLsizeiptr>(trackerWidth_) * trackerHeight_ * 4,
+                                 GL_MAP_READ_BIT | GL_MAP_UNSYNCHRONIZED_BIT));
+            if (trackPtr) {
+                trackerCb(trackPtr, trackerWidth_, trackerHeight_, trackerWidth_ * 4,
+                          storedMeta.frameId, storedMeta.meta);
+                glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
+            } else {
+                LOGE("drawAndReadback: failed to map tracker PBO[%d]", readIdx);
+            }
+            checkGlError("map tracker PBO");
         }
-        checkGlError("map tracker PBO");
 
         glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
     }
@@ -437,33 +525,37 @@ void GpuRenderer::drawAndReadback(
             checkGlError("raw preview blit");
         }
 
-        // Issue async PBO readback for raw frame
+        // Issue async PBO readback for raw frame + insert fence
         glBindFramebuffer(GL_READ_FRAMEBUFFER, rawFbo_);
         glBindBuffer(GL_PIXEL_PACK_BUFFER, rawPbo_[rawWriteIdx]);
         glReadPixels(0, 0, rawW_, rawH_, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+        if (rawFence_[rawWriteIdx]) glDeleteSync(rawFence_[rawWriteIdx]);
+        rawFence_[rawWriteIdx] = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
         glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
         checkGlError("raw PBO readback");
 
         // Store metadata alongside PBO write
         rawPboMeta_[rawWriteIdx] = {frameId, meta};
 
-        // Map previous raw PBO and invoke callback
+        // Map previous raw PBO and invoke callback (after explicit fence wait)
         if (!rawFirstFrame_ && rawCb) {
             const auto& rawMeta = rawPboMeta_[rawReadIdx];
-            glBindBuffer(GL_PIXEL_PACK_BUFFER, rawPbo_[rawReadIdx]);
-            auto* rawPtr = static_cast<const uint8_t*>(
-                glMapBufferRange(GL_PIXEL_PACK_BUFFER, 0,
-                                 static_cast<GLsizeiptr>(rawW_) * rawH_ * 4,
-                                 GL_MAP_READ_BIT));
-            if (rawPtr) {
-                rawCb(rawPtr, rawW_, rawH_, rawW_ * 4,
-                      rawMeta.frameId, rawMeta.meta);
-                glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
-            } else {
-                LOGE("drawAndReadback: failed to map raw PBO[%d]", rawReadIdx);
+            if (waitFence(rawFence_[rawReadIdx], "raw")) {
+                glBindBuffer(GL_PIXEL_PACK_BUFFER, rawPbo_[rawReadIdx]);
+                auto* rawPtr = static_cast<const uint8_t*>(
+                    glMapBufferRange(GL_PIXEL_PACK_BUFFER, 0,
+                                     static_cast<GLsizeiptr>(rawW_) * rawH_ * 4,
+                                     GL_MAP_READ_BIT | GL_MAP_UNSYNCHRONIZED_BIT));
+                if (rawPtr) {
+                    rawCb(rawPtr, rawW_, rawH_, rawW_ * 4,
+                          rawMeta.frameId, rawMeta.meta);
+                    glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
+                } else {
+                    LOGE("drawAndReadback: failed to map raw PBO[%d]", rawReadIdx);
+                }
+                glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+                checkGlError("map raw PBO");
             }
-            glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
-            checkGlError("map raw PBO");
         }
         rawFirstFrame_ = false;
     }
@@ -747,6 +839,10 @@ bool GpuRenderer::initGl() {
     glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
     checkGlError("tracker PBOs");
 
+    // --- Timing queries (double-buffered GL_TIME_ELAPSED_EXT) ---
+    glGenQueries(2, timeQuery_);
+    checkGlError("timing queries");
+
     // --- Raw stream resources (only when raw dimensions were set in initEgl) ---
     if (rawW_ > 0 && rawH_ > 0) {
         // Compile and link passthrough program
@@ -826,6 +922,20 @@ bool GpuRenderer::initGl() {
 // ---------------------------------------------------------------------------
 
 void GpuRenderer::releaseGl() {
+    // Log lifetime stall summary before teardown
+    LOGI("GpuRenderer teardown: total frames=%" PRIu64 "  pbo_stalls=%" PRIu64
+         "  stall_rate=%.1f%%",
+         frameCount_, stallCount_,
+         frameCount_ > 0 ? 100.0 * stallCount_ / frameCount_ : 0.0);
+
+    // Delete explicit fences and timing queries
+    for (int i = 0; i < 2; ++i) {
+        if (fullResFence_[i])  { glDeleteSync(fullResFence_[i]);     fullResFence_[i]  = nullptr; }
+        if (trackerFence_[i])  { glDeleteSync(trackerFence_[i]);     trackerFence_[i]  = nullptr; }
+        if (rawFence_[i])      { glDeleteSync(rawFence_[i]);          rawFence_[i]      = nullptr; }
+        if (timeQuery_[i])     { glDeleteQueries(1, &timeQuery_[i]);  timeQuery_[i]     = 0; }
+    }
+
     // Raw stream resources
     if (rawPbo_[0])        { glDeleteBuffers(2, rawPbo_);              rawPbo_[0] = rawPbo_[1] = 0; }
     if (rawFbo_)           { glDeleteFramebuffers(1, &rawFbo_);        rawFbo_        = 0; }
@@ -848,6 +958,8 @@ void GpuRenderer::releaseGl() {
     rawW_          = 0;
     rawH_          = 0;
     rawFirstFrame_ = true;
+    stallCount_    = 0;
+    frameCount_    = 0;
 }
 
 void GpuRenderer::releaseEgl() {
