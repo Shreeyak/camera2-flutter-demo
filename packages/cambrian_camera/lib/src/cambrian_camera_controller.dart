@@ -351,11 +351,8 @@ class CambrianCamera {
       _hostApi.getNativePipelineHandle(_handle);
 
 
-  /// Closes the camera and releases all native resources.
-  ///
-  /// After this call the instance must not be used again.
-  /// Safe to call multiple times; subsequent calls are no-ops.
   /// Pauses the camera: releases Camera2 resources but keeps the instance alive.
+  ///
   /// Call [resume] to restart streaming with the same configuration.
   /// No-op if the camera is not currently streaming.
   Future<void> pause() async {
@@ -369,6 +366,10 @@ class CambrianCamera {
     await _hostApi.resume(_handle);
   }
 
+  /// Closes the camera and releases all native resources.
+  ///
+  /// After this call the instance must not be used again.
+  /// Safe to call multiple times; subsequent calls are no-ops.
   Future<void> close() async {
     if (_closed) return;
     if (kDebugMode) debugPrint('CC/Dart: close handle=$_handle');

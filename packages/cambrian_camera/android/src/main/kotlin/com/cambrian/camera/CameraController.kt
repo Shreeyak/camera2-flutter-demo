@@ -476,11 +476,11 @@ class CameraController(
     }
 
     /**
-     * Closes the camera session and releases all Camera2 resources.
+     * Pauses the camera: tears down the capture session and Camera2 resources
+     * without marking the controller as released. The instance can be resumed
+     * with [resume].
      *
-     * Emits a `"closed"` state event to Dart after teardown completes.
-     *
-     * @param callback Invoked with [Result.success] after resources are released.
+     * Emits a [CameraState.PAUSED] state event.
      */
     fun pause(callback: (Result<Unit>) -> Unit) {
         if (state != State.STREAMING) {
@@ -494,6 +494,12 @@ class CameraController(
         callback(Result.success(Unit))
     }
 
+    /**
+     * Resumes the camera after [pause]: reopens the camera device and restores
+     * the capture session with the last-known settings.
+     *
+     * No-op if the controller is not currently paused.
+     */
     fun resume(callback: (Result<Unit>) -> Unit) {
         if (state != State.PAUSED) {
             callback(Result.success(Unit))
