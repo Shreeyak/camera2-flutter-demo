@@ -227,6 +227,7 @@ class CameraController(
     /** Capture-result counter used for periodic diagnostics. */
     @Volatile private var captureResultCount: Long = 0L
 
+    // Accessed only from backgroundHandler thread via CaptureCallback — no synchronization needed.
     /** Per-interval capture failure counter (reset after each heartbeat). */
     private var captureFailureCount = 0L
 

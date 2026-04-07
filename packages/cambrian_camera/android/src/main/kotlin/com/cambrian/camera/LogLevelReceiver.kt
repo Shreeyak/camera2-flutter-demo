@@ -8,13 +8,19 @@ import android.util.Log
 /**
  * Toggles CambrianCameraConfig logging flags via ADB broadcast.
  *
+ * **Runtime scope:** Changes take effect immediately for Kotlin-side logging
+ * (CameraController, GpuPipeline). C++ components (ImagePipeline, GpuRenderer)
+ * receive their `debugLevel` once at pipeline construction via `computeDebugLevel()`;
+ * changing flags after construction has no effect on C++ log output. To change C++
+ * log verbosity, restart the pipeline (call `close()` then `open()` on CambrianCamera).
+ *
  * Usage:
  *   adb shell am broadcast -a com.cambrian.camera.SET_LOG_LEVEL --ei level 0
  *
  * Levels:
  *   0 = quiet (all flags false)
  *   1 = default (verboseSettings=true, verboseDiagnostics=true)
- *   2 = verbose (adds debugDataFlow=true)
+ *   2 = verbose (adds debugDataFlow=true) — C++ perf logs require pipeline restart
  *   3 = full (adds verboseFullResult=true)
  */
 class LogLevelReceiver : BroadcastReceiver() {

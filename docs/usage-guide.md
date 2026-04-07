@@ -1111,6 +1111,8 @@ adb shell am broadcast -a com.cambrian.camera.SET_LOG_LEVEL --ei level 2
 | 2 | Verbose — adds `debugDataFlow` (C++ perf logs, GPU frame counter) |
 | 3 | Full — adds `verboseFullResult` (full `TotalCaptureResult` dump every 30 frames) |
 
+**Limitation:** Runtime toggling takes effect immediately for Kotlin-side logging (CameraController, GpuPipeline). C++ components (`ImagePipeline`, `GpuRenderer`) receive their log level once at pipeline construction; changing the level after construction has no effect on C++ output. To change C++ log verbosity, restart the pipeline (`close()` then `open()` on `CambrianCamera`).
+
 ### Diagnostic string representations
 
 `CameraSettings` and `ProcessingParams` both implement `toString()` that summarizes non-null / non-identity fields. These appear automatically in `CC/Dart` log lines:

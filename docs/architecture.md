@@ -348,11 +348,12 @@ Log tiers are controlled by `CambrianCameraConfig`:
 
 The `CambrianCameraConfig` flags are also mapped to a numeric `debugLevel` (0–2) that is threaded through JNI at pipeline construction time, so C++ components (`ImagePipeline`, `GpuRenderer`) gate their log calls natively without JNI overhead per frame.
 
-**Runtime log-level toggling via ADB:** `LogLevelReceiver` listens for `com.cambrian.camera.SET_LOG_LEVEL` broadcasts and updates the `CambrianCameraConfig` flags atomically at runtime:
+**Runtime log-level toggling via ADB:** `LogLevelReceiver` listens for `com.cambrian.camera.SET_LOG_LEVEL` broadcasts and updates the `CambrianCameraConfig` flags atomically at runtime. Changes take effect immediately for Kotlin-side logging (CameraController, GpuPipeline). **C++ logging is not affected at runtime** — `ImagePipeline` and `GpuRenderer` receive their `debugLevel` once at construction via `computeDebugLevel()`; a pipeline restart (`close()` + `open()`) is required for C++ log verbosity changes to take effect.
 
 ```bash
 adb shell am broadcast -a com.cambrian.camera.SET_LOG_LEVEL --ei level 2
 # level 0 = quiet, 1 = default, 2 = verbose (debugDataFlow), 3 = full (verboseFullResult)
+# Note: level 2 and 3 affect C++ logging only after a pipeline restart.
 ```
 
 ### Auto-Recovery State Machine
