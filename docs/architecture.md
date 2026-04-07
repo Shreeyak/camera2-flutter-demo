@@ -26,8 +26,9 @@ All paths are relative to `packages/cambrian_camera/android/src/main/`.
 - **ISO ↔ exposure are coupled.** Setting either to `auto` propagates to the other via Camera2's single AE flag.
 - **LUT rebuilt atomically.** When `ProcessingParams` change, the 256-entry LUT is rebuilt and swapped; no partial updates visible to the frame loop.
 - **Latest-value-wins for CameraSettings.** No debounce — in-flight values are replaced, not queued.
-- **Fire-and-forget for ProcessingParams.** No serializer — mutex-protected struct copy in C++, next frame picks up new values.
+- **Fire-and-forget for ProcessingParams.** All color transforms are applied by the GPU shader via `GpuPipeline.setAdjustments()`. No CPU processing in `ImagePipeline`.
 - **Recording encodes GPU output directly.** MediaCodec surface receives tone-mapped FBO via EGL blit — no CPU YUV copy.
+- **No OpenCV in pipeline.** `ImagePipeline` uses `std::vector<uint8_t>` for pixel storage; OpenCV is not linked.
 
 ### Section index
 
@@ -134,10 +135,8 @@ packages/cambrian_camera/
 │           │   ├── CameraBridge.cpp           # JNI glue
 │           │   ├── GpuRenderer.cpp            # Dual-path GPU rendering (color + raw shaders)
 │           │   ├── GpuRenderer.h              # GPU renderer internal header
-│           │   ├── ImagePipeline.cpp          # Processing + generic fan-out
-│           │   ├── ImagePipeline.h            # Internal header (may use OpenCV)
-│           │   ├── InputRing.cpp              # Input ring buffer implementation
-│           │   └── InputRing.h                # Input ring buffer header
+│           │   ├── ImagePipeline.cpp          # GPU dispatch, ProcessingStage hook, consumer fan-out
+│           │   └── ImagePipeline.h            # Internal header
 │           └── test/
 │               ├── SinkRoutingTest.cpp        # Consumer sink routing tests
 │               └── TrackerDimTest.cpp         # Tracker dimension calculation tests
@@ -410,7 +409,7 @@ In addition to the session-level recovery state machine, the pipeline detects an
 | FPS degradation | `SENSOR_FRAME_DURATION` checked in heartbeat (every 30 results, `verboseDiagnostics` gate) | FPS < 15 for 3 heartbeats | Emits non-fatal `fpsDegraded` error to Dart |
 | AE convergence timeout | `aeSearchingStartMs` timestamp checked per result when AE is in `SEARCHING` | >5 000 ms in SEARCHING | Emits non-fatal `aeConvergenceTimeout` error; timer resets to prevent repeated firing |
 | EOS drain timeout | `VideoRecorder.eosDrainTimedOut` flag set when 5-second drain latch expires | Single occurrence | `stopRecording()` emits non-fatal `recordingTruncated` error after returning the URI |
-| InputRing dimension mismatches | `InputRing.dimensionMismatchCount_` atomic counter, polled via `nativeGetDimensionMismatchCount()` | Non-zero count at heartbeat | Logged as warning; informational only — no auto-recovery |
+| InputRing dimension mismatches | `nativeGetDimensionMismatchCount()` always returns 0 (InputRing removed) | — | Legacy diagnostic; retained for API compatibility |
 
 #### Preview rebinding
 
@@ -628,7 +627,7 @@ Raw stream adds: rawFBO (~8 MB at 1080p), rawPBOs[2] (~16 MB), rawEGLSurface (~8
 
 Header: `packages/cambrian_camera/android/src/main/cpp/include/cambrian_camera_native.h`
 
-Key types: `IImagePipeline` (`addSink`/`removeSink`), `SinkConfig`, `SinkFrame`, `FrameMetadata`, `SinkRole`. Intentionally excludes OpenCV and library internals.
+Key types: `IImagePipeline` (`addSink`/`removeSink`/`setFrameHook`), `SinkConfig`, `SinkFrame`, `FrameMetadata`, `SinkRole`, `FrameHookFn`. Intentionally excludes library internals.
 
 ### Consumer registration example
 
@@ -653,6 +652,16 @@ void registerConsumers() {
                       [](const cam::SinkFrame& frame) {
         // frame.data = passthrough RGBA, no shader adjustments
     });
+
+    // Optional: register a processing hook for in-place frame mutation before dispatch.
+    // The hook runs on a dedicated thread between GPU readback and consumer delivery.
+    pipeline->setFrameHook(cam::SinkRole::FULL_RES,
+                           [](uint8_t* rgba, int w, int h, int stride) {
+        // Modify rgba in-place; buffer remains valid for the duration of the call.
+    });
+
+    // Pass nullptr to clear the hook and resume direct consumer dispatch.
+    pipeline->setFrameHook(cam::SinkRole::FULL_RES, nullptr);
 }
 ```
 

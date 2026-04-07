@@ -31,7 +31,6 @@ import android.view.Surface
 import io.flutter.view.TextureRegistry
 import java.io.File
 import java.io.FileOutputStream
-import java.nio.ByteBuffer
 import java.util.concurrent.Semaphore
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
@@ -75,68 +74,11 @@ class CameraController(
             }
         }
 
-        /** Initialises the native pipeline and pre-allocates the input ring for the given dims. */
-        @JvmStatic external fun nativeInit(previewSurface: Surface?, width: Int, height: Int, debugLevel: Int): Long
-
-        // YUV layout constants — kept in sync with InputRing.h.
-        const val YUV_FORMAT_UNKNOWN = 0
-        const val YUV_FORMAT_NV21    = 1  // VU interleaved (Android default)
-        const val YUV_FORMAT_NV12    = 2  // UV interleaved
-        const val YUV_FORMAT_I420    = 3  // Planar
+        /** Initialises the native ImagePipeline and returns an opaque handle. */
+        @JvmStatic external fun nativeInit(): Long
 
         /** Releases all resources held by the native pipeline. */
         @JvmStatic external fun nativeRelease(pipelinePtr: Long)
-
-        /**
-         * Notifies the native pipeline of a new processed-preview [Surface] (e.g. after a surface
-         * recreation event from [TextureRegistry.SurfaceProducer.Callback]).
-         */
-        @JvmStatic external fun nativeSetPreviewWindow(
-            pipelinePtr: Long,
-            previewSurface: Surface?,
-        )
-
-        /**
-         * Copies one YUV_420_888 frame into the C++ input ring. Returns immediately;
-         * the caller may close the camera Image right after this call returns.
-         *
-         * @param pipelinePtr      Pointer returned by [nativeInit].
-         * @param yBuffer          Direct ByteBuffer for the Y plane.
-         * @param yRowStride       Row stride of the Y plane in bytes.
-         * @param uBuffer          Direct ByteBuffer for the U (Cb) plane.
-         * @param uvRowStride      Row stride of U/V planes in bytes.
-         * @param uvPixelStride    Pixel stride of U/V planes (1=I420, 2=NV12/NV21).
-         * @param vBuffer          Direct ByteBuffer for the V (Cr) plane.
-         * @param width            Frame width in pixels.
-         * @param height           Frame height in pixels.
-         * @param frameId          Monotonic frame counter (streamFrameCount).
-         * @param iso              Sensor ISO from latest capture result; 0 if not yet known.
-         * @param exposureTimeNs   Exposure duration in ns from latest capture result; 0 if unknown.
-         * @param sensorTimestamp  Sensor timestamp from [android.media.Image.getTimestamp].
-         * @param yuvFormat        YUV layout constant ([YUV_FORMAT_NV21]/NV12/I420).
-         */
-        @JvmStatic external fun nativeDeliverYuv(
-            pipelinePtr: Long,
-            yBuffer: ByteBuffer, yRowStride: Int,
-            uBuffer: ByteBuffer, uvRowStride: Int, uvPixelStride: Int,
-            vBuffer: ByteBuffer,
-            width: Int, height: Int,
-            frameId: Long,
-            iso: Int, exposureTimeNs: Long, sensorTimestamp: Long,
-            yuvFormat: Int,
-        )
-
-        /**
-         * Updates the C++ pipeline's processing parameters (fire-and-forget).
-         * The next frame will pick up the new values.
-         */
-        @JvmStatic external fun nativeSetProcessingParams(
-            pipelinePtr: Long,
-            blackR: Double, blackG: Double, blackB: Double,
-            gamma: Double,
-            brightness: Double,
-            saturation: Double,
-        )
 
         // Self-healing thresholds
         /** Number of consecutive HAL REASON_ERROR failures before triggering recovery. */
@@ -203,7 +145,7 @@ class CameraController(
 
     /**
      * Guards [nativePipelinePtr] reads/writes and JNI calls that touch the native pipeline.
-     * Ensures [nativeDeliverYuv] and [nativeRelease] never run concurrently for the same pointer.
+     * Ensures [nativeRelease] does not run concurrently with pipeline init or GPU dispatch.
      */
     private val pipelineLock = Any()
 
@@ -257,13 +199,6 @@ class CameraController(
     @Volatile private var lastAeState: Int? = null
     @Volatile private var lastAfState: Int? = null
     @Volatile private var lastAwbState: Int? = null
-
-    /**
-     * YUV layout of the Camera2 stream, detected from plane strides on the first frame
-     * and cached for all subsequent frames. Reset to [YUV_FORMAT_UNKNOWN] at each
-     * session start. Accessed only from the camera background thread; no @Volatile needed.
-     */
-    private var detectedYuvFormat: Int = YUV_FORMAT_UNKNOWN
 
     /**
      * Last sensor values reported by Camera2 capture results.
@@ -327,15 +262,12 @@ class CameraController(
         surfaceProducer.setCallback(
             object : TextureRegistry.SurfaceProducer.Callback {
                 override fun onSurfaceAvailable() {
-                    val ptr = nativePipelinePtr
-                    if (ptr == 0L) return
                     val width = previewWidth
                     val height = previewHeight
                     Log.i("CC/Cam", "surface available ${width}×${height}")
                     if (width > 0 && height > 0) {
                         surfaceProducer.setSize(width, height)
                     }
-                    nativeSetPreviewWindow(ptr, surfaceProducer.getSurface())
                     // Rebind the GPU renderer's processed preview EGL surface so the
                     // preview resumes after Flutter recreates the SurfaceProducer surface.
                     gpuPipeline?.rebindPreviewSurface(surfaceProducer.getSurface())
@@ -343,8 +275,6 @@ class CameraController(
 
                 override fun onSurfaceCleanup() {
                     Log.i("CC/Cam", "surface cleanup")
-                    val ptr = nativePipelinePtr
-                    if (ptr != 0L) nativeSetPreviewWindow(ptr, null)
                     // Detach the GPU renderer's processed preview EGL surface so it
                     // stops rendering to a dead surface while the app is backgrounded.
                     gpuPipeline?.rebindPreviewSurface(null)
@@ -783,8 +713,7 @@ class CameraController(
         if (CambrianCameraConfig.debugDataFlow) {
             Log.d("CC/Cam", "Processing params: brightness=${params.brightness} contrast=${params.contrast} saturation=${params.saturation}")
         }
-        // GPU path: uniforms are updated via GpuPipeline.setAdjustments().
-        // nativeSetProcessingParams is not called — the CPU pipeline is inactive.
+        // Uniforms are updated via GpuPipeline.setAdjustments(); the GPU shader handles all transforms.
         gpuPipeline?.setAdjustments(
             brightness = params.brightness,
             contrast   = params.contrast,
@@ -1036,7 +965,6 @@ class CameraController(
         captureResultCount = 0L
         captureFailureCount = 0L
         bufferLostCount = 0L
-        detectedYuvFormat = YUV_FORMAT_UNKNOWN
 
         previewWidth = streamWidth
         previewHeight = streamHeight
@@ -1058,9 +986,9 @@ class CameraController(
         val jpegReader = ImageReader.newInstance(streamWidth, streamHeight, ImageFormat.JPEG, 1)
         jpegImageReader = jpegReader
 
-        // Pass null: ImagePipeline is used only for sink dispatch in the GPU path.
+        // ImagePipeline is used only for sink dispatch in the GPU path.
         // GpuRenderer owns the preview surface via EGL.
-        nativePipelinePtr = nativeInit(null, streamWidth, streamHeight, GpuPipeline.computeDebugLevel())
+        nativePipelinePtr = nativeInit()
         if (nativePipelinePtr == 0L) {
             Log.e("CC/Cam", "startCaptureSession: nativeInit failed — aborting session startup")
             jpegImageReader = null
@@ -1170,32 +1098,6 @@ class CameraController(
                 },
             ),
         )
-    }
-
-    /**
-     * Detects the YUV interleaving layout by inspecting plane strides.
-     *
-     * Camera2 YUV_420_888 is device-agnostic and doesn't advertise its internal layout
-     * directly. We infer it from pixelStride and the relative sizes of the U and V buffers:
-     * - pixelStride == 1 → I420 (planar, separate U and V planes)
-     * - pixelStride == 2 and V buffer larger → NV21 (V starts 1 byte before U in memory)
-     * - pixelStride == 2 otherwise → NV12 (U starts 1 byte before V in memory)
-     */
-    private fun detectYuvFormat(image: android.media.Image): Int {
-        val uPlane = image.planes[1]
-        val vPlane = image.planes[2]
-        return when {
-            uPlane.pixelStride == 1 -> YUV_FORMAT_I420
-            vPlane.buffer.remaining() > uPlane.buffer.remaining() -> YUV_FORMAT_NV21
-            else -> YUV_FORMAT_NV12
-        }
-    }
-
-    private fun yuvFormatName(format: Int): String = when (format) {
-        YUV_FORMAT_NV21 -> "NV21"
-        YUV_FORMAT_NV12 -> "NV12"
-        YUV_FORMAT_I420 -> "I420"
-        else -> "UNKNOWN($format)"
     }
 
     /**
@@ -1476,7 +1378,6 @@ class CameraController(
         repeatingTargetSurface = null
         lastCaptureResultMs = 0L
         captureResultCount = 0L
-        detectedYuvFormat = YUV_FORMAT_UNKNOWN
 
         synchronized(pipelineLock) {
             val ptr = nativePipelinePtr
@@ -1550,7 +1451,6 @@ class CameraController(
         consecutiveHalErrors = 0
         lowFpsStreak = 0
         aeSearchingStartMs = 0L
-        detectedYuvFormat = YUV_FORMAT_UNKNOWN
         lastKnownIso = null
         lastKnownExposureTimeNs = null
         lastAeState = null
@@ -1558,7 +1458,7 @@ class CameraController(
         lastAwbState = null
 
         // Release native pipeline; pipelineLock guards nativeRelease against concurrent
-        // startup/shutdown (nativeDeliverYuv is not called in the GPU path).
+        // startup/shutdown.
         synchronized(pipelineLock) {
             val ptr = nativePipelinePtr
             if (ptr != 0L) {

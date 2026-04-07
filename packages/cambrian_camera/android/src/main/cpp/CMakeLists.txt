@@ -4,18 +4,10 @@ project(cambrian_camera)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# OpenCV: for Android, use the symlinked SDK; for host tests, rely on system install.
-# See CLAUDE.md for setup instructions.
-if(ANDROID)
-    set(OpenCV_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../../opencv/sdk/native/jni")
-endif()
-find_package(OpenCV REQUIRED core imgproc)
-
 add_library(cambrian_camera SHARED
     src/CameraBridge.cpp
     src/GpuRenderer.cpp
     src/ImagePipeline.cpp
-    src/InputRing.cpp
 )
 
 # Pixel-processing code needs optimization even in Debug — without it, our
@@ -31,13 +23,10 @@ target_compile_options(cambrian_camera PRIVATE
 target_include_directories(cambrian_camera PRIVATE include)
 
 target_link_libraries(cambrian_camera
-    opencv_core
-    opencv_imgproc
     android
     log
     GLESv3
     EGL
-    c++_shared   # required: OpenCV static libs reference libc++ symbols
 )
 
 if(NOT ANDROID)
@@ -53,7 +42,6 @@ if(NOT ANDROID)
         test/TrackerDimTest.cpp
         test/SinkRoutingTest.cpp
         src/ImagePipeline.cpp
-        src/InputRing.cpp
     )
 
     target_include_directories(cambrian_camera_tests PRIVATE
@@ -64,8 +52,6 @@ if(NOT ANDROID)
 
     target_link_libraries(cambrian_camera_tests
         GTest::gtest_main
-        opencv_core
-        opencv_imgproc
         # Note: android, log, EGL, GLESv3 are Android-only — not linked for host build
     )
 
