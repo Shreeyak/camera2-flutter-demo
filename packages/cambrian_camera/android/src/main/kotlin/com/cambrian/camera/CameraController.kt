@@ -290,6 +290,8 @@ class CameraController(
             if (lastCaptureResultMs > 0L && elapsed > stallTimeoutMs) {
                 Log.w("CC/Cam", "[$handle] Frame stall detected: ${elapsed}ms — triggering recovery")
                 handleNonFatalError(CamErrorCode.PIPELINE_ERROR, "Frame delivery stalled (${elapsed}ms)")
+                // Watchdog does not re-post itself here. Recovery always routes through
+                // startCaptureSession(), which re-posts the watchdog after entering STREAMING.
                 return
             }
             backgroundHandler.postDelayed(this, stallCheckIntervalMs)
@@ -509,7 +511,7 @@ class CameraController(
             callback(Result.success(Unit))
             return
         }
-        Log.i("CambrianCamera", "CameraController[$handle]: pausing")
+        Log.i("CC/Cam", "[$handle] pausing")
         // Tear down only the capture session; keep CameraDevice open for fast resume.
         // OPENING reuses its existing meaning: "device held, no capture session running".
         setState(State.OPENING)
@@ -531,7 +533,7 @@ class CameraController(
             callback(Result.success(Unit))
             return
         }
-        Log.i("CambrianCamera", "CameraController[$handle]: resuming")
+        Log.i("CC/Cam", "[$handle] resuming")
         startCaptureSession { result ->
             result.fold(
                 onSuccess = { callback(Result.success(Unit)) },
@@ -1445,11 +1447,6 @@ class CameraController(
     // -------------------------------------------------------------------------
 
     /**
-     * Closes all Camera2 resources and resets internal references.
-     *
-     * Safe to call from any state. Does NOT emit state events (callers must do that).
-     */
-    /**
      * Tears down the capture session and GPU/native pipeline, but **keeps [cameraDevice] open**.
      *
      * Used by [pause] to cheaply release the session when the app backgrounds, so that
@@ -1461,6 +1458,10 @@ class CameraController(
     private fun teardownSession() {
         backgroundHandler.removeCallbacks(stallWatchdog)
 
+        // Thread-safety note: Camera2's captureSession.close() and imageReader.close() are
+        // thread-safe per the Camera2 API contract. Callbacks running on backgroundHandler
+        // null-check captureSession/imageReader before use, so the race is benign.
+        // This mirrors the pattern in teardown() (pre-existing design decision).
         try { captureSession?.close() } catch (_: Exception) {}
         captureSession = null
 
@@ -1486,6 +1487,10 @@ class CameraController(
         }
     }
 
+    /**
+     * Closes all Camera2 resources and marks this controller as released.
+     * After this call the controller cannot be reused.
+     */
     private fun teardown() {
         backgroundHandler.removeCallbacks(stallWatchdog)
 
