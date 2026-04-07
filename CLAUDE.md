@@ -118,10 +118,15 @@ Reference: `backgroundSuspend()`, `backgroundResume()`, `close()`. Never call `t
 
 ### Running Integration Tests
 
+**Always wake and unlock the device first**, otherwise the test runner will launch into a black/locked screen and fail:
+
 ```bash
-flutter test integration_test/ -d <device-id>   # Run all on-device tests
-flutter test integration_test/app_test.dart -d <device-id>  # Run specific test file
+./scripts/wake_and_launch.sh [device-id]        # wake screen + swipe-unlock + launch app
+flutter test integration_test/ -d <device-id>   # run all on-device tests
+flutter test integration_test/app_test.dart -d <device-id>  # run specific test file
 ```
+
+The script checks `dumpsys power` (screen on/off) and `dumpsys window` (keyguard state) before launching. It handles swipe-to-unlock screens automatically. If the device has a PIN/pattern lock, unlock manually first or use `adb shell wm dismiss-keyguard` (debug builds only).
 
 Tests use `integration_test` (in-process, direct widget access). Do NOT use `flutter_driver` — it was removed from this project because it times out during recording due to continuous frame callbacks.
 
