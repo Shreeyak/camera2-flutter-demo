@@ -1693,7 +1693,7 @@ class CameraController(
                             mainHandler.post {
                                 flutterApi.onError(handle, CamError(
                                     CamErrorCode.FPS_DEGRADED,
-                                    "FPS degraded to ${"%.1f".format(fpsValue)} for ${lowFpsStreak}s",
+                                    "FPS degraded to ${"%.1f".format(fpsValue)} for $lowFpsStreak consecutive heartbeat intervals",
                                     false
                                 )) {}
                             }
