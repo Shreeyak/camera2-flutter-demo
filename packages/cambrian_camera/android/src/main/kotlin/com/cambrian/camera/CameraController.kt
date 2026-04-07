@@ -1442,6 +1442,9 @@ class CameraController(
         captureResultCount = 0L
         captureFailureCount = 0L
         bufferLostCount = 0L
+        consecutiveHalErrors = 0
+        lowFpsStreak = 0
+        aeSearchingStartMs = 0L
         detectedYuvFormat = YUV_FORMAT_UNKNOWN
         lastKnownIso = null
         lastKnownExposureTimeNs = null

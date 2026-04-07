@@ -400,7 +400,7 @@ In addition to the session-level recovery state machine, the pipeline detects an
 
 | Fault | Detector | Threshold | Response |
 |-------|----------|-----------|----------|
-| Repeated HAL capture failures | `onCaptureFailed(REASON_ERROR)` counter in `repeatingCaptureCallback` | 5 consecutive | Calls `handleNonFatalError(CAPTURE_FAILURE)` → enters existing recovery state machine; emits `captureFailure` error |
+| Repeated HAL capture failures | `onCaptureFailed(REASON_ERROR)` counter in `repeatingCaptureCallback` | 5 consecutive | Calls `handleNonFatalError(captureFailure)` → enters existing recovery state machine; emits `captureFailure` error |
 | Stale EGL preview surface | `GpuRenderer.consecutiveSwapFailures_` polled by `GpuPipeline` after each frame | 3 consecutive swap failures | `onPreviewRebindNeeded` callback → `CameraController` rebinds surface via `GpuPipeline.rebindPreviewSurface()`; emits nothing (transparent) |
 | FPS degradation | `SENSOR_FRAME_DURATION` checked in heartbeat (every 30 results, `verboseDiagnostics` gate) | FPS < 15 for 3 heartbeats | Emits non-fatal `fpsDegraded` error to Dart |
 | AE convergence timeout | `aeSearchingStartMs` timestamp checked per result when AE is in `SEARCHING` | >5 000 ms in SEARCHING | Emits non-fatal `aeConvergenceTimeout` error; timer resets to prevent repeated firing |
