@@ -874,18 +874,18 @@ class CameraController(
     }
 
     /**
-     * Forwards processing parameters to the GPU pipeline shader uniforms (fire-and-forget).
-     * The next frame rendered by [GpuPipeline] will pick up the new values.
-     *
-     * @param params Image processing parameters (black balance, brightness, contrast, saturation, etc.).
-     */
-    /**
      * Returns persisted processing params from a previous session, or null if none were saved.
      * Called by Dart to initialize slider UI with last-known values.
      */
     fun getPersistedProcessingParams(): CamProcessingParams? =
         if (settingsStore.hasSavedProcessingParams()) settingsStore.loadProcessingParams() else null
 
+    /**
+     * Forwards processing parameters to the GPU pipeline shader uniforms (fire-and-forget).
+     * The next frame rendered by [GpuPipeline] will pick up the new values.
+     *
+     * @param params Image processing parameters (black balance, brightness, contrast, saturation, etc.).
+     */
     fun setProcessingParams(params: CamProcessingParams) {
         lastProcessingParams = params
         settingsStore.saveProcessingParams(params)
@@ -1698,11 +1698,12 @@ class CameraController(
 
         retryCount++
 
+        pendingRetryRunnable?.let { backgroundHandler.removeCallbacks(it) }
         val retryRunnable = Runnable {
             pendingRetryRunnable = null
-            teardown()
             if (resolvedCameraId == null) return@Runnable
             if (state != State.RECOVERING) return@Runnable // Cancelled by explicit close or backgroundSuspend.
+            teardown()
             doReopenCamera()
         }
         pendingRetryRunnable = retryRunnable
