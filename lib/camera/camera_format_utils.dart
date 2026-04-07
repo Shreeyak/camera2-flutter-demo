@@ -1,7 +1,7 @@
 /// Formats a shutter speed value in nanoseconds for display.
 ///
 /// Returns fractional notation (e.g. `'1/250'`) for standard sub-second
-/// values whose denominator is ≥ 2 (i.e. exposure < 0.5 s), and decimal
+/// values whose denominator is ≥ 2 (i.e. exposure ≤ 0.5 s), and decimal
 /// seconds (e.g. `'0.8s'`) for longer exposures. This avoids collapsing
 /// non-standard AE values (e.g. 0.8 s) to the misleading `'1/1'`.
 String formatShutterNs(double ns) {

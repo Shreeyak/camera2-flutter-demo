@@ -16,4 +16,11 @@ object CambrianCameraConfig {
 
     /** Log frame-flow and capture-result diagnostics. */
     @Volatile var verboseDiagnostics: Boolean = true
+
+    /** Log stream initialization, GPU pipeline lifecycle, and data flow for debugging. */
+    @Volatile var debugDataFlow: Boolean = false
+
+    /** Logs the full TotalCaptureResult every 30 frames. Independent of verboseDiagnostics.
+     *  Produces very verbose output — enable only when investigating an unexpected capture field. */
+    @Volatile var verboseFullResult: Boolean = false
 }

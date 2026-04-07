@@ -9,4 +9,14 @@
     <uses-feature
         android:name="android.hardware.camera.autofocus"
         android:required="false" />
+
+    <application>
+        <receiver
+            android:name=".LogLevelReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.cambrian.camera.SET_LOG_LEVEL" />
+            </intent-filter>
+        </receiver>
+    </application>
 </manifest>

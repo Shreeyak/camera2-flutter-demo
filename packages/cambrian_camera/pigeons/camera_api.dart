@@ -1,5 +1,14 @@
 // ignore_for_file: one_member_abstracts
-import 'package:pigeon/pigeon.dart';
+import 'package:pigeon/pigeon.dart'
+    show
+        ConfigurePigeon,
+        PigeonOptions,
+        DartOptions,
+        KotlinOptions,
+        SwiftOptions,
+        HostApi,
+        FlutterApi,
+        async;
 
 @ConfigurePigeon(PigeonOptions(
   dartOut: 'lib/src/messages.g.dart',
@@ -38,6 +47,8 @@ class CamSettings {
     this.noiseReductionMode,
     this.edgeMode,
     this.evCompensation,
+    this.enableRawStream,
+    this.rawStreamHeight,
   });
 
   /// "auto" | "manual" | null (don't change).
@@ -74,6 +85,11 @@ class CamSettings {
   /// NOTE: has no effect when isoMode == "manual" or exposureMode == "manual"
   /// because CONTROL_AE_MODE is set to OFF in that case.
   int? evCompensation;
+
+  /// Enable GPU raw (passthrough) stream. Null = don't change.
+  bool? enableRawStream;
+  /// Requested height of the GPU raw stream in pixels. Null = don't change. 0 = use default.
+  int? rawStreamHeight;
 }
 
 class CamProcessingParams {
@@ -82,12 +98,8 @@ class CamProcessingParams {
     required this.blackG,
     required this.blackB,
     required this.gamma,
-    required this.histBlackPoint,
-    required this.histWhitePoint,
-    required this.autoStretch,
-    required this.autoStretchLow,
-    required this.autoStretchHigh,
     required this.brightness,
+    required this.contrast,
     required this.saturation,
   });
 
@@ -95,12 +107,8 @@ class CamProcessingParams {
   double blackG;
   double blackB;
   double gamma;
-  double histBlackPoint;
-  double histWhitePoint;
-  bool autoStretch;
-  double autoStretchLow;
-  double autoStretchHigh;
   double brightness;
+  double contrast;
   double saturation;
 }
 
@@ -118,7 +126,9 @@ class CamCapabilities {
     required this.evCompMin,
     required this.evCompMax,
     required this.evCompensationStep,
-    required this.estimatedMemoryBytes,
+    required this.rawStreamTextureId,
+    required this.rawStreamWidth,
+    required this.rawStreamHeight,
     required this.streamWidth,
     required this.streamHeight,
   });
@@ -135,10 +145,16 @@ class CamCapabilities {
   int evCompMin;
   int evCompMax;
   double evCompensationStep;
-  int estimatedMemoryBytes;
-  /// Width of the YUV stream used by the C++ pipeline (pixels).
+  /// Flutter texture ID for the GPU raw stream (passthrough, no color adjustments).
+  /// 0 if raw stream is disabled.
+  int rawStreamTextureId;
+  /// Actual computed width of the GPU raw stream (pixels). 0 if raw stream is disabled.
+  int rawStreamWidth;
+  /// Requested height of the GPU raw stream (pixels). 0 if raw stream is disabled.
+  int rawStreamHeight;
+  /// Width of the GPU processed stream texture (pixels). Matches the largest 4:3 YUV size.
   int streamWidth;
-  /// Height of the YUV stream used by the C++ pipeline (pixels).
+  /// Height of the GPU processed stream texture (pixels).
   int streamHeight;
 }
 
@@ -167,6 +183,11 @@ enum CamErrorCode {
   previewSurfaceLost,  // Flutter SurfaceProducer was invalidated
   pipelineError,       // C++ processing pipeline error
   settingsConflict,    // invalid settings combination (e.g. mixed manual/auto ISO+exposure)
+  frameStall,          // GPU pipeline stopped receiving frames
+  captureFailure,      // HAL reported repeated capture failures
+  fpsDegraded,         // sustained FPS drop below acceptable threshold
+  aeConvergenceTimeout, // auto-exposure failed to converge within timeout
+  recordingTruncated,  // recording stopped but EOS drain timed out — file may be truncated
   unknown,             // catch-all; keep last
 }
 
@@ -233,7 +254,32 @@ abstract class CameraHostApi {
   int? getNativePipelineHandle(int handle);
 
   @async
+  String startRecording(int handle, String? outputDirectory, String? fileName, int? bitrate, int? fps);
+
+  @async
+  String stopRecording(int handle);
+
+  @async
   void close(int handle);
+
+  @async
+  void pause(int handle);
+
+  @async
+  void resume(int handle);
+
+  /// Returns persisted processing params from a previous session, or null if none exist.
+  ///
+  /// Dart should call this after [open] to initialize slider UI with the user's last-known
+  /// values instead of sending default zeros that would overwrite the persisted state.
+  CamProcessingParams? getPersistedProcessingParams(int handle);
+
+  /// Returns the current display rotation in degrees CW from portrait: 0, 90, 180, or 270.
+  ///
+  /// Used by Dart preview widgets to select the correct [RotatedBox.quarterTurns]
+  /// for all four device orientations, since [MediaQuery.orientation] only
+  /// distinguishes portrait from landscape.
+  int getDisplayRotation();
 }
 
 // ---------------------------------------------------------------------------
@@ -245,4 +291,7 @@ abstract class CameraFlutterApi {
   void onStateChanged(int handle, CamStateUpdate state);
   void onError(int handle, CamError error);
   void onFrameResult(int handle, CamFrameResult result);
+  /// Called when the recording state changes.
+  /// [state] is one of: "recording", "idle", "error".
+  void onRecordingStateChanged(int handle, String state);
 }

@@ -1,0 +1,13 @@
+[copy]
+    exclude = **/.env
+
+[defaults]
+    editor = zed
+    ai = claude
+
+[worktrees]
+    dir = ../camera2_flutter_demo.worktrees
+    prefix = camera2_flutter_demo-
+
+[gtr]
+    defaultBranch = dev

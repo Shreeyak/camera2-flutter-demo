@@ -7,6 +7,14 @@ tmp_files/*
 **/android/.gradle
 **/android/app/bin
 **/android/.cxx
+**/android/opencv
+**/.venv
+**/src/main/cpp/build-test/
+**/src/main/cpp/build/
+**/CMakeFiles/
+!docs/redundant/.gitkeep
+docs/redundant
+docs/user-to-do.md
 
 # Miscellaneous
 pubspec.lock

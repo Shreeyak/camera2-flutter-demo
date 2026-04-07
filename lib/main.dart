@@ -1,7 +1,19 @@
 import 'dart:async' show StreamSubscription;
 import 'dart:math' show max;
 
-import 'package:cambrian_camera/cambrian_camera.dart';
+import 'package:cambrian_camera/cambrian_camera.dart'
+    show
+        AutoValue,
+        CambrianCamera,
+        CameraError,
+        CameraErrorCode,
+        CameraSettings,
+        CameraTextureInfo,
+        FrameResult,
+        ProcessingParams,
+        quarterTurnsFromDisplayRotation,
+        RecordingState,
+        WhiteBalance;
 import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
 
@@ -10,9 +22,11 @@ import 'camera/camera_settings_values.dart';
 import 'theme/material_theme.dart';
 import 'theme/theme_util.dart';
 import 'widgets/bottom_bar.dart';
+import 'widgets/bottom_bar_buttons.dart' show CameraAutoToggleButton;
 import 'widgets/camera_control_overlay.dart'
     show CameraControlOverlay, kCameraDialMaxWidth;
-import 'widgets/bottom_bar_buttons.dart';
+import 'widgets/gpu_controls_sidebar.dart' show GpuControlsSidebar;
+import 'widgets/recording_hud.dart' show RecordingHud;
 
 /// Horizontal offset from the left edge of the dial to the auto-toggle button.
 const _kAutoToggleOffset = 60.0;
@@ -24,6 +38,8 @@ const _kInitialSettings = CameraSettings(
   iso: AutoValue<int>.auto(),
   exposureTimeNs: AutoValue<int>.auto(),
   focus: AutoValue<double>.auto(),
+  enableRawStream: true,
+  rawStreamHeight: 720,
 );
 
 void main() async {
@@ -55,7 +71,7 @@ class CameraScreen extends StatefulWidget {
   State<CameraScreen> createState() => _CameraScreenState();
 }
 
-class _CameraScreenState extends State<CameraScreen> {
+class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver {
   // ── Camera state
   late CameraSettingsValues _values;
   CameraRanges _ranges = const CameraRanges();
@@ -67,14 +83,27 @@ class _CameraScreenState extends State<CameraScreen> {
   // ── UI state
   bool _settingsDrawerOpen = false;
   CameraSettingType? _activeSetting;
+  ProcessingParams _processingParams = ProcessingParams();
+  bool _sidebarOpen = false;
+
+  // ── Recording state
+  bool _isRecording = false;
+  bool _recordingActionInProgress = false;
+  String _recordingDisplayName = '';
+  static const String _recordingOutputDir = 'Movies/CambrianCamera';
+  StreamSubscription<RecordingState>? _recordingStateSub;
 
   /// True once the first frame result with real AE values has arrived.
   /// Guards manual ISO/exposure changes to prevent a settingsConflict on open.
   bool _aeSeeded = false;
 
+  /// Display rotation in degrees CW from portrait: 0, 90, 180, or 270.
+  int _displayRotationDeg = 0;
+
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _values = CameraSettingsValues.fromSettings(_kInitialSettings, _ranges);
     _openCamera();
     _callbacks = CameraCallbacks(
@@ -85,7 +114,53 @@ class _CameraScreenState extends State<CameraScreen> {
       onWbLockChanged: _setWbLocked,
       onToggleAf: _toggleAf,
     );
+    _fetchRotation();
   }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _frameResultSub?.cancel();
+    _errorSub?.cancel();
+    _recordingStateSub?.cancel();
+    final camera = _camera;
+    if (camera != null) {
+      camera.close().catchError((Object e) {
+        debugPrint('CambrianCamera.close failed during dispose: $e');
+      });
+    }
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    switch (state) {
+      case AppLifecycleState.paused:
+      case AppLifecycleState.hidden: // screen locked or covered on Android 14+
+        if (_isRecording) {
+          _camera?.stopRecording().catchError((Object e) {
+            debugPrint('auto-stop on background failed: $e');
+          });
+        }
+        _camera?.pause();
+      case AppLifecycleState.resumed:
+        _camera?.resume();
+      default:
+        break;
+    }
+  }
+
+  @override
+  void didChangeMetrics() {
+    _fetchRotation();
+  }
+
+  Future<void> _fetchRotation() async {
+    final deg = await CambrianCamera.getDisplayRotation();
+    if (mounted) setState(() => _displayRotationDeg = deg);
+  }
+
+  int get _quarterTurns => quarterTurnsFromDisplayRotation(_displayRotationDeg);
 
   Future<void> _openCamera() async {
     final status = await Permission.camera.request();
@@ -94,7 +169,13 @@ class _CameraScreenState extends State<CameraScreen> {
       return;
     }
     try {
-      final camera = await CambrianCamera.open(settings: _kInitialSettings);
+      final camera = await CambrianCamera.open(
+        settings: _kInitialSettings,
+      );
+      // Restore processing params from previous session, or use identity defaults.
+      final persisted = await camera.getPersistedProcessingParams();
+      final initialParams = persisted ?? ProcessingParams();
+      await camera.setProcessingParams(initialParams);
       final caps = camera.capabilities;
       final ranges = CameraRanges(
         isoMin: caps.isoMin,
@@ -115,9 +196,20 @@ class _CameraScreenState extends State<CameraScreen> {
         _camera = camera;
         _ranges = ranges;
         _values = CameraSettingsValues.fromSettings(_kInitialSettings, ranges);
+        _processingParams = initialParams; // sidebar sliders reflect persisted or default values
       });
       _frameResultSub = camera.frameResultStream.listen(_onFrameResult);
       _errorSub = camera.errorStream.listen(_onCameraError);
+      _recordingStateSub = camera.recordingStateStream.listen((state) {
+        if (!mounted) return;
+        // Only update _isRecording for idle/error — the recording=true case is
+        // batched with _recordingDisplayName in _toggleRecording to avoid a
+        // frame where _isRecording is true but displayName is still empty.
+        if (state != RecordingState.recording) {
+          setState(() => _isRecording = false);
+        }
+      });
+      _fetchRotation();
     } catch (e) {
       // Camera may not be available in all environments (e.g. emulators).
       // The UI degrades gracefully to a black placeholder.
@@ -125,18 +217,6 @@ class _CameraScreenState extends State<CameraScreen> {
     }
   }
 
-  @override
-  void dispose() {
-    _frameResultSub?.cancel();
-    _errorSub?.cancel();
-    final camera = _camera;
-    if (camera != null) {
-      camera.close().catchError((Object e) {
-        debugPrint('CambrianCamera.close failed during dispose: $e');
-      });
-    }
-    super.dispose();
-  }
 
   // ── Camera setting callbacks
 
@@ -147,6 +227,11 @@ class _CameraScreenState extends State<CameraScreen> {
   /// previous values.
   void _applySettings(CameraSettings settings) {
     _camera?.updateSettings(settings);
+  }
+
+  void _applyProcessingParams(ProcessingParams params) {
+    setState(() => _processingParams = params);
+    _camera?.setProcessingParams(params);
   }
 
   void _setWbLocked(bool locked) {
@@ -186,9 +271,11 @@ class _CameraScreenState extends State<CameraScreen> {
     if (!mounted) return;
     if (error.code == CameraErrorCode.settingsConflict) {
       setState(() => _values = _values.copyWith(isoAuto: true, exposureAuto: true));
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Camera not ready — settings reverted to auto')),
-      );
+      _showError('Camera not ready — settings reverted to auto');
+    } else if (error.code == CameraErrorCode.fpsDegraded) {
+      _showError('FPS degraded: ${error.message}');
+    } else if (error.code == CameraErrorCode.aeConvergenceTimeout) {
+      _showError('Auto-exposure struggling — try more light or manual mode');
     }
   }
 
@@ -248,6 +335,60 @@ class _CameraScreenState extends State<CameraScreen> {
         if (nowSeeded) _aeSeeded = true;
       });
     }
+  }
+
+  // ── Recording
+
+  Future<void> _toggleRecording() async {
+    final camera = _camera;
+    if (camera == null || _recordingActionInProgress) return;
+    setState(() => _recordingActionInProgress = true);
+    try {
+      if (_isRecording) {
+        await camera.stopRecording();
+      } else {
+        final (_, displayName) = await camera.startRecording();
+        if (mounted) setState(() {
+          _isRecording = true;
+          _recordingDisplayName = displayName;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        _showError('Recording error: $e');
+      }
+    } finally {
+      if (mounted) setState(() => _recordingActionInProgress = false);
+    }
+  }
+
+  void _showError(String message) {
+    if (!mounted) return;
+    final cs = Theme.of(context).colorScheme;
+    ScaffoldMessenger.of(context)
+      ..clearSnackBars()
+      ..showSnackBar(
+        SnackBar(
+          content: Row(
+            children: [
+              Icon(Icons.error_outline, color: cs.onError, size: 18),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(message, style: TextStyle(color: cs.onError)),
+              ),
+            ],
+          ),
+          backgroundColor: cs.error,
+          behavior: SnackBarBehavior.floating,
+          margin: EdgeInsets.only(
+            left: 16,
+            right: 16,
+            bottom: MediaQuery.of(context).padding.bottom + 72,
+          ),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          duration: const Duration(seconds: 5),
+        ),
+      );
   }
 
   // ── UI actions
@@ -329,14 +470,52 @@ class _CameraScreenState extends State<CameraScreen> {
           bottom: false,
           child: Column(
             children: [
-              // Two side-by-side previews demonstrate the future dual-consumer
-              // architecture: full-res stream on the left, low-res stream on
-              // the right. Both share the same camera session for now.
+              // Two preview panes side by side: raw (left) vs processed (right).
+              // GPU controls sidebar pushes content from the left.
               Expanded(
-                child: Row(
+                child: Stack(
                   children: [
-                    Expanded(child: _buildCameraPreview()),
-                    Expanded(child: _buildCameraPreview()),
+                    Row(
+                  children: [
+                    AnimatedContainer(
+                      duration: const Duration(milliseconds: 250),
+                      curve: Curves.easeInOutCubic,
+                      width: _sidebarOpen ? 270 : 0,
+                      child: ClipRect(
+                        child: OverflowBox(
+                          alignment: Alignment.centerLeft,
+                          minWidth: 270,
+                          maxWidth: 270,
+                          child: GpuControlsSidebar(
+                            params: _processingParams,
+                            onChanged: _applyProcessingParams,
+                          ),
+                        ),
+                      ),
+                    ),
+                    Expanded(
+                      child: Row(
+                        children: [
+                          Expanded(child: Center(child: _buildRawPreview())),
+                          Expanded(child: Center(child: _buildCameraPreview())),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                    // Recording HUD — floats over preview, centered above bottom bar
+                    Positioned(
+                      bottom: 12,
+                      left: 0,
+                      right: 0,
+                      child: Center(
+                        child: RecordingHud(
+                          stateStream: _camera?.recordingStateStream ?? const Stream.empty(),
+                          displayName: _recordingDisplayName,
+                          outputDir: _recordingOutputDir,
+                        ),
+                      ),
+                    ),
                   ],
                 ),
               ),
@@ -388,6 +567,9 @@ class _CameraScreenState extends State<CameraScreen> {
                       callbacks: _callbacks,
                       onToggleSettings: _toggleSettingsDrawer,
                       onSettingChipTap: _onSettingChipTap,
+                      onToggleGpuControls: () => setState(() => _sidebarOpen = !_sidebarOpen),
+                      isRecording: _isRecording,
+                      onToggleRecording: _toggleRecording,
                     ),
                   ),
                 ],
@@ -402,12 +584,51 @@ class _CameraScreenState extends State<CameraScreen> {
   Widget _buildCameraPreview() {
     final camera = _camera;
     if (camera == null) {
-      // Camera not yet opened — show black placeholder.
       return const ColoredBox(color: Colors.black);
     }
-    return camera.buildPreview(
-      fit: BoxFit.cover,
-      placeholder: const ColoredBox(color: Colors.black),
+    return StreamBuilder<CameraTextureInfo>(
+      stream: camera.toneMappedTexture,
+      builder: (context, snap) {
+        if (!snap.hasData) return const ColoredBox(color: Colors.black);
+        final t = snap.data!;
+        return FittedBox(
+          fit: BoxFit.cover,
+          child: RotatedBox(
+            quarterTurns: _quarterTurns,
+            child: SizedBox(
+              width: t.width.toDouble(),
+              height: t.height.toDouble(),
+              child: Texture(textureId: t.textureId),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  /// Raw preview: direct YUV→BGR output before any post-processing.
+  Widget _buildRawPreview() {
+    final camera = _camera;
+    if (camera == null) {
+      return const ColoredBox(color: Colors.black);
+    }
+    return StreamBuilder<CameraTextureInfo>(
+      stream: camera.rawTexture,
+      builder: (context, snap) {
+        if (!snap.hasData) return const ColoredBox(color: Colors.black);
+        final t = snap.data!;
+        return FittedBox(
+          fit: BoxFit.cover,
+          child: RotatedBox(
+            quarterTurns: _quarterTurns,
+            child: SizedBox(
+              width: t.width.toDouble(),
+              height: t.height.toDouble(),
+              child: Texture(textureId: t.textureId),
+            ),
+          ),
+        );
+      },
     );
   }
 }

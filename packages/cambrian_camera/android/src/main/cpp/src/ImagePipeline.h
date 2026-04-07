@@ -1,67 +1,131 @@
 #pragma once
-// Internal header for the Phase 3 identity image pipeline.
-// Not part of the public consumer API (see cambrian_camera_native.h).
+// Image pipeline: receives RGBA frames from the GPU (via GL thread callbacks),
+// routes them through an optional per-role ProcessingStage (dedicated hook thread),
+// and distributes shared frames to registered consumer sinks via per-consumer mailboxes.
+//
+// Thread safety — lock ordering (always acquire in this order):
+//   1. fullResConsumersMu_ — GPU full-res consumers vector (addSink FULL_RES, removeSink, publishToFullResConsumers)
+//      trackerConsumersMu_ — GPU tracker consumers vector (addSink TRACKER, removeSink, publishToTrackerConsumers)
+//      rawConsumersMu_     — GPU raw consumers vector (addSink RAW, removeSink, publishToRawConsumers)
+//      (fullResConsumersMu_, trackerConsumersMu_, rawConsumersMu_ are independent of each other)
+//   2. ProcessingStage::mu — never nested with consumer vector mutexes
+//   3. Consumer::mu        — per-consumer mailbox (publish*, dispatch thread)
 
-#include <android/native_window.h>
+#include "cambrian_camera_native.h"
+
+#include <atomic>
+#include <condition_variable>
 #include <cstdint>
+#include <memory>
 #include <mutex>
+#include <thread>
+#include <vector>
 
 namespace cam {
 
-/// Phase 3 identity pipeline: receives raw RGBA frames from Kotlin (via a
-/// direct ByteBuffer backed by ImageReader) and copies them pixel-row by
-/// pixel-row into an ANativeWindow for display.
-///
-/// Thread safety: setPreviewWindow() may be called from the UI thread while
-/// processFrame() runs on the camera background thread. Both methods hold
-/// mutex_ for the duration of their access to previewWindow_.
-///
-/// Phase 4 will extend this class to:
-///   - Apply black balance, white balance, LUT, and saturation corrections
-///   - Dispatch processed frames to registered IImagePipeline sinks
-class ImagePipeline {
+/// Internal shared frame distributed to all consumers.
+/// SinkFrame exposes raw pointers into this struct's data vector.
+struct Frame {
+    uint64_t id        = 0;
+    FrameMetadata meta = {};
+    std::vector<uint8_t> data;  ///< RGBA pixel bytes (row-major)
+    int width  = 0;
+    int height = 0;
+    int stride = 0;             ///< bytes per row
+    PixelFormat format = PixelFormat::RGBA;
+};
+using SharedFrame = std::shared_ptr<Frame>;
+
+/// Processing stage: optional dedicated thread with 1-slot mailbox.
+/// When a hook is registered, frames are routed through here before consumers.
+struct ProcessingStage {
+    ProcessingStage() = default;
+    ProcessingStage(const ProcessingStage&) = delete;
+    ProcessingStage& operator=(const ProcessingStage&) = delete;
+
+    FrameHookFn hook;                     // null = disabled
+    std::atomic<bool> hookActive{false};  // atomic mirror of (hook != nullptr), safe to read from GL thread
+    SharedFrame pending;                  // 1-slot mailbox
+    std::mutex mu;
+    std::condition_variable cv;
+    std::thread thread;
+    std::atomic<bool> running{false};
+};
+
+class ImagePipeline : public IImagePipeline {
 public:
-    /// Construct the pipeline with an optional preview window.
-    /// @param window  ANativeWindow obtained from ANativeWindow_fromSurface(),
-    ///                or nullptr to start with no preview (same as calling
-    ///                setPreviewWindow(nullptr) after construction).  When
-    ///                non-null the pipeline calls ANativeWindow_acquire()
-    ///                internally, so the caller may release their reference.
-    explicit ImagePipeline(ANativeWindow* window);
+    /// Construct pipeline. No ANativeWindow or input ring needed; GPU path only.
+    ImagePipeline();
 
-    /// Releases the ANativeWindow reference held by this pipeline.
-    ~ImagePipeline();
+    /// Shuts down processing stages and all consumer threads.
+    ~ImagePipeline() override;
 
-    // Non-copyable, non-movable — owns a raw pointer resource.
+    // Non-copyable, non-movable.
     ImagePipeline(const ImagePipeline&) = delete;
     ImagePipeline& operator=(const ImagePipeline&) = delete;
 
-    /// Replace the preview surface, e.g. when the Flutter PlatformView is
-    /// recreated after an app resume.  The old ANativeWindow reference is
-    /// released before the new one is stored.
-    /// @param window  New ANativeWindow, or nullptr to pause rendering.
-    void setPreviewWindow(ANativeWindow* window);
+    /// GPU entry point: called from GL thread after mapping fullResPbo[readIdx].
+    /// Copies RGBA data into a SharedFrame and dispatches to fullResConsumers_.
+    void deliverFullResRgba(const uint8_t* rgba, int w, int h, int stride,
+                            uint64_t frameId, const FrameMetadata& meta);
 
-    /// Copy one RGBA frame into the preview ANativeWindow (identity pipeline).
-    ///
-    /// @param data    Pointer to the first byte of the frame (top-left pixel).
-    ///                Obtained via JNIEnv::GetDirectBufferAddress().
-    /// @param width   Frame width in pixels.
-    /// @param height  Frame height in pixels.
-    /// @param stride  Source row stride in **bytes**  (>= width * 4).
-    ///                May differ from width * 4 due to ImageReader alignment.
-    ///
-    /// The destination stride is taken from ANativeWindow_Buffer::stride which
-    /// is expressed in **pixels**; we multiply by 4 to get bytes per row.
-    void processFrame(const uint8_t* data, int width, int height, int stride);
+    /// GPU entry point: called from GL thread after mapping trackerPbo[readIdx].
+    /// Copies RGBA data into a SharedFrame and dispatches to trackerConsumers_.
+    void deliverTrackerRgba(const uint8_t* rgba, int w, int h, int stride,
+                            uint64_t frameId, const FrameMetadata& meta);
+
+    /// GPU entry point: called from GL thread after mapping rawPbo[readIdx].
+    /// Copies RGBA data into a SharedFrame and dispatches to rawConsumers_.
+    void deliverRawRgba(const uint8_t* rgba, int w, int h, int stride,
+                        uint64_t frameId, const FrameMetadata& meta);
+
+    // -- IImagePipeline ----------------------------------------------------------
+    void setFrameHook(SinkRole role, FrameHookFn fn) override;
+    void addSink(const SinkConfig& config, SinkCallback callback) override;
+    void removeSink(const std::string& name) override;
 
 private:
-    std::mutex mutex_;
-    ANativeWindow* previewWindow_ = nullptr;
-    /// Cached frame dimensions — ANativeWindow_setBuffersGeometry is only
-    /// called when these change, keeping it out of the per-frame hot path.
-    int lastWidth_  = 0;
-    int lastHeight_ = 0;
+    // -- Consumer mailboxes ------------------------------------------------------
+    struct Consumer {
+        std::string name;
+        SinkCallback callback;
+
+        SharedFrame pending;         ///< 1-slot mailbox; null when empty
+        std::mutex mu;
+        std::condition_variable cv;
+        std::thread dispatchThread;
+        std::atomic<bool> running{true};
+    };
+
+    // -- Full-res consumer mailboxes (SinkRole::FULL_RES) ------------------------
+    std::mutex fullResConsumersMu_;
+    std::vector<std::unique_ptr<Consumer>> fullResConsumers_;
+
+    // -- Tracker consumer mailboxes (SinkRole::TRACKER) --------------------------
+    std::mutex trackerConsumersMu_;
+    std::vector<std::unique_ptr<Consumer>> trackerConsumers_;
+
+    // -- Raw consumer mailboxes (SinkRole::RAW) ----------------------------------
+    std::mutex rawConsumersMu_;
+    std::vector<std::unique_ptr<Consumer>> rawConsumers_;
+
+    // -- Processing stages (one per role) ----------------------------------------
+    ProcessingStage fullResStage_;
+    ProcessingStage trackerStage_;
+    ProcessingStage rawStage_;
+
+    void publishToFullResConsumers(SharedFrame frame);
+    void publishToTrackerConsumers(SharedFrame frame);
+    void publishToRawConsumers(SharedFrame frame);
+    void startConsumerThread(Consumer* c);
+    void shutdownConsumer(Consumer* c);
+    void shutdownConsumers();
+
+    void startProcessingStage(ProcessingStage& stage,
+                              void (ImagePipeline::*publishFn)(SharedFrame));
+    void shutdownProcessingStage(ProcessingStage& stage);
+    void routeFrame(ProcessingStage& stage, SharedFrame frame,
+                    void (ImagePipeline::*publishFn)(SharedFrame));
 };
 
 } // namespace cam

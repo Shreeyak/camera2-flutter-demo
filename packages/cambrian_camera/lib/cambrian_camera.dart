@@ -15,7 +15,6 @@ library;
 
 export 'src/cambrian_camera_controller.dart' show CambrianCamera;
 export 'src/frame_result.dart' show FrameResult;
-export 'src/cambrian_camera_preview.dart' show CambrianCameraPreview;
 export 'src/camera_settings.dart'
     show
         AutoValue,
@@ -35,4 +34,7 @@ export 'src/camera_state.dart'
         CameraError,
         CameraErrorCode,
         CameraCapabilities,
-        CameraSize;
+        CameraSize,
+        CameraTextureInfo,
+        quarterTurnsFromDisplayRotation,
+        RecordingState;

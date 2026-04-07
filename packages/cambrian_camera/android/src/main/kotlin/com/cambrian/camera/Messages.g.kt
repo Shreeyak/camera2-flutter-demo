@@ -70,7 +70,12 @@ enum class CamErrorCode(val raw: Int) {
   PREVIEW_SURFACE_LOST(10),
   PIPELINE_ERROR(11),
   SETTINGS_CONFLICT(12),
-  UNKNOWN(13);
+  FRAME_STALL(13),
+  CAPTURE_FAILURE(14),
+  FPS_DEGRADED(15),
+  AE_CONVERGENCE_TIMEOUT(16),
+  RECORDING_TRUNCATED(17),
+  UNKNOWN(18);
 
   companion object {
     fun ofRaw(raw: Int): CamErrorCode? {
@@ -133,7 +138,11 @@ data class CamSettings (
    * NOTE: has no effect when isoMode == "manual" or exposureMode == "manual"
    * because CONTROL_AE_MODE is set to OFF in that case.
    */
-  val evCompensation: Long? = null
+  val evCompensation: Long? = null,
+  /** Enable GPU raw (passthrough) stream. Null = don't change. */
+  val enableRawStream: Boolean? = null,
+  /** Requested height of the GPU raw stream in pixels. Null = don't change. 0 = use default. */
+  val rawStreamHeight: Long? = null
 )
  {
   companion object {
@@ -152,7 +161,9 @@ data class CamSettings (
       val noiseReductionMode = pigeonVar_list[11] as Long?
       val edgeMode = pigeonVar_list[12] as Long?
       val evCompensation = pigeonVar_list[13] as Long?
-      return CamSettings(isoMode, iso, exposureMode, exposureTimeNs, focusMode, focusDistanceDiopters, wbMode, wbGainR, wbGainG, wbGainB, zoomRatio, noiseReductionMode, edgeMode, evCompensation)
+      val enableRawStream = pigeonVar_list[14] as Boolean?
+      val rawStreamHeight = pigeonVar_list[15] as Long?
+      return CamSettings(isoMode, iso, exposureMode, exposureTimeNs, focusMode, focusDistanceDiopters, wbMode, wbGainR, wbGainG, wbGainB, zoomRatio, noiseReductionMode, edgeMode, evCompensation, enableRawStream, rawStreamHeight)
     }
   }
   fun toList(): List<Any?> {
@@ -171,6 +182,8 @@ data class CamSettings (
       noiseReductionMode,
       edgeMode,
       evCompensation,
+      enableRawStream,
+      rawStreamHeight,
     )
   }
 }
@@ -181,12 +194,8 @@ data class CamProcessingParams (
   val blackG: Double,
   val blackB: Double,
   val gamma: Double,
-  val histBlackPoint: Double,
-  val histWhitePoint: Double,
-  val autoStretch: Boolean,
-  val autoStretchLow: Double,
-  val autoStretchHigh: Double,
   val brightness: Double,
+  val contrast: Double,
   val saturation: Double
 )
  {
@@ -196,14 +205,10 @@ data class CamProcessingParams (
       val blackG = pigeonVar_list[1] as Double
       val blackB = pigeonVar_list[2] as Double
       val gamma = pigeonVar_list[3] as Double
-      val histBlackPoint = pigeonVar_list[4] as Double
-      val histWhitePoint = pigeonVar_list[5] as Double
-      val autoStretch = pigeonVar_list[6] as Boolean
-      val autoStretchLow = pigeonVar_list[7] as Double
-      val autoStretchHigh = pigeonVar_list[8] as Double
-      val brightness = pigeonVar_list[9] as Double
-      val saturation = pigeonVar_list[10] as Double
-      return CamProcessingParams(blackR, blackG, blackB, gamma, histBlackPoint, histWhitePoint, autoStretch, autoStretchLow, autoStretchHigh, brightness, saturation)
+      val brightness = pigeonVar_list[4] as Double
+      val contrast = pigeonVar_list[5] as Double
+      val saturation = pigeonVar_list[6] as Double
+      return CamProcessingParams(blackR, blackG, blackB, gamma, brightness, contrast, saturation)
     }
   }
   fun toList(): List<Any?> {
@@ -212,12 +217,8 @@ data class CamProcessingParams (
       blackG,
       blackB,
       gamma,
-      histBlackPoint,
-      histWhitePoint,
-      autoStretch,
-      autoStretchLow,
-      autoStretchHigh,
       brightness,
+      contrast,
       saturation,
     )
   }
@@ -237,10 +238,18 @@ data class CamCapabilities (
   val evCompMin: Long,
   val evCompMax: Long,
   val evCompensationStep: Double,
-  val estimatedMemoryBytes: Long,
-  /** Width of the YUV stream used by the C++ pipeline (pixels). */
+  /**
+   * Flutter texture ID for the GPU raw stream (passthrough, no color adjustments).
+   * 0 if raw stream is disabled.
+   */
+  val rawStreamTextureId: Long,
+  /** Actual computed width of the GPU raw stream (pixels). 0 if raw stream is disabled. */
+  val rawStreamWidth: Long,
+  /** Requested height of the GPU raw stream (pixels). 0 if raw stream is disabled. */
+  val rawStreamHeight: Long,
+  /** Width of the GPU processed stream texture (pixels). Matches the largest 4:3 YUV size. */
   val streamWidth: Long,
-  /** Height of the YUV stream used by the C++ pipeline (pixels). */
+  /** Height of the GPU processed stream texture (pixels). */
   val streamHeight: Long
 )
  {
@@ -258,10 +267,12 @@ data class CamCapabilities (
       val evCompMin = pigeonVar_list[9] as Long
       val evCompMax = pigeonVar_list[10] as Long
       val evCompensationStep = pigeonVar_list[11] as Double
-      val estimatedMemoryBytes = pigeonVar_list[12] as Long
-      val streamWidth = pigeonVar_list[13] as Long
-      val streamHeight = pigeonVar_list[14] as Long
-      return CamCapabilities(supportedSizes, isoMin, isoMax, exposureTimeMinNs, exposureTimeMaxNs, focusMin, focusMax, zoomMin, zoomMax, evCompMin, evCompMax, evCompensationStep, estimatedMemoryBytes, streamWidth, streamHeight)
+      val rawStreamTextureId = pigeonVar_list[12] as Long
+      val rawStreamWidth = pigeonVar_list[13] as Long
+      val rawStreamHeight = pigeonVar_list[14] as Long
+      val streamWidth = pigeonVar_list[15] as Long
+      val streamHeight = pigeonVar_list[16] as Long
+      return CamCapabilities(supportedSizes, isoMin, isoMax, exposureTimeMinNs, exposureTimeMaxNs, focusMin, focusMax, zoomMin, zoomMax, evCompMin, evCompMax, evCompensationStep, rawStreamTextureId, rawStreamWidth, rawStreamHeight, streamWidth, streamHeight)
     }
   }
   fun toList(): List<Any?> {
@@ -278,7 +289,9 @@ data class CamCapabilities (
       evCompMin,
       evCompMax,
       evCompensationStep,
-      estimatedMemoryBytes,
+      rawStreamTextureId,
+      rawStreamWidth,
+      rawStreamHeight,
       streamWidth,
       streamHeight,
     )
@@ -467,7 +480,26 @@ interface CameraHostApi {
   fun setProcessingParams(handle: Long, params: CamProcessingParams)
   fun takePicture(handle: Long, callback: (Result<String>) -> Unit)
   fun getNativePipelineHandle(handle: Long, callback: (Result<Long?>) -> Unit)
+  fun startRecording(handle: Long, outputDirectory: String?, fileName: String?, bitrate: Long?, fps: Long?, callback: (Result<String>) -> Unit)
+  fun stopRecording(handle: Long, callback: (Result<String>) -> Unit)
   fun close(handle: Long, callback: (Result<Unit>) -> Unit)
+  fun pause(handle: Long, callback: (Result<Unit>) -> Unit)
+  fun resume(handle: Long, callback: (Result<Unit>) -> Unit)
+  /**
+   * Returns persisted processing params from a previous session, or null if none exist.
+   *
+   * Dart should call this after [open] to initialize slider UI with the user's last-known
+   * values instead of sending default zeros that would overwrite the persisted state.
+   */
+  fun getPersistedProcessingParams(handle: Long): CamProcessingParams?
+  /**
+   * Returns the current display rotation in degrees CW from portrait: 0, 90, 180, or 270.
+   *
+   * Used by Dart preview widgets to select the correct [RotatedBox.quarterTurns]
+   * for all four device orientations, since [MediaQuery.orientation] only
+   * distinguishes portrait from landscape.
+   */
+  fun getDisplayRotation(): Long
 
   companion object {
     /** The codec used by CameraHostApi. */
@@ -598,6 +630,50 @@ interface CameraHostApi {
         }
       }
       run {
+        val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.cambrian_camera.CameraHostApi.startRecording$separatedMessageChannelSuffix", codec)
+        if (api != null) {
+          channel.setMessageHandler { message, reply ->
+            val args = message as List<Any?>
+            val handleArg = args[0] as Long
+            val outputDirectoryArg = args[1] as String?
+            val fileNameArg = args[2] as String?
+            val bitrateArg = args[3] as Long?
+            val fpsArg = args[4] as Long?
+            api.startRecording(handleArg, outputDirectoryArg, fileNameArg, bitrateArg, fpsArg) { result: Result<String> ->
+              val error = result.exceptionOrNull()
+              if (error != null) {
+                reply.reply(wrapError(error))
+              } else {
+                val data = result.getOrNull()
+                reply.reply(wrapResult(data))
+              }
+            }
+          }
+        } else {
+          channel.setMessageHandler(null)
+        }
+      }
+      run {
+        val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.cambrian_camera.CameraHostApi.stopRecording$separatedMessageChannelSuffix", codec)
+        if (api != null) {
+          channel.setMessageHandler { message, reply ->
+            val args = message as List<Any?>
+            val handleArg = args[0] as Long
+            api.stopRecording(handleArg) { result: Result<String> ->
+              val error = result.exceptionOrNull()
+              if (error != null) {
+                reply.reply(wrapError(error))
+              } else {
+                val data = result.getOrNull()
+                reply.reply(wrapResult(data))
+              }
+            }
+          }
+        } else {
+          channel.setMessageHandler(null)
+        }
+      }
+      run {
         val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.cambrian_camera.CameraHostApi.close$separatedMessageChannelSuffix", codec)
         if (api != null) {
           channel.setMessageHandler { message, reply ->
@@ -611,6 +687,76 @@ interface CameraHostApi {
                 reply.reply(wrapResult(null))
               }
             }
+          }
+        } else {
+          channel.setMessageHandler(null)
+        }
+      }
+      run {
+        val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.cambrian_camera.CameraHostApi.pause$separatedMessageChannelSuffix", codec)
+        if (api != null) {
+          channel.setMessageHandler { message, reply ->
+            val args = message as List<Any?>
+            val handleArg = args[0] as Long
+            api.pause(handleArg) { result: Result<Unit> ->
+              val error = result.exceptionOrNull()
+              if (error != null) {
+                reply.reply(wrapError(error))
+              } else {
+                reply.reply(wrapResult(null))
+              }
+            }
+          }
+        } else {
+          channel.setMessageHandler(null)
+        }
+      }
+      run {
+        val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.cambrian_camera.CameraHostApi.resume$separatedMessageChannelSuffix", codec)
+        if (api != null) {
+          channel.setMessageHandler { message, reply ->
+            val args = message as List<Any?>
+            val handleArg = args[0] as Long
+            api.resume(handleArg) { result: Result<Unit> ->
+              val error = result.exceptionOrNull()
+              if (error != null) {
+                reply.reply(wrapError(error))
+              } else {
+                reply.reply(wrapResult(null))
+              }
+            }
+          }
+        } else {
+          channel.setMessageHandler(null)
+        }
+      }
+      run {
+        val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.cambrian_camera.CameraHostApi.getPersistedProcessingParams$separatedMessageChannelSuffix", codec)
+        if (api != null) {
+          channel.setMessageHandler { message, reply ->
+            val args = message as List<Any?>
+            val handleArg = args[0] as Long
+            val wrapped: List<Any?> = try {
+              listOf(api.getPersistedProcessingParams(handleArg))
+            } catch (exception: Throwable) {
+              wrapError(exception)
+            }
+            reply.reply(wrapped)
+          }
+        } else {
+          channel.setMessageHandler(null)
+        }
+      }
+      run {
+        val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.cambrian_camera.CameraHostApi.getDisplayRotation$separatedMessageChannelSuffix", codec)
+        if (api != null) {
+          channel.setMessageHandler { _, reply ->
+            val wrapped: List<Any?> = try {
+              listOf(api.getDisplayRotation())
+            } catch (exception: Throwable) {
+              wrapError(exception)
+            }
+            reply.reply(wrapped)
           }
         } else {
           channel.setMessageHandler(null)
@@ -635,7 +781,7 @@ class CameraFlutterApi(private val binaryMessenger: BinaryMessenger, private val
     channel.send(listOf(handleArg, stateArg)) {
       if (it is List<*>) {
         if (it.size > 1) {
-          callback(Result.failure(FlutterError(it[0] as String, it[1] as String, it[2] as String?)))
+          callback(Result.failure(FlutterError(it[0] as String, it[1] as String?, it[2] as String?)))
         } else {
           callback(Result.success(Unit))
         }
@@ -652,7 +798,7 @@ class CameraFlutterApi(private val binaryMessenger: BinaryMessenger, private val
     channel.send(listOf(handleArg, errorArg)) {
       if (it is List<*>) {
         if (it.size > 1) {
-          callback(Result.failure(FlutterError(it[0] as String, it[1] as String, it[2] as String?)))
+          callback(Result.failure(FlutterError(it[0] as String, it[1] as String?, it[2] as String?)))
         } else {
           callback(Result.success(Unit))
         }
@@ -669,7 +815,28 @@ class CameraFlutterApi(private val binaryMessenger: BinaryMessenger, private val
     channel.send(listOf(handleArg, resultArg)) {
       if (it is List<*>) {
         if (it.size > 1) {
-          callback(Result.failure(FlutterError(it[0] as String, it[1] as String, it[2] as String?)))
+          callback(Result.failure(FlutterError(it[0] as String, it[1] as String?, it[2] as String?)))
+        } else {
+          callback(Result.success(Unit))
+        }
+      } else {
+        callback(Result.failure(createConnectionError(channelName)))
+      } 
+    }
+  }
+  /**
+   * Called when the recording state changes.
+   * [state] is one of: "recording", "idle", "error".
+   */
+  fun onRecordingStateChanged(handleArg: Long, stateArg: String, callback: (Result<Unit>) -> Unit)
+{
+    val separatedMessageChannelSuffix = if (messageChannelSuffix.isNotEmpty()) ".$messageChannelSuffix" else ""
+    val channelName = "dev.flutter.pigeon.cambrian_camera.CameraFlutterApi.onRecordingStateChanged$separatedMessageChannelSuffix"
+    val channel = BasicMessageChannel<Any?>(binaryMessenger, channelName, codec)
+    channel.send(listOf(handleArg, stateArg)) {
+      if (it is List<*>) {
+        if (it.size > 1) {
+          callback(Result.failure(FlutterError(it[0] as String, it[1] as String?, it[2] as String?)))
         } else {
           callback(Result.success(Unit))
         }

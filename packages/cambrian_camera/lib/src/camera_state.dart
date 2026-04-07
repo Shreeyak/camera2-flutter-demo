@@ -16,6 +16,16 @@ enum CameraState {
   /// The app may show a "reconnecting…" indicator.
   recovering,
 
+  /// Camera session is paused (Dart-initiated). The [CameraDevice] is still
+  /// held open for fast resume. Call [CambrianCamera.resume] to restart.
+  paused,
+
+  /// Camera is fully released because the app moved to the background
+  /// (process [onStop]). The device is closed so other apps can use it.
+  /// The library will automatically reopen when the app returns to the
+  /// foreground, or when Dart calls [CambrianCamera.resume].
+  suspended,
+
   /// A fatal error occurred. The app must call [CambrianCamera.close] and
   /// optionally reopen the camera.
   error;
@@ -25,8 +35,30 @@ enum CameraState {
         'opening' => opening,
         'streaming' => streaming,
         'recovering' => recovering,
+        'paused' => paused,
+        'suspended' => suspended,
         'error' => error,
         _ => error,
+      };
+}
+
+/// The recording state emitted by [CambrianCamera.recordingStateStream].
+enum RecordingState {
+  /// Recording is active.
+  recording,
+
+  /// Recording is idle (not started, or cleanly stopped).
+  idle,
+
+  /// A recording error occurred.
+  error;
+
+  /// Creates a [RecordingState] from the wire string sent by the platform.
+  static RecordingState fromString(String value) => switch (value) {
+        'recording' => RecordingState.recording,
+        'idle' => RecordingState.idle,
+        'error' => RecordingState.error,
+        _ => RecordingState.error, // safe default
       };
 }
 
@@ -88,7 +120,9 @@ class CameraCapabilities {
     required this.evCompMin,
     required this.evCompMax,
     required this.evCompensationStep,
-    required this.estimatedMemoryBytes,
+    required this.rawStreamTextureId,
+    required this.rawStreamWidth,
+    required this.rawStreamHeight,
     required this.streamWidth,
     required this.streamHeight,
   });
@@ -107,7 +141,9 @@ class CameraCapabilities {
         evCompMin: 0,
         evCompMax: 0,
         evCompensationStep: 0,
-        estimatedMemoryBytes: 0,
+        rawStreamTextureId: 0,
+        rawStreamWidth: 0,
+        rawStreamHeight: 0,
         streamWidth: 0,
         streamHeight: 0,
       );
@@ -128,7 +164,9 @@ class CameraCapabilities {
         evCompMin: c.evCompMin,
         evCompMax: c.evCompMax,
         evCompensationStep: c.evCompensationStep,
-        estimatedMemoryBytes: c.estimatedMemoryBytes,
+        rawStreamTextureId: c.rawStreamTextureId,
+        rawStreamWidth: c.rawStreamWidth,
+        rawStreamHeight: c.rawStreamHeight,
         streamWidth: c.streamWidth,
         streamHeight: c.streamHeight,
       );
@@ -146,13 +184,60 @@ class CameraCapabilities {
   final int evCompMax;
   final double evCompensationStep;
 
-  /// Estimated native memory usage in bytes (input ring + preview buffer).
-  /// Increases as consumers are registered via the C++ API.
-  final int estimatedMemoryBytes;
+  /// Flutter texture ID for the GPU raw stream (passthrough, no color adjustments).
+  /// 0 if raw stream is disabled.
+  final int rawStreamTextureId;
 
-  /// Width of the YUV stream delivered to the C++ pipeline (pixels).
+  /// Actual computed width of the GPU raw stream (pixels). 0 if raw stream is disabled.
+  final int rawStreamWidth;
+
+  /// Requested height of the GPU raw stream (pixels). 0 if raw stream is disabled.
+  final int rawStreamHeight;
+
+  /// Width of the GPU processed stream texture (pixels). Matches the largest 4:3 YUV size.
   final int streamWidth;
 
-  /// Height of the YUV stream delivered to the C++ pipeline (pixels).
+  /// Height of the GPU processed stream texture (pixels).
   final int streamHeight;
 }
+
+/// Describes a GPU texture stream ready for display.
+///
+/// Use with Flutter's [Texture] widget:
+/// ```dart
+/// Texture(textureId: info.textureId)
+/// ```
+/// [width] and [height] are the native pixel dimensions of the texture.
+/// Use [CambrianCamera.getDisplayRotation] to get the rotation needed.
+@immutable
+class CameraTextureInfo {
+  const CameraTextureInfo({
+    required this.textureId,
+    required this.width,
+    required this.height,
+  });
+
+  final int textureId;
+  final int width;
+  final int height;
+}
+
+/// Converts display rotation degrees to [RotatedBox.quarterTurns].
+///
+/// [displayRotationDeg] is the value returned by [CambrianCamera.getDisplayRotation]:
+/// degrees clockwise from portrait: 0, 90, 180, or 270.
+///
+/// The GPU pipeline always outputs landscape-right frames (ROTATION_270 perspective).
+/// Display rotation is clockwise from portrait, so this function accounts for the
+/// difference to compute the correct number of 90° rotations:
+///
+///   0°  (portrait)          → 3 turns (90° CCW)
+///   90° (landscape-left)    → 2 turns (180°)
+///   180° (reverse-portrait) → 1 turn  (90° CW)
+///   270° (landscape-right)  → 0 turns (no rotation — matches GPU output)
+int quarterTurnsFromDisplayRotation(int displayRotationDeg) => switch (displayRotationDeg) {
+  90  => 2,   // landscape-left (device rotated 90° CCW)
+  180 => 1,   // reverse-portrait
+  270 => 0,   // landscape-right (device rotated 90° CW)
+  _   => 3,   // portrait
+};

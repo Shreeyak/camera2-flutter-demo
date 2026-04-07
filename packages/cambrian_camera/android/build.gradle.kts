@@ -7,8 +7,8 @@ android {
     namespace = "com.cambrian.camera"
     // API 35 for latest Camera2 features; minSdk 33 targets Android 13+.
     compileSdk = 35
-    // NDK version matching the OpenCV prebuilt used in Phase 4.
-    ndkVersion = "25.1.8937393"
+    // NDK version matching the OpenCV prebuilt used by the C++ pipeline.
+    ndkVersion = "27.0.12077973"
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
@@ -19,12 +19,36 @@ android {
         jvmTarget = "17"
     }
 
+    testOptions {
+        unitTests {
+            isReturnDefaultValues = true
+        }
+    }
+
     defaultConfig {
         // Targets OPD2403 hardware running API 33+. Single-device target for now.
         minSdk = 33
+        ndk {
+            // OpenCV prebuilt static libs are arm64-v8a only, so this module
+            // currently packages native code for arm64-v8a devices only.
+            //
+            // This intentionally excludes x86/x86_64 (including emulators) and
+            // other 32-bit ABIs from the NDK build and final AAR/APK packaging.
+            // To add broader device/emulator support, matching OpenCV and pipeline
+            // prebuilts would be needed for each additional ABI.
+            abiFilters += "arm64-v8a"
+        }
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        externalNativeBuild {
+            cmake {
+                // c++_shared: makes AGP package libc++_shared.so in the APK
+                // so the dynamic linker can resolve it at runtime.
+                arguments += "-DANDROID_STL=c++_shared"
+            }
+        }
     }
 
-    // C++ JNI bridge and image pipeline (Phase 3+).
+    // C++ JNI bridge and image pipeline.
     externalNativeBuild {
         cmake {
             path = file("src/main/cpp/CMakeLists.txt")
@@ -39,4 +63,11 @@ dependencies {
     // script injects flutter.jar (FlutterPlugin, ActivityAware, TextureRegistry, etc.)
     // as compileOnly automatically when this module is included by the host app.
     compileOnly("androidx.lifecycle:lifecycle-common:2.7.0")
+    // ProcessLifecycleOwner (used for automatic camera pause/resume on app background).
+    implementation("androidx.lifecycle:lifecycle-process:2.7.0")
+    androidTestImplementation("androidx.test.ext:junit:1.1.5")
+    androidTestImplementation("androidx.test:runner:1.5.2")
+    testImplementation("org.mockito:mockito-core:5.3.1")
+    testImplementation("org.mockito.kotlin:mockito-kotlin:5.1.0")
+    testImplementation("junit:junit:4.13.2")
 }

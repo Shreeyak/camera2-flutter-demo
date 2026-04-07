@@ -1,0 +1,15 @@
+CompileFlags:
+  Add:
+    - --target=aarch64-linux-android24
+    - -D__ANDROID__
+    - -D__ANDROID_API__=24
+    - -std=c++17
+    # Project headers (relative to this file's directory)
+    - -Iinclude
+    - -Isrc
+    # NDK sysroot and OpenCV paths are machine-specific; configure them in a
+    # per-developer .clangd.local or set CLANGD_FLAGS in your shell profile:
+    #   --sysroot=<NDK>/toolchains/llvm/prebuilt/<host>/sysroot
+    #   -I<NDK>/toolchains/llvm/prebuilt/<host>/sysroot/usr/include
+    #   -I<NDK>/toolchains/llvm/prebuilt/<host>/sysroot/usr/include/aarch64-linux-android
+    #   -I<OPENCV_ANDROID_SDK>/sdk/native/jni/include
