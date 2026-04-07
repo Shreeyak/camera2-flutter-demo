@@ -259,6 +259,23 @@ class CameraSettings {
         rawStreamHeight: rawStreamHeight ?? this.rawStreamHeight,
       );
 
+  /// Returns a summary string of non-null fields for diagnostic logging.
+  @override
+  String toString() {
+    final parts = <String>[];
+    if (iso != null) parts.add('iso=$iso');
+    if (exposureTimeNs != null) parts.add('exposureTimeNs=$exposureTimeNs');
+    if (focus != null) parts.add('focus=$focus');
+    if (whiteBalance != null) parts.add('wb=$whiteBalance');
+    if (zoomRatio != null) parts.add('zoom=$zoomRatio');
+    if (noiseReductionMode != null) parts.add('nr=$noiseReductionMode');
+    if (edgeMode != null) parts.add('edge=$edgeMode');
+    if (evCompensation != null) parts.add('ev=$evCompensation');
+    if (enableRawStream != null) parts.add('raw=$enableRawStream');
+    if (rawStreamHeight != null) parts.add('rawH=$rawStreamHeight');
+    return 'CameraSettings(${parts.join(', ')})';
+  }
+
   /// Serializes to the Pigeon transport type.
   ///
   /// Sealed types are encoded as mode strings ("auto"/"manual"/"locked")
@@ -415,6 +432,12 @@ class ProcessingParams {
       throw ArgumentError.value(saturation, 'saturation', 'must be in [-1.0, 1.0]');
     }
   }
+
+  /// Returns a summary string for diagnostic logging.
+  @override
+  String toString() =>
+      'ProcessingParams(black=[$blackR,$blackG,$blackB] gamma=$gamma '
+      'brightness=$brightness contrast=$contrast saturation=$saturation)';
 
   CamProcessingParams toCam() => CamProcessingParams(
         blackR: blackR,

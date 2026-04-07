@@ -23,12 +23,15 @@ namespace cam {
 // Construction / destruction
 // ---------------------------------------------------------------------------
 
-ImagePipeline::ImagePipeline(ANativeWindow* window, int width, int height)
+ImagePipeline::ImagePipeline(ANativeWindow* window, int width, int height, int debugLevel)
         : previewWindow_(window),
-          inputRing_(width, height) {
+          inputRing_(width, height),
+          debugLevel_(debugLevel) {
     if (previewWindow_) {
         ANativeWindow_acquire(previewWindow_);
-        LOGD("ImagePipeline created, window=%p dims=%dx%d", previewWindow_, width, height);
+        if (debugLevel_ >= 1) {
+            LOGD("ImagePipeline created, window=%p dims=%dx%d", previewWindow_, width, height);
+        }
     }
 
     // Start the processing thread before registering sinks so it is ready to
@@ -91,7 +94,9 @@ ImagePipeline::~ImagePipeline() {
         ANativeWindow_release(rawPreviewWindow_);
         rawPreviewWindow_ = nullptr;
     }
-    LOGD("ImagePipeline destroyed");
+    if (debugLevel_ >= 1) {
+        LOGD("ImagePipeline destroyed");
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -233,7 +238,9 @@ static void applySaturation(const cv::Mat& src, cv::Mat& dst, float sat) {
 // ---------------------------------------------------------------------------
 
 void ImagePipeline::processingLoop() {
-    LOGD("processingLoop: started");
+    if (debugLevel_ >= 1) {
+        LOGD("processingLoop: started");
+    }
     using Clock = std::chrono::steady_clock;
 
     // Rolling averages (microseconds), reported every kLogInterval frames.
@@ -354,7 +361,8 @@ void ImagePipeline::processingLoop() {
         accumPublish += us(tSat, tEnd);
         accumTotal   += us(tPop0, tEnd);
 
-        if (++frameCount % kLogInterval == 0) {
+        ++frameCount;
+        if (debugLevel_ >= 2 && frameCount % kLogInterval == 0) {
             double wallMs = std::chrono::duration<double, std::milli>(
                     tEnd - intervalStart).count();
             double fps = kLogInterval / (wallMs / 1000.0);
@@ -370,7 +378,9 @@ void ImagePipeline::processingLoop() {
             intervalStart = tEnd;
         }
     }
-    LOGD("processingLoop: exiting");
+    if (debugLevel_ >= 1) {
+        LOGD("processingLoop: exiting");
+    }
 }
 
 // ---------------------------------------------------------------------------

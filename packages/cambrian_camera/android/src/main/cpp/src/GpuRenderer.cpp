@@ -118,8 +118,8 @@ static void checkGlError(const char* tag) {
 
 namespace cam {
 
-GpuRenderer::GpuRenderer(int width, int height)
-    : width_(width), height_(height)
+GpuRenderer::GpuRenderer(int width, int height, int debugLevel)
+    : debugLevel_(debugLevel), width_(width), height_(height)
 {
     if (height_ <= 0) {
         LOGE("GpuRenderer: invalid height %d — clamping to 1 to avoid division by zero", height_);
@@ -128,8 +128,10 @@ GpuRenderer::GpuRenderer(int width, int height)
     // Compute 480p tracker size, rounded to nearest even width to keep chroma alignment.
     trackerHeight_ = 480;
     trackerWidth_  = ((width_ * 480 / height_) + 1) & ~1;
-    LOGI("GpuRenderer: stream %dx%d, tracker %dx%d",
-         width_, height_, trackerWidth_, trackerHeight_);
+    if (debugLevel_ >= 1) {
+        LOGI("GpuRenderer: stream %dx%d, tracker %dx%d",
+             width_, height_, trackerWidth_, trackerHeight_);
+    }
 }
 
 GpuRenderer::~GpuRenderer() {
@@ -153,12 +155,16 @@ bool GpuRenderer::init(EGLNativeWindowType windowSurface,
         releaseEgl();
         return false;
     }
-    LOGI("init: OK");
+    if (debugLevel_ >= 1) {
+        LOGI("init: OK");
+    }
     return true;
 }
 
 void GpuRenderer::release() {
-    LOGI("release");
+    if (debugLevel_ >= 1) {
+        LOGI("release");
+    }
     // Bind the EGL context before GL teardown so all glDelete* calls have a valid context.
     // The destructor can be invoked off the GL thread during exception handling or unexpected
     // object destruction; eglMakeCurrent ensures GL resources are freed safely.
@@ -205,7 +211,7 @@ void GpuRenderer::drawAndReadback(
     }
 
     frameCount_++;
-    if (frameCount_ % 300 == 0) {
+    if (debugLevel_ >= 2 && frameCount_ % 300 == 0) {
         LOGD("frame #%" PRIu64, frameCount_);
     }
 
