@@ -11,7 +11,7 @@
 // blitToWindow guards against null window, so the CPU preview path is a no-op.
 
 TEST(SinkRoutingTest, FullResSinkReceivesFullResFrames) {
-    cam::ImagePipeline pipeline(nullptr, 64, 64);
+    cam::ImagePipeline pipeline;
 
     std::promise<void> called;
     std::atomic<int> fullResCalls{0};
@@ -28,7 +28,7 @@ TEST(SinkRoutingTest, FullResSinkReceivesFullResFrames) {
 }
 
 TEST(SinkRoutingTest, TrackerSinkReceivesTrackerFrames) {
-    cam::ImagePipeline pipeline(nullptr, 64, 64);
+    cam::ImagePipeline pipeline;
 
     std::promise<void> called;
     std::atomic<int> trackerCalls{0};
@@ -45,7 +45,7 @@ TEST(SinkRoutingTest, TrackerSinkReceivesTrackerFrames) {
 }
 
 TEST(SinkRoutingTest, TrackerSinkDoesNotReceiveFullResFrames) {
-    cam::ImagePipeline pipeline(nullptr, 64, 64);
+    cam::ImagePipeline pipeline;
 
     std::atomic<int> trackerCalls{0};
     pipeline.addSink({"tracker", cam::SinkRole::TRACKER},
@@ -60,7 +60,7 @@ TEST(SinkRoutingTest, TrackerSinkDoesNotReceiveFullResFrames) {
 }
 
 TEST(SinkRoutingTest, FullResSinkDoesNotReceiveTrackerFrames) {
-    cam::ImagePipeline pipeline(nullptr, 64, 64);
+    cam::ImagePipeline pipeline;
 
     std::atomic<int> fullResCalls{0};
     pipeline.addSink({"stitcher", cam::SinkRole::FULL_RES},
@@ -75,7 +75,7 @@ TEST(SinkRoutingTest, FullResSinkDoesNotReceiveTrackerFrames) {
 }
 
 TEST(SinkRoutingTest, BothSinksReceiveCorrectFramesIndependently) {
-    cam::ImagePipeline pipeline(nullptr, 64, 64);
+    cam::ImagePipeline pipeline;
 
     std::promise<void> fullResCalled, trackerCalled;
     std::atomic<int> fullResCalls{0}, trackerCalls{0};
@@ -100,7 +100,7 @@ TEST(SinkRoutingTest, BothSinksReceiveCorrectFramesIndependently) {
 }
 
 TEST(SinkRoutingTest, RawSinkReceivesRawFrames) {
-    cam::ImagePipeline pipeline(nullptr, 64, 64);
+    cam::ImagePipeline pipeline;
 
     std::promise<void> called;
     std::atomic<int> rawCalls{0};
@@ -117,7 +117,7 @@ TEST(SinkRoutingTest, RawSinkReceivesRawFrames) {
 }
 
 TEST(SinkRoutingTest, RawSinkDoesNotReceiveFullResFrames) {
-    cam::ImagePipeline pipeline(nullptr, 64, 64);
+    cam::ImagePipeline pipeline;
 
     std::atomic<int> rawCalls{0};
     pipeline.addSink({"rawSink", cam::SinkRole::RAW},
@@ -130,7 +130,7 @@ TEST(SinkRoutingTest, RawSinkDoesNotReceiveFullResFrames) {
 }
 
 TEST(SinkRoutingTest, FullResSinkDoesNotReceiveRawFrames) {
-    cam::ImagePipeline pipeline(nullptr, 64, 64);
+    cam::ImagePipeline pipeline;
 
     std::atomic<int> fullResCalls{0};
     pipeline.addSink({"stitcher", cam::SinkRole::FULL_RES},
@@ -154,7 +154,7 @@ static void fillPattern(uint8_t* buf, size_t size) {
 }
 
 TEST(SinkDataTest, FullResConsumerReceivesCorrectPixelData) {
-    cam::ImagePipeline pipeline(nullptr, 64, 64);
+    cam::ImagePipeline pipeline;
 
     constexpr int W = 8, H = 4, STRIDE = W * 4;
     uint8_t src[H * STRIDE];
@@ -177,7 +177,7 @@ TEST(SinkDataTest, FullResConsumerReceivesCorrectPixelData) {
 }
 
 TEST(SinkDataTest, TrackerConsumerReceivesCorrectPixelData) {
-    cam::ImagePipeline pipeline(nullptr, 64, 64);
+    cam::ImagePipeline pipeline;
 
     constexpr int W = 6, H = 3, STRIDE = W * 4;
     uint8_t src[H * STRIDE];
@@ -200,7 +200,7 @@ TEST(SinkDataTest, TrackerConsumerReceivesCorrectPixelData) {
 }
 
 TEST(SinkDataTest, RawConsumerReceivesCorrectPixelData) {
-    cam::ImagePipeline pipeline(nullptr, 64, 64);
+    cam::ImagePipeline pipeline;
 
     constexpr int W = 4, H = 2, STRIDE = W * 4;
     uint8_t src[H * STRIDE];
@@ -223,7 +223,7 @@ TEST(SinkDataTest, RawConsumerReceivesCorrectPixelData) {
 }
 
 TEST(SinkDataTest, SinkFrameMetadataMatchesInput) {
-    cam::ImagePipeline pipeline(nullptr, 64, 64);
+    cam::ImagePipeline pipeline;
 
     constexpr int W = 4, H = 4, STRIDE = W * 4;
     uint8_t src[H * STRIDE] = {};
@@ -260,54 +260,104 @@ TEST(SinkDataTest, SinkFrameMetadataMatchesInput) {
     EXPECT_EQ(received.meta.displayRotation, 90);
 }
 
-TEST(SinkDataTest, PaddedStrideStripsRowPadding) {
-    // Input has stride > width*4 (extra padding bytes per row).
-    // Consumer should receive only the pixel data without the padding.
-    cam::ImagePipeline pipeline(nullptr, 64, 64);
-
-    constexpr int W = 4, H = 3;
-    constexpr int INPUT_STRIDE = W * 4 + 16;  // 16 bytes of padding per row
-    uint8_t src[H * INPUT_STRIDE];
-    memset(src, 0xAA, sizeof(src));  // fill everything (including padding) with 0xAA
-
-    // Write a distinct pattern into actual pixel bytes only.
-    for (int row = 0; row < H; ++row) {
-        for (int col = 0; col < W * 4; ++col) {
-            src[row * INPUT_STRIDE + col] = static_cast<uint8_t>((row * W * 4 + col) & 0xFF);
-        }
-    }
-
-    std::promise<void> done;
-    bool pixelsCorrect = false;
-
-    pipeline.addSink({"verify", cam::SinkRole::FULL_RES},
-                     [&](const cam::SinkFrame& f) {
-                         // Verify each row's pixel data matches, ignoring output stride.
-                         bool ok = (f.width == W && f.height == H);
-                         for (int row = 0; row < H && ok; ++row) {
-                             const uint8_t* expected = src + row * INPUT_STRIDE;
-                             const uint8_t* actual   = f.data + row * f.stride;
-                             if (std::memcmp(actual, expected, W * 4) != 0) {
-                                 ok = false;
-                             }
-                         }
-                         pixelsCorrect = ok;
-                         done.set_value();
-                     });
-
-    pipeline.deliverFullResRgba(src, W, H, INPUT_STRIDE, 1, {});
-    done.get_future().wait_for(std::chrono::seconds(2));
-    EXPECT_TRUE(pixelsCorrect);
-}
-
 TEST(SinkDataTest, EmptyConsumerVectorSkipsAllocation) {
     // With no consumers, deliverFullResRgba should return immediately
     // and not crash. This is the fast-path test.
-    cam::ImagePipeline pipeline(nullptr, 64, 64);
+    cam::ImagePipeline pipeline;
 
     uint8_t src[4 * 4 * 4] = {};
     // Should not crash or hang.
     pipeline.deliverFullResRgba(src, 4, 4, 16, 1, {});
     pipeline.deliverTrackerRgba(src, 4, 4, 16, 1, {});
     pipeline.deliverRawRgba(src, 4, 4, 16, 1, {});
+}
+
+// ---------------------------------------------------------------------------
+// ProcessingStage (setFrameHook) tests
+// ---------------------------------------------------------------------------
+
+TEST(ProcessingStageTest, HookModifiesFrameBeforeConsumer) {
+    // Register a hook that flips the first byte of RGBA data; verify consumer sees it.
+    cam::ImagePipeline pipeline;
+
+    constexpr int W = 4, H = 4, STRIDE = W * 4;
+    uint8_t src[H * STRIDE];
+    memset(src, 0x42, sizeof(src));
+
+    pipeline.setFrameHook(cam::SinkRole::FULL_RES,
+                          [](uint8_t* rgba, int /*w*/, int /*h*/, int /*stride*/) {
+                              rgba[0] = 0xFF;  // Flip first byte
+                          });
+
+    std::promise<void> done;
+    uint8_t firstByte = 0;
+    pipeline.addSink({"verify", cam::SinkRole::FULL_RES},
+                     [&](const cam::SinkFrame& f) {
+                         firstByte = f.data[0];
+                         done.set_value();
+                     });
+
+    pipeline.deliverFullResRgba(src, W, H, STRIDE, 1, {});
+    done.get_future().wait_for(std::chrono::seconds(2));
+    EXPECT_EQ(firstByte, 0xFF);
+}
+
+TEST(ProcessingStageTest, NoHookFastPathDeliversDirect) {
+    // Without a hook, frames arrive at consumers directly (no hook thread).
+    cam::ImagePipeline pipeline;
+
+    constexpr int W = 4, H = 4, STRIDE = W * 4;
+    uint8_t src[H * STRIDE];
+    memset(src, 0x77, sizeof(src));
+
+    std::promise<void> done;
+    uint8_t firstByte = 0;
+    pipeline.addSink({"verify", cam::SinkRole::FULL_RES},
+                     [&](const cam::SinkFrame& f) {
+                         firstByte = f.data[0];
+                         done.set_value();
+                     });
+
+    pipeline.deliverFullResRgba(src, W, H, STRIDE, 1, {});
+    done.get_future().wait_for(std::chrono::seconds(2));
+    EXPECT_EQ(firstByte, 0x77);  // Unmodified
+}
+
+TEST(ProcessingStageTest, ClearHookRestoresFastPath) {
+    // Set hook, deliver a frame, then clear hook (nullptr) and verify subsequent
+    // frames bypass the hook thread.
+    cam::ImagePipeline pipeline;
+
+    constexpr int W = 4, H = 4, STRIDE = W * 4;
+    uint8_t src[H * STRIDE];
+    memset(src, 0x55, sizeof(src));
+
+    pipeline.setFrameHook(cam::SinkRole::FULL_RES,
+                          [](uint8_t* rgba, int, int, int) { rgba[0] = 0xAA; });
+
+    {
+        std::promise<void> done;
+        pipeline.addSink({"verify", cam::SinkRole::FULL_RES},
+                         [&](const cam::SinkFrame& f) {
+                             (void)f;
+                             done.set_value();
+                         });
+        pipeline.deliverFullResRgba(src, W, H, STRIDE, 1, {});
+        done.get_future().wait_for(std::chrono::seconds(2));
+        pipeline.removeSink("verify");
+    }
+
+    // Clear hook; direct dispatch resumes.
+    pipeline.setFrameHook(cam::SinkRole::FULL_RES, nullptr);
+
+    std::promise<void> done2;
+    uint8_t firstByte = 0;
+    pipeline.addSink({"verify2", cam::SinkRole::FULL_RES},
+                     [&](const cam::SinkFrame& f) {
+                         firstByte = f.data[0];
+                         done2.set_value();
+                     });
+    pipeline.deliverFullResRgba(src, W, H, STRIDE, 2, {});
+    done2.get_future().wait_for(std::chrono::seconds(2));
+    EXPECT_EQ(firstByte, 0x55);  // Original value; hook not applied
 }

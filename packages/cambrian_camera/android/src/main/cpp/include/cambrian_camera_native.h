@@ -11,7 +11,7 @@ namespace cam {
 
 /// Per-frame sensor metadata passed through the pipeline alongside pixel data.
 /// Populated from Camera2 CaptureResult on the Kotlin side and transferred via
-/// flat JNI parameters in nativeDeliverYuv.
+/// flat JNI parameters in nativeGpuDrawAndReadback.
 struct FrameMetadata {
     int64_t frameNumber;       ///< Monotonically increasing frame counter
     int64_t sensorTimestampNs; ///< Sensor capture start time, nanoseconds
@@ -25,8 +25,7 @@ struct FrameMetadata {
 
 /// Pixel layout of the data buffer delivered to a sink.
 enum class PixelFormat {
-    BGR,   ///< CV_8UC3, OpenCV-native. Default pipeline output.
-    RGBA,  ///< CV_8UC4. Used by the built-in preview consumer.
+    RGBA,  ///< 8-bit RGBA, 4 bytes per pixel. All pipeline outputs.
 };
 
 /// A single frame delivered to a registered sink.
@@ -60,6 +59,10 @@ struct SinkConfig {
 /// Callback type invoked for each frame delivered to a sink.
 using SinkCallback = std::function<void(const SinkFrame&)>;
 
+/// Hook called on a dedicated processing thread before consumer dispatch.
+/// Modify rgba data in-place. The buffer is valid for the duration of the call.
+using FrameHookFn = std::function<void(uint8_t* rgba, int w, int h, int stride)>;
+
 /// Abstract pipeline interface for consumer sink registration.
 ///
 /// Obtain a pointer via CambrianCamera.getNativePipelineHandle() (Dart) or
@@ -68,6 +71,10 @@ using SinkCallback = std::function<void(const SinkFrame&)>;
 class IImagePipeline {
 public:
     virtual ~IImagePipeline() = default;
+
+    /// Register an optional CPU processing hook for frames of the given role.
+    /// The hook runs on a dedicated thread; pass nullptr to clear.
+    virtual void setFrameHook(SinkRole role, FrameHookFn fn) = 0;
 
     /// Register a consumer sink on the pipeline.
     /// The sink is identified by config.name; use that name with removeSink().

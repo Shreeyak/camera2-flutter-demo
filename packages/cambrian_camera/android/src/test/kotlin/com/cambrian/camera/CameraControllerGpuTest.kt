@@ -214,9 +214,9 @@ class CameraControllerGpuTest {
      * When onSurfaceAvailable fires but no native pipeline is active (nativePipelinePtr == 0),
      * the callback must return early without calling rebindPreviewSurface.
      *
-     * Note: the positive path (ptr != 0) calls the JNI method nativeSetPreviewWindow before
-     * rebindPreviewSurface, which cannot be exercised in JVM unit tests without loading the
-     * native library. That path is covered by integration/device tests.
+     * Note: the positive path (ptr != 0) calls gpuPipeline?.rebindPreviewSurface, which
+     * cannot be exercised in JVM unit tests without loading the native library.
+     * That path is covered by integration/device tests.
      */
     @Test
     fun `onSurfaceAvailable with no active pipeline does not call rebindPreviewSurface`() {
