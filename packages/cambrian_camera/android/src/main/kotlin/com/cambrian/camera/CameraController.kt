@@ -270,7 +270,7 @@ class CameraController(
         override fun run() {
             if (released || state != State.STREAMING) return
             val elapsed = android.os.SystemClock.elapsedRealtime() - lastCaptureResultMs
-            if (lastCaptureResultMs > 0L && elapsed > stallTimeoutMs) {
+            if (elapsed > stallTimeoutMs) {
                 Log.w("CC/Cam", "[$handle] Frame stall detected: ${elapsed}ms — triggering recovery")
                 handleNonFatalError(CamErrorCode.PIPELINE_ERROR, "Frame delivery stalled (${elapsed}ms)")
                 // Watchdog does not re-post itself here. Recovery always routes through
@@ -1291,7 +1291,7 @@ class CameraController(
                             setState(State.STREAMING)
                             emitState("streaming")
                             // Start the frame stall watchdog now that streaming is active.
-                            lastCaptureResultMs = 0L
+                            lastCaptureResultMs = android.os.SystemClock.elapsedRealtime()
                             backgroundHandler.postDelayed(stallWatchdog, stallCheckIntervalMs)
                             mainHandler.post { openCallback(Result.success(handle)) }
                         } catch (e: CameraAccessException) {
