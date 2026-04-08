@@ -113,3 +113,83 @@ Reference: `backgroundSuspend()`, `backgroundResume()`, `close()`. Never call `t
 - **Match surrounding patterns.** Find 2-3 similar functions and match their threading, error handling, and state notification patterns. Code samples in plans are sketches — the codebase is the source of truth for HOW to implement.
 - **State notifications are mandatory.** Any path that changes camera, recording, or error state MUST notify Dart via `flutterApi.*` posted on `mainHandler`.
 - **Verify before claiming "doesn't exist."** Fields may be far from your edit site in a large file.
+
+## Testing
+
+### Running Integration Tests
+
+**Always use the test runner script** — it wakes the device, installs the APK, grants camera permission (avoids the permission dialog), and runs tests:
+
+```bash
+./scripts/run_tests.sh [device-id] [test-file]           # recommended: full test run
+./scripts/run_tests.sh 192.168.1.19:35025                # specific device
+./scripts/run_tests.sh 192.168.1.19:35025 integration_test/app_test.dart  # specific file
+```
+
+Do NOT run `flutter test integration_test/` directly — it reinstalls the APK without `--dart-define=RUNNING_TESTS=true` and without `-g` permission grant, causing the camera permission dialog to appear mid-test.
+
+**How permission-free tests work:**
+- The APK is built with `--dart-define=RUNNING_TESTS=true`, which compiles `_kRunningTests = true` into the app
+- When that constant is true, `_openCamera()` in `main.dart` only calls `Permission.camera.status` — it never calls `Permission.camera.request()`, so no dialog can appear
+- `adb install -r -g` grants the camera permission at the OS level so `status` returns `granted`
+
+`wake_and_launch.sh` is used internally by `run_tests.sh` but can also be used standalone to wake/unlock the device and launch the app manually.
+
+Tests use `integration_test` (in-process, direct widget access). Do NOT use `flutter_driver` — it was removed from this project because it times out during recording due to continuous frame callbacks.
+
+### Widget Registry
+
+All interactive widgets are registered in `lib/testing/widget_registry.dart`. The registry is the **only** way to create `ValueKey`s for testable widgets. This prevents drift between keys and metadata.
+
+**Key files:**
+- `lib/testing/widget_registry.dart` — `WidgetRegistry` singleton and `WidgetEntry` class
+- `lib/testing/testable.dart` — `Testable` wrapper (applies key + semantics)
+- `lib/testing/test_channel.dart` — Debug-only camera state service extension
+- `lib/testing/keys/*_keys.dart` — Per-widget-group key registrations (kept in `lib/testing/` to separate test infrastructure from core widget code)
+
+**Naming convention:** dot-separated hierarchy `{area}.{widget}[.{sub}]`
+
+### Widget Map
+
+| ID | Widget | File |
+|----|--------|------|
+| `bar.settings` | Settings button | bottom_bar.dart |
+| `bar.calibrate` | Calibrate color button | bottom_bar.dart |
+| `bar.record` | Record/Stop button | bottom_bar.dart |
+| `bar.close` | Close settings button | camera_settings_bar.dart |
+| `chip.iso` | ISO chip | camera_settings_bar.dart |
+| `chip.shutter` | Shutter chip | camera_settings_bar.dart |
+| `chip.focus` | Focus chip | camera_settings_bar.dart |
+| `chip.wb` | White balance chip | camera_settings_bar.dart |
+| `chip.zoom` | Zoom chip | camera_settings_bar.dart |
+| `dial.auto_toggle` | Auto/manual toggle | main.dart |
+| `dial.wb_segment` | WB auto/lock segment | camera_control_overlay.dart |
+| `gpu.brightness` | Brightness slider | gpu_controls_sidebar.dart |
+| `gpu.contrast` | Contrast slider | gpu_controls_sidebar.dart |
+| `gpu.saturation` | Saturation slider | gpu_controls_sidebar.dart |
+| `gpu.gamma` | Gamma slider | gpu_controls_sidebar.dart |
+| `gpu.black.r` | Black balance red | gpu_controls_sidebar.dart |
+| `gpu.black.g` | Black balance green | gpu_controls_sidebar.dart |
+| `gpu.black.b` | Black balance blue | gpu_controls_sidebar.dart |
+| `gpu.reset_all` | Reset all button | gpu_controls_sidebar.dart |
+| `hud.recording` | Recording HUD | recording_hud.dart |
+
+### Adding New Testable Widgets
+
+1. Register with the registry in a `*_keys.dart` file next to the widget:
+   ```dart
+   final kMyWidget = WidgetRegistry.instance.register(
+     id: 'area.name',
+     label: 'Accessible label',
+     description: 'What it does',
+   );
+   ```
+2. Wrap the widget with `Testable(entry: kMyWidget, child: ...)` in the build method
+3. For sliders: pass `slider: true` and `value: currentValue` to `Testable`
+
+### Testing Patterns
+
+- **During recording:** Use `tester.pump(duration)` instead of `pumpAndSettle()` — continuous frame callbacks prevent settling
+- **Dial values:** Use `tester.state<CameraRulerDialState>(find.byKey(key)).setValue(800)` to set dial values programmatically
+- **Camera state:** Query via `ext.test.cameraState` service extension in debug builds
+- **Semantics verification:** Wrap app with `SemanticsDebugger(child: CameraApp())` during development to visualize what's exposed to accessibility tools and ADB

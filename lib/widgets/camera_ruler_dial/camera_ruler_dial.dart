@@ -49,10 +49,11 @@ class CameraRulerDial extends StatefulWidget {
   });
 
   @override
-  State<CameraRulerDial> createState() => _CameraRulerDialState();
+  State<CameraRulerDial> createState() => CameraRulerDialState();
 }
 
-class _CameraRulerDialState extends State<CameraRulerDial> {
+@visibleForTesting
+class CameraRulerDialState extends State<CameraRulerDial> {
   /// Scroll position as 0..1 fraction. Fractional during drag, snapped at rest.
   double _visualPercent = 0;
 
@@ -150,6 +151,23 @@ class _CameraRulerDialState extends State<CameraRulerDial> {
     );
     _visualPercent = widget.config.indexToPercent(idx);
     widget.onChanged(widget.config.stops[idx]);
+  }
+
+  // ── Test API ──────────────────────────────────────────────────────────────
+
+  /// Programmatically sets the dial to [value], snapping to the nearest stop.
+  ///
+  /// Fires [CameraRulerDial.onChanged] with the snapped value. Intended for
+  /// integration tests via `tester.state<CameraRulerDialState>(finder).setValue(v)`.
+  void setValue(double value) {
+    final closestValue = widget.config.closestTo(value);
+    final idx = widget.config.stops.indexOf(closestValue);
+    final clampedIdx = idx.clamp(0, widget.config.stopCount - 1);
+    setState(() {
+      _visualPercent = widget.config.indexToPercent(clampedIdx);
+      _lastTickIndex = clampedIdx;
+    });
+    widget.onChanged(widget.config.stops[clampedIdx]);
   }
 
   // ── Inertia ────────────────────────────────────────────────────────────────
@@ -258,7 +276,7 @@ class _CameraRulerDialState extends State<CameraRulerDial> {
 // ── DialTrack ─────────────────────────────────────────────────────────────────
 
 /// Ticks, labels, and centre indicator — the scrollable ruler content.
-/// Icons and gesture handling live in the parent [_CameraRulerDialState].
+/// Icons and gesture handling live in the parent [CameraRulerDialState].
 class _DialTrack extends StatelessWidget {
   final CameraDialConfig config;
   final double rulerOffset;

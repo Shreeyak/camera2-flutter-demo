@@ -1241,3 +1241,32 @@ adb shell am broadcast -a com.cambrian.camera.SET_LOG_LEVEL --ei level 2
 CC/Dart: updateSettings handle=1 CameraSettings(iso=manual(400), focus=auto)
 CC/Dart: setProcessingParams handle=1 ProcessingParams(black=[0.0,0.0,0.0] gamma=1.2 brightness=0.1 contrast=0.0 saturation=0.0)
 ```
+
+---
+
+## Widget Map
+
+All interactive widgets are registered in `lib/testing/widget_registry.dart` via the `WidgetRegistry` singleton. Use these IDs to locate widgets in integration tests with `find.byKey(kWidgetEntry.key)`.
+
+| ID | Widget | File |
+|----|--------|------|
+| `bar.settings` | Settings button | bottom_bar.dart |
+| `bar.calibrate` | Calibrate color button | bottom_bar.dart |
+| `bar.record` | Record/Stop button | bottom_bar.dart |
+| `bar.close` | Close settings button | camera_settings_bar.dart |
+| `chip.iso` | ISO chip | camera_settings_bar.dart |
+| `chip.shutter` | Shutter chip | camera_settings_bar.dart |
+| `chip.focus` | Focus chip | camera_settings_bar.dart |
+| `chip.wb` | White balance chip | camera_settings_bar.dart |
+| `chip.zoom` | Zoom chip | camera_settings_bar.dart |
+| `dial.auto_toggle` | Auto/manual toggle | main.dart |
+| `dial.wb_segment` | WB auto/lock segment | camera_control_overlay.dart |
+| `gpu.brightness` | Brightness slider | gpu_controls_sidebar.dart |
+| `gpu.contrast` | Contrast slider | gpu_controls_sidebar.dart |
+| `gpu.saturation` | Saturation slider | gpu_controls_sidebar.dart |
+| `gpu.gamma` | Gamma slider | gpu_controls_sidebar.dart |
+| `gpu.black.r` | Black balance red | gpu_controls_sidebar.dart |
+| `gpu.black.g` | Black balance green | gpu_controls_sidebar.dart |
+| `gpu.black.b` | Black balance blue | gpu_controls_sidebar.dart |
+| `gpu.reset_all` | Reset all button | gpu_controls_sidebar.dart |
+| `hud.recording` | Recording HUD | recording_hud.dart |

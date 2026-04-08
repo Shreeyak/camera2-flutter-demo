@@ -21,6 +21,7 @@ import 'package:flutter/material.dart'
     RoundSliderOverlayShape,
     RoundSliderThumbShape,
     SafeArea,
+    Semantics,
     SizedBox,
     Slider,
     SliderTheme,
@@ -28,8 +29,13 @@ import 'package:flutter/material.dart'
     Text,
     Theme,
     ValueChanged,
+    ValueKey,
     Widget;
 import 'package:cambrian_camera/cambrian_camera.dart' show ProcessingParams;
+import '../testing/testable.dart' show Testable;
+import '../testing/keys/gpu_controls_sidebar_keys.dart'
+    show kGpuBrightness, kGpuContrast, kGpuSaturation, kGpuGamma,
+         kGpuBlackR, kGpuBlackG, kGpuBlackB, kGpuResetAll;
 
 /// Right-side panel with Material3 sliders for each GPU shader uniform.
 ///
@@ -71,6 +77,8 @@ class GpuControlsSidebar extends StatelessWidget {
               defaultValue: 0.0,
               valueLabel: params.brightness.toStringAsFixed(2),
               onChanged: (v) => onChanged(params.copyWith(brightness: v)),
+              sliderKey: kGpuBrightness.key,
+              semanticsLabel: kGpuBrightness.label,
             ),
             _ShaderSlider(
               label: 'Contrast',
@@ -80,6 +88,8 @@ class GpuControlsSidebar extends StatelessWidget {
               defaultValue: 0.0,
               valueLabel: params.contrast.toStringAsFixed(2),
               onChanged: (v) => onChanged(params.copyWith(contrast: v)),
+              sliderKey: kGpuContrast.key,
+              semanticsLabel: kGpuContrast.label,
             ),
             _ShaderSlider(
               label: 'Saturation',
@@ -89,6 +99,8 @@ class GpuControlsSidebar extends StatelessWidget {
               defaultValue: 0.0,
               valueLabel: params.saturation.toStringAsFixed(2),
               onChanged: (v) => onChanged(params.copyWith(saturation: v)),
+              sliderKey: kGpuSaturation.key,
+              semanticsLabel: kGpuSaturation.label,
             ),
             _ShaderSlider(
               label: 'Gamma',
@@ -98,6 +110,8 @@ class GpuControlsSidebar extends StatelessWidget {
               defaultValue: 1.0,
               valueLabel: params.gamma.toStringAsFixed(2),
               onChanged: (v) => onChanged(params.copyWith(gamma: v)),
+              sliderKey: kGpuGamma.key,
+              semanticsLabel: kGpuGamma.label,
             ),
             const Divider(height: 24),
             Text(
@@ -116,6 +130,8 @@ class GpuControlsSidebar extends StatelessWidget {
               valueLabel: params.blackR.toStringAsFixed(3),
               activeColor: Colors.redAccent,
               onChanged: (v) => onChanged(params.copyWith(blackR: v)),
+              sliderKey: kGpuBlackR.key,
+              semanticsLabel: kGpuBlackR.label,
             ),
             _ShaderSlider(
               label: 'G',
@@ -126,6 +142,8 @@ class GpuControlsSidebar extends StatelessWidget {
               valueLabel: params.blackG.toStringAsFixed(3),
               activeColor: Colors.greenAccent,
               onChanged: (v) => onChanged(params.copyWith(blackG: v)),
+              sliderKey: kGpuBlackG.key,
+              semanticsLabel: kGpuBlackG.label,
             ),
             _ShaderSlider(
               label: 'B',
@@ -136,12 +154,17 @@ class GpuControlsSidebar extends StatelessWidget {
               valueLabel: params.blackB.toStringAsFixed(3),
               activeColor: Colors.blueAccent,
               onChanged: (v) => onChanged(params.copyWith(blackB: v)),
+              sliderKey: kGpuBlackB.key,
+              semanticsLabel: kGpuBlackB.label,
             ),
             const SizedBox(height: 12),
-            OutlinedButton.icon(
-              onPressed: () => onChanged(ProcessingParams()),
-              icon: const Icon(Icons.refresh, size: 16),
-              label: const Text('Reset all'),
+            Testable(
+              entry: kGpuResetAll,
+              child: OutlinedButton.icon(
+                onPressed: () => onChanged(ProcessingParams()),
+                icon: const Icon(Icons.refresh, size: 16),
+                label: const Text('Reset all'),
+              ),
             ),
           ],
         ),
@@ -160,6 +183,8 @@ class _ShaderSlider extends StatelessWidget {
     required this.valueLabel,
     required this.onChanged,
     this.activeColor,
+    this.sliderKey,
+    this.semanticsLabel,
   });
 
   final String label;
@@ -170,6 +195,8 @@ class _ShaderSlider extends StatelessWidget {
   final String valueLabel;
   final ValueChanged<double> onChanged;
   final Color? activeColor;
+  final ValueKey<String>? sliderKey;
+  final String? semanticsLabel;
 
   @override
   Widget build(BuildContext context) {
@@ -203,11 +230,17 @@ class _ShaderSlider extends StatelessWidget {
               activeTrackColor: activeColor,
               thumbColor: activeColor,
             ),
-            child: Slider(
-              value: value.clamp(min, max),
-              min: min,
-              max: max,
-              onChanged: onChanged,
+            child: Semantics(
+              label: semanticsLabel,
+              slider: true,
+              value: valueLabel,
+              child: Slider(
+                key: sliderKey,
+                value: value.clamp(min, max),
+                min: min,
+                max: max,
+                onChanged: onChanged,
+              ),
             ),
           ),
         ],

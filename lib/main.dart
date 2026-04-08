@@ -1,4 +1,5 @@
 import 'dart:async' show StreamSubscription;
+import 'package:flutter/services.dart' show PlatformException;
 import 'dart:math' show max;
 
 import 'package:cambrian_camera/cambrian_camera.dart'
@@ -27,6 +28,9 @@ import 'widgets/camera_control_overlay.dart'
     show CameraControlOverlay, kCameraDialMaxWidth;
 import 'widgets/gpu_controls_sidebar.dart' show GpuControlsSidebar;
 import 'widgets/recording_hud.dart' show RecordingHud;
+import 'testing/test_channel.dart' show TestChannel;
+import 'testing/testable.dart' show Testable;
+import 'testing/keys/camera_control_keys.dart' show kDialAutoToggle, kHudRecording;
 
 /// Horizontal offset from the left edge of the dial to the auto-toggle button.
 const _kAutoToggleOffset = 60.0;
@@ -115,6 +119,16 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
       onToggleAf: _toggleAf,
     );
     _fetchRotation();
+    TestChannel.register(() => {
+      'isStreaming': _camera != null,
+      'isRecording': _isRecording,
+      'iso': _values.isoValue,
+      'exposureTimeNs': _values.exposureTimeNs,
+      'aeSeeded': _aeSeeded,
+      'isoAuto': _values.isoAuto,
+      'exposureAuto': _values.exposureAuto,
+      'afEnabled': _values.afEnabled,
+    });
   }
 
   @override
@@ -163,10 +177,37 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
   int get _quarterTurns => quarterTurnsFromDisplayRotation(_displayRotationDeg);
 
   Future<void> _openCamera() async {
-    final status = await Permission.camera.request();
-    if (!status.isGranted) {
-      debugPrint('Camera permission denied: $status');
-      return;
+    // In test builds (--dart-define=RUNNING_TESTS=true) never show the system
+    // dialog. Permissions must be pre-granted by run_tests.sh via
+    // `adb install -r -g`. If they weren't, fail fast with a clear message.
+    const bool runningTests = bool.fromEnvironment('RUNNING_TESTS');
+    PermissionStatus status;
+    if (runningTests) {
+      status = await Permission.camera.status;
+      if (!status.isGranted) {
+        debugPrint(
+          'TEST MODE: camera permission not granted. '
+          'Run tests via scripts/run_tests.sh — it pre-grants permissions '
+          'with `adb install -r -g`.',
+        );
+        return;
+      }
+    } else {
+      // Normal app flow: check first, request only if needed. The early status
+      // check avoids "request already running" races during hot-restart.
+      try {
+        final existing = await Permission.camera.status;
+        status = existing.isGranted ? existing : await Permission.camera.request();
+      } on PlatformException catch (e) {
+        // Another request is already in flight. Wait and re-read.
+        debugPrint('Camera permission: concurrent request (${e.message}), retrying');
+        await Future<void>.delayed(const Duration(milliseconds: 500));
+        status = await Permission.camera.status;
+      }
+      if (!status.isGranted) {
+        debugPrint('Camera permission denied: $status');
+        return;
+      }
     }
     try {
       final camera = await CambrianCamera.open(
@@ -509,10 +550,13 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
                       left: 0,
                       right: 0,
                       child: Center(
-                        child: RecordingHud(
-                          stateStream: _camera?.recordingStateStream ?? const Stream.empty(),
-                          displayName: _recordingDisplayName,
-                          outputDir: _recordingOutputDir,
+                        child: Testable(
+                          entry: kHudRecording,
+                          child: RecordingHud(
+                            stateStream: _camera?.recordingStateStream ?? const Stream.empty(),
+                            displayName: _recordingDisplayName,
+                            outputDir: _recordingOutputDir,
+                          ),
                         ),
                       ),
                     ),
@@ -545,10 +589,13 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
                                     kCameraDialMaxWidth / 2 -
                                     _kAutoToggleOffset,
                               ),
+                              child: Testable(
+                              entry: kDialAutoToggle,
                               child: CameraAutoToggleButton(
                                 isAuto: _isAutoMode(_activeSetting),
                                 onTap: () => _onAutoToggleTap(_activeSetting),
                               ),
+                            ),
                             ),
                         ],
                       ),
