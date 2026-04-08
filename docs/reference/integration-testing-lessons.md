@@ -1,7 +1,7 @@
 # Integration Testing: Lessons Learned
 
 <!-- LLM SUMMARY
-This document covers the integration test infrastructure for camera2_flutter_demo, a Flutter app that drives Android Camera2 hardware directly. It is useful when: adding new tests, debugging test failures, understanding why certain tools/approaches are forbidden, or troubleshooting permission or connectivity issues.
+This document covers the integration test infrastructure for camera2_flutter_demo, a Flutter app that drives Android Camera2 hardware directly. It is useful when: adding new tests, debugging test failures, understanding why certain tools/approaches are forbidden, troubleshooting permission or connectivity issues, or understanding the planned agentic test harness.
 
 Topics covered:
 - Why integration_test was chosen over flutter_driver and flutter_drive
@@ -11,6 +11,11 @@ Topics covered:
 - run_tests.sh as the canonical test runner and its required step order
 - Common pitfalls with concrete fixes
 - Pump timing patterns for animations and recording
+- Why smoke tests aren't real integration tests — the gap between widget presence and hardware state
+- Frame metadata missing from FrameResult (frameNumber, sensorTimestampNs, 3A states)
+- Architecture decision: WebSocket harness + CLI + Claude skill (not MCP)
+- Why TestChannel service extensions are being replaced by AppStateReader
+- Skill + CLI vs MCP for LLM agent tooling — token efficiency and comparable performance
 -->
 
 ---
@@ -25,6 +30,12 @@ Topics covered:
 6. [Running Tests Over WiFi ADB](#running-tests-over-wifi-adb)
 7. [Common Pitfalls](#common-pitfalls)
 8. [Ideal Patterns](#ideal-patterns)
+9. [The Smoke Test Realization](#the-smoke-test-realization)
+10. [Frame Metadata: What the Hardware Knows That We Don't](#frame-metadata-what-the-hardware-knows-that-we-dont)
+11. [Designing for Agentic Testing](#designing-for-agentic-testing)
+12. [Tooling Decisions: Skill + CLI Over MCP](#tooling-decisions-skill--cli-over-mcp)
+13. [Architecture Decisions Summary](#architecture-decisions-summary)
+14. [Key Insights](#key-insights)
 
 ---
 
@@ -258,3 +269,178 @@ runApp(SemanticsDebugger(child: CameraApp()));
 ```
 
 `SemanticsDebugger` renders the `Semantics` labels from `Testable` wrappers as on-screen overlays — useful for verifying every widget has the right label before writing assertions against them.
+
+---
+
+## The Smoke Test Realization
+
+After getting all four tests passing — widget registry count, settings panel opens, chips tappable, recording start/stop — we stepped back and asked what these tests actually prove. The answer was uncomfortable: they prove the app doesn't crash when you tap things. That's it.
+
+The tests answer "can a user tap through the UI?" They don't answer "does the camera actually do what the UI says it's doing?" Every assertion is `findsOneWidget` — verifying a widget appeared on screen. No test checks whether Camera2 applied a new ISO, whether a frame was delivered after changing settings, or whether the recorded file contains valid video.
+
+The gap is between `tester.tap()` and what happened in Kotlin. The UI shows a chip labeled "ISO" and the test confirms the chip exists. But the interesting question — did `CameraController.kt` send the new ISO to Camera2 via `CaptureRequest`, and did the next `TotalCaptureResult` come back with `SENSOR_SENSITIVITY` matching? — goes completely unasked.
+
+This matters because the bugs we've been fixing (stall watchdog, recording safety, lifecycle observer failures) are all native-side bugs. A smoke test that only checks widgets would have missed every one of them.
+
+### What smoke tests do and don't catch
+
+| What smoke tests catch | What they miss |
+|----------------------|---------------|
+| Widget tree renders without crash | Camera settings not applied to hardware |
+| Buttons are tappable | Frame delivery stalled after settings change |
+| Settings panel opens/closes | Recording produces no output file |
+| Recording HUD appears | AE/AF/AWB never converges after parameter change |
+| Registry has expected widget count | Concurrent permission requests crash the app (only caught because `PlatformException` propagated to the test) |
+
+The existing `TestChannel` was designed to bridge this gap — it exposes camera state as JSON via a Dart VM service extension — but no test ever calls it. It was wired up and then forgotten, because the smoke tests were "passing" and the urgency to read hardware state was never felt until we looked critically at what "passing" meant.
+
+---
+
+## Frame Metadata: What the Hardware Knows That We Don't
+
+To write tests that assert on hardware behavior, we need the data that Camera2's `TotalCaptureResult` provides. We traced the metadata pipeline from Kotlin through Pigeon to Dart and found significant gaps.
+
+### What `FrameResult` carries today
+
+| Field | Source | Available? |
+|-------|--------|-----------|
+| `iso` | `SENSOR_SENSITIVITY` | Yes |
+| `exposureTimeNs` | `SENSOR_EXPOSURE_TIME` | Yes |
+| `focusDistanceDiopters` | `LENS_FOCUS_DISTANCE` | Yes (AF locked only) |
+| `wbGainR/G/B` | `COLOR_CORRECTION_GAINS` | Yes |
+
+### What's missing
+
+| Field | Source | Why it matters for testing |
+|-------|--------|--------------------------|
+| `frameNumber` | `getFrameNumber()` | Deterministic ordering — "after frame 1042, ISO changed to 800" instead of "at some point ISO became 800" |
+| `sensorTimestampNs` | `SENSOR_TIMESTAMP` | Correlate UI actions to exact capture times; measure latency between tap and hardware response |
+| `frameDurationNs` | `SENSOR_FRAME_DURATION` | Detect frame drops; verify FPS isn't degrading during test |
+| `aeState` | `CONTROL_AE_STATE` | Assert "AE converged" before checking exposure values — replaces fragile "poll until stable" pattern |
+| `afState` | `CONTROL_AF_STATE` | Assert "focus locked" rather than polling distance for stability |
+| `awbState` | `CONTROL_AWB_STATE` | Assert "WB converged" before comparing gain values |
+
+The 3A states are particularly important. Without them, a test that changes ISO and then reads the exposure value has no way to know whether AE has converged yet. It has to poll and hope — typically with a generous timeout and a `closeTo` matcher. With `aeState`, the test can wait for `CONVERGED` and then assert an exact value. The difference is between a flaky test and a deterministic one.
+
+Frame numbers and timestamps together enable a pattern we call **frame-anchored assertions**: "starting at frame N, wait for a frame where condition X holds, then assert Y on that specific frame." This eliminates timing races entirely — you're asserting on a specific capture result, not on "whatever the latest value happens to be."
+
+### Where the extraction happens
+
+The metadata pipeline starts in `CameraController.kt` at the `onCaptureCompleted` callback (~line 1869). Currently it extracts ISO, exposure, focus, and WB gains on every 10th frame (~3 Hz at 30 fps) and sends them to Dart via Pigeon's `CamFrameResult` message. The missing fields (`frameNumber`, `sensorTimestampNs`, 3A states) are available in the same `TotalCaptureResult` object — they just aren't being read.
+
+Adding them requires changes at three layers: the Pigeon message definition (`pigeons/camera_api.dart`), the Kotlin extraction code (`CameraController.kt`), and the Dart `FrameResult` class (`lib/src/frame_result.dart`). See `docs/plans/2026-04-08-real-integration-tests.md` for the implementation plan.
+
+---
+
+## Designing for Agentic Testing
+
+The test infrastructure has two consumers with different needs: a CI pipeline that runs deterministic scripts, and an AI agent that explores the app reactively. We designed the architecture to serve both from the same primitives.
+
+### Two modes, one control surface
+
+```
+Agent (Claude Code)              CI (run_tests.sh)
+  │                                 │
+  │ ./scripts/app_ctl.sh            │ direct Dart calls
+  │ over WebSocket                  │ inside testWidgets
+  ▼                                 ▼
+┌────────────────────────────────────────┐
+│  AppStateReader (shared Dart module)   │
+│    getCameraState()                    │
+│    getLatestFrame()                    │
+│    getRecordingState()                 │
+│    waitForFrame(predicate, timeout)    │
+└────────────────────────────────────────┘
+```
+
+Both paths read state through `AppStateReader`. The agent gets there via a WebSocket harness in the app; CI tests get there via direct Dart function calls inside `testWidgets`. One implementation, two consumers.
+
+### Why the WebSocket harness exists
+
+Service extensions (`ext.test.*`) can read state but can't drive the UI — you can't synthesize a tap from a service extension because there's no `WidgetTester` outside `testWidgets`. The WebSocket harness runs inside the app process and can call `WidgetsBinding.instance.handlePointerEvent()` to synthesize taps, and `RenderRepaintBoundary.toImage()` for screenshots. It's a full control plane, not just a state reader.
+
+### What TestChannel was and why it's being replaced
+
+`TestChannel` registered Dart VM service extensions — hooks in the debug protocol that tools like DevTools can query. It was the first attempt at exposing camera state for tests. With the WebSocket harness now serving as the single control surface for both state reads and widget interactions, routing reads through service extensions became pointless indirection. `AppStateReader` replaces `TestChannel` as a plain Dart module — no protocol layer, no VM service dependency.
+
+### The agentic workflow
+
+The agent's interaction pattern looks like this:
+
+1. Agent invokes `/app-control` skill — loads command reference into context
+2. Agent runs `./scripts/app_ctl.sh tap chip.iso` — sends JSON-RPC over WebSocket to harness
+3. Harness taps the widget, returns `{"ok": true}`
+4. Agent runs `./scripts/app_ctl.sh get-frame` — reads latest `FrameResult` from hardware
+5. Agent observes `{"frameNumber": 1847, "iso": 800, "aeState": "CONVERGED"}`
+6. Agent decides what to verify next, or authors a `testWidgets` block from what it observed
+
+The agent explores the app like a developer would — poke something, observe what changed, decide the next action. But it does it through structured JSON over a CLI, not by squinting at a screen.
+
+---
+
+## Tooling Decisions: Skill + CLI Over MCP
+
+We evaluated three approaches for giving the AI agent access to the test harness:
+
+### Approaches considered
+
+| Approach | How it works | Token cost | Build cost | Error profile |
+|----------|-------------|-----------|-----------|---------------|
+| **MCP server** | Typed tool schemas loaded at session start; native tool calls | Schema tokens persist for entire session whether used or not | MCP stdio protocol + JSON-RPC boilerplate + tool registration | Low — structured input/output |
+| **Claude skill + CLI** | Skill loaded on `/app-control` invocation; Bash calls to `app_ctl.sh` | Zero until invoked; skill content loaded once | One markdown file + one bash script | Low — JSON stdout is predictable; skill documents exact syntax |
+| **Raw CLI (no skill)** | Agent reads the script to learn commands | Potentially high if agent reads script repeatedly | One bash script | Higher — agent must discover commands by reading code |
+
+### Why skill + CLI wins
+
+Research shows skills perform comparably to MCP tools for this kind of structured-command-with-JSON-response pattern. The key advantages:
+
+**Token efficiency.** MCP tool schemas are loaded into context for the entire session. The `/app-control` skill loads only when the agent needs to interact with the app. For sessions focused on code review or architecture discussion, the app-control tooling costs zero tokens.
+
+**Simpler to build.** A Claude skill is a markdown file with YAML frontmatter. The CLI is a bash script that opens a WebSocket, sends a JSON-RPC message, and prints the response. No MCP protocol implementation, no stdio transport, no tool registration boilerplate.
+
+**Same maintenance burden.** Both MCP schemas and skill documentation must stay in sync with harness commands. Updating a markdown file is easier than updating a typed schema.
+
+**The skill IS the documentation.** When the agent invokes `/app-control`, it gets the full command reference in context — parameter names, response formats, examples, edge cases. There's no separate docs file to maintain. The skill and the documentation are the same artifact.
+
+**Upgrade path preserved.** If we later find the agent struggles with Bash invocation or stdout parsing (observable via error rates), wrapping the CLI in MCP is mechanical — the WebSocket harness doesn't change.
+
+---
+
+## Architecture Decisions Summary
+
+| Decision | Rationale | Alternatives rejected |
+|----------|-----------|----------------------|
+| `integration_test` over `flutter_driver` | Camera2 frame callbacks prevent engine idle; driver times out during recording | `flutter_driver` abandoned |
+| `adb install -r -g` over `pm grant` | `pm grant` blocked on Android 16 for dangerous permissions without root | `pm grant` abandoned |
+| `RUNNING_TESTS` compile-time flag | `bool.fromEnvironment` resolved at build time — can't accidentally enable in production; suppresses permission dialog at source | Runtime flag (could leak to production) |
+| Both `-g` and dart-define required | `-g` alone is fragile (any reinstall resets); dart-define alone fails (status is denied); together they form a contract | Either alone |
+| `WidgetRegistry` over raw `ValueKey` constants | Enforces unique IDs, centralizes metadata, enables enumeration | Scattered constants (no uniqueness, no labels) |
+| `AppStateReader` over `TestChannel` service extensions | WebSocket serves state directly; service extensions are unnecessary indirection; one module serves both agentic and CI paths | `TestChannel` being removed |
+| WebSocket harness over service extensions only | Service extensions can read state but can't drive the widget tree (no pointer event synthesis) | Service extensions alone |
+| Skill + CLI over MCP | Comparable performance, lighter token usage, simpler to build, skill IS the documentation | MCP (heavier, always-loaded schemas) |
+| Fixed port 19400 | Unusual enough to avoid conflicts; simple; app restarts reuse the same port | Dynamic port negotiation (complex) |
+| Frame metadata enrichment | `frameNumber` + `sensorTimestampNs` enable deterministic frame-anchored assertions; 3A states replace fragile polling patterns | Polling with generous timeouts (flaky) |
+| CLI-first, MCP if needed | CLI validates the harness immediately; MCP upgrade is mechanical if error rates justify it | MCP-first (slower to validate) |
+| Complement Dart MCP, don't replace | Dart MCP is the analysis layer (DevTools, hot reload). Our harness is the control layer (camera state, UI interaction). Different concerns. | Replacing Dart MCP (wrong scope) |
+
+---
+
+## Key Insights
+
+### Passing tests aren't the same as tests that prove something
+
+Four green tests felt like progress, but they were asserting on symptoms (widgets appeared) rather than behavior (hardware responded). The distinction matters: a smoke test suite can stay green through every native-side regression we've been fixing — stall watchdog bugs, recording safety issues, lifecycle observer failures — because it never looks past the widget tree.
+
+The realization that `TestChannel` was wired up but unused is a pattern worth watching for: infrastructure built for a purpose but never actually connected to the purpose it was built for. The service extension existed, the state callback was registered, but no test ever called it. The smoke tests were "passing" and the urgency to use the deeper instrumentation was never felt — until we stepped back and asked what "passing" actually meant.
+
+### Documentation-as-interface: the skill → CLI → harness pattern
+
+A Claude skill is documentation-as-interface. The skill file teaches the agent how to use the CLI, and the CLI is just a thin pipe to the real system. This three-layer pattern cleanly separates concerns:
+
+| Layer | Artifact | Concern |
+|-------|----------|---------|
+| **What the agent knows** | `.claude/skills/app-control/SKILL.md` | Command reference, parameter names, response formats, examples, edge cases |
+| **How it communicates** | `scripts/app_ctl.sh` | WebSocket client — connect, send JSON-RPC, print response |
+| **What the app does** | `lib/testing/test_harness.dart` | Synthesize taps, read state, capture screenshots, serve over WebSocket |
+
+Each layer can change independently. The harness can add new commands without touching the CLI. The CLI can switch transports without touching the skill. The skill can be rewritten for clarity without touching either. And because the skill is loaded on demand rather than persisted in session context, it costs nothing when the agent isn't doing app interaction work.
