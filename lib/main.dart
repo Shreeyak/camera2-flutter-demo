@@ -344,6 +344,7 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
       setState(() => _calibrationIteration = i + 1);
 
       final sample = await camera.sampleCenterPatch();
+      if (!mounted) return;
 
       // Error: max normalized deviation from green reference.
       final errR = (sample.r - sample.g).abs();
@@ -359,6 +360,7 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
       ));
 
       await Future.delayed(const Duration(milliseconds: 200));
+      if (!mounted) return;
     }
 
     if (mounted) {
@@ -385,6 +387,7 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
       setState(() => _calibrationIteration = i + 1);
 
       final sample = await camera.sampleCenterPatch();
+      if (!mounted) return;
 
       final error = sample.r > sample.g
           ? (sample.r > sample.b ? sample.r : sample.b)
@@ -400,6 +403,7 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
       );
 
       await Future.delayed(const Duration(milliseconds: 200));
+      if (!mounted) return;
     }
 
     if (mounted) {
@@ -781,7 +785,7 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
             );
           },
         ),
-        if (_isCalibrating) const _CrosshairOverlay(),
+        if (_isCalibrating) const Positioned.fill(child: _CrosshairOverlay()),
       ],
     );
   }
