@@ -263,6 +263,7 @@ struct CamProcessingParams {
 
 /// Generated class from Pigeon that represents data sent in messages.
 struct CamCapabilities {
+  /// All supported YUV_420_888 stream resolutions, sorted descending by area.
   var supportedSizes: [CamSize]
   var isoMin: Int64
   var isoMax: Int64
@@ -532,6 +533,7 @@ protocol CameraHostApi {
   func open(cameraId: String?, settings: CamSettings?, completion: @escaping (Result<Int64, Error>) -> Void)
   func getCapabilities(handle: Int64, completion: @escaping (Result<CamCapabilities, Error>) -> Void)
   func updateSettings(handle: Int64, settings: CamSettings) throws
+  func setResolution(handle: Int64, width: Int64, height: Int64, completion: @escaping (Result<Void, Error>) -> Void)
   func setProcessingParams(handle: Int64, params: CamProcessingParams) throws
   func takePicture(handle: Int64, completion: @escaping (Result<String, Error>) -> Void)
   func getNativePipelineHandle(handle: Int64, completion: @escaping (Result<Int64?, Error>) -> Void)
@@ -609,6 +611,25 @@ class CameraHostApiSetup {
       }
     } else {
       updateSettingsChannel.setMessageHandler(nil)
+    }
+    let setResolutionChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.cambrian_camera.CameraHostApi.setResolution\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
+    if let api = api {
+      setResolutionChannel.setMessageHandler { message, reply in
+        let args = message as! [Any?]
+        let handleArg = args[0] as! Int64
+        let widthArg = args[1] as! Int64
+        let heightArg = args[2] as! Int64
+        api.setResolution(handle: handleArg, width: widthArg, height: heightArg) { result in
+          switch result {
+          case .success:
+            reply(wrapResult(nil))
+          case .failure(let error):
+            reply(wrapError(error))
+          }
+        }
+      }
+    } else {
+      setResolutionChannel.setMessageHandler(nil)
     }
     let setProcessingParamsChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.cambrian_camera.CameraHostApi.setProcessingParams\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
     if let api = api {

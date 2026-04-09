@@ -133,6 +133,7 @@ class CamCapabilities {
     required this.streamHeight,
   });
 
+  /// All supported YUV_420_888 stream resolutions, sorted descending by area.
   List<CamSize> supportedSizes;
   int isoMin;
   int isoMax;
@@ -244,6 +245,9 @@ abstract class CameraHostApi {
   CamCapabilities getCapabilities(int handle);
 
   void updateSettings(int handle, CamSettings settings);
+
+  @async
+  void setResolution(int handle, int width, int height);
 
   void setProcessingParams(int handle, CamProcessingParams params);
 
