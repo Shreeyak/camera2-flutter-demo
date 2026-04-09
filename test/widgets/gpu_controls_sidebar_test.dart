@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:cambrian_camera/cambrian_camera.dart' show ProcessingParams, WhiteBalance;
+import 'package:camera2_flutter_demo/widgets/bottom_bar_buttons.dart'
+    show CameraAutoToggleButton;
 import 'package:camera2_flutter_demo/widgets/gpu_controls_sidebar.dart'
     show GpuControlsSidebar;
 
@@ -30,13 +32,12 @@ void main() {
       );
 
       expect(find.text('Calibrate Color'), findsOneWidget);
+      expect(find.text('WHITE BALANCE'), findsOneWidget);
+      expect(find.text('BLACK BALANCE'), findsOneWidget);
       expect(find.text('Brightness'), findsOneWidget);
       expect(find.text('Contrast'), findsOneWidget);
       expect(find.text('Saturation'), findsOneWidget);
-      expect(find.text('Black Balance'), findsOneWidget);
-      expect(find.text('R'), findsOneWidget);
-      expect(find.text('G'), findsOneWidget);
-      expect(find.text('B'), findsOneWidget);
+      expect(find.text('Gamma'), findsOneWidget);
     });
 
     testWidgets(
@@ -176,15 +177,13 @@ void main() {
     );
 
     testWidgets(
-      'black R slider calls onChanged with updated blackR',
+      'BB section shows Calibrate button when bbLocked is false',
       (WidgetTester tester) async {
-        ProcessingParams? received;
-
         await tester.pumpWidget(
           _wrap(
             GpuControlsSidebar(
               params: ProcessingParams(),
-              onChanged: (p) => received = p,
+              onChanged: (_) {},
               wbMode: const WhiteBalance.auto(),
               lastWbGains: null,
               bbLocked: false,
@@ -200,29 +199,23 @@ void main() {
           ),
         );
 
-        // Black R is the fifth Slider.
-        await tester.drag(find.byType(Slider).at(4), const Offset(20, 0));
-        await tester.pump();
-
-        expect(received, isNotNull);
-        expect(received!.blackR, isNot(0.0));
+        // Both WB and BB sections show a Calibrate button when not calibrating.
+        expect(find.text('Calibrate'), findsNWidgets(2));
       },
     );
 
     testWidgets(
-      'black G slider calls onChanged with updated blackG',
+      'BB section shows status line when bbLocked and lastBbValues is non-null',
       (WidgetTester tester) async {
-        ProcessingParams? received;
-
         await tester.pumpWidget(
           _wrap(
             GpuControlsSidebar(
               params: ProcessingParams(),
-              onChanged: (p) => received = p,
+              onChanged: (_) {},
               wbMode: const WhiteBalance.auto(),
               lastWbGains: null,
-              bbLocked: false,
-              lastBbValues: null,
+              bbLocked: true,
+              lastBbValues: (0.012, 0.034, 0.056),
               isCalibrating: false,
               calibrationTarget: null,
               calibrationIteration: 0,
@@ -234,25 +227,23 @@ void main() {
           ),
         );
 
-        // Black G is the sixth Slider.
-        await tester.drag(find.byType(Slider).at(5), const Offset(20, 0));
-        await tester.pump();
-
-        expect(received, isNotNull);
-        expect(received!.blackG, isNot(0.0));
+        expect(
+          find.text('R 0.012  G 0.034  B 0.056'),
+          findsOneWidget,
+        );
       },
     );
 
     testWidgets(
-      'black B slider calls onChanged with updated blackB',
+      'BB section calls onBbToggle when toggle button is tapped',
       (WidgetTester tester) async {
-        ProcessingParams? received;
+        var toggled = false;
 
         await tester.pumpWidget(
           _wrap(
             GpuControlsSidebar(
               params: ProcessingParams(),
-              onChanged: (p) => received = p,
+              onChanged: (_) {},
               wbMode: const WhiteBalance.auto(),
               lastWbGains: null,
               bbLocked: false,
@@ -261,19 +252,18 @@ void main() {
               calibrationTarget: null,
               calibrationIteration: 0,
               onWbToggle: () {},
-              onBbToggle: () {},
+              onBbToggle: () => toggled = true,
               onStartCalibration: (_) {},
               onCapture: () {},
             ),
           ),
         );
 
-        // Black B is the seventh Slider.
-        await tester.drag(find.byType(Slider).at(6), const Offset(20, 0));
+        // The BB toggle is the second CameraAutoToggleButton in the tree.
+        await tester.tap(find.byType(CameraAutoToggleButton).at(1));
         await tester.pump();
 
-        expect(received, isNotNull);
-        expect(received!.blackB, isNot(0.0));
+        expect(toggled, isTrue);
       },
     );
 
@@ -281,7 +271,14 @@ void main() {
       'reset button calls onChanged with default ProcessingParams',
       (WidgetTester tester) async {
         ProcessingParams? received;
-        final initial = ProcessingParams(brightness: 0.5, contrast: 0.5);
+        // Non-zero blackR/G/B to verify they are preserved after reset.
+        final initial = ProcessingParams(
+          brightness: 0.5,
+          contrast: 0.5,
+          blackR: 0.1,
+          blackG: 0.2,
+          blackB: 0.3,
+        );
 
         await tester.pumpWidget(
           _wrap(
@@ -307,13 +304,15 @@ void main() {
         await tester.pump();
 
         expect(received, isNotNull);
+        // GPU shader params are reset to their defaults.
         expect(received!.brightness, 0.0);
         expect(received!.contrast, 0.0);
         expect(received!.saturation, 0.0);
         expect(received!.gamma, 1.0);
-        expect(received!.blackR, 0.0);
-        expect(received!.blackG, 0.0);
-        expect(received!.blackB, 0.0);
+        // BB calibration values are preserved — reset only touches GPU sliders.
+        expect(received!.blackR, 0.1);
+        expect(received!.blackG, 0.2);
+        expect(received!.blackB, 0.3);
       },
     );
 
