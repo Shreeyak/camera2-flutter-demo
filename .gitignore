@@ -15,7 +15,8 @@ tmp_files/*
 !docs/redundant/.gitkeep
 docs/redundant
 docs/user-to-do.md
-.claude/worktrees/
+.claude
+.wtp.yml
 
 # Miscellaneous
 pubspec.lock
