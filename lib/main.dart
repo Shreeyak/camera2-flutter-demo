@@ -40,6 +40,7 @@ const _kInitialSettings = CameraSettings(
   iso: AutoValue<int>.auto(),
   exposureTimeNs: AutoValue<int>.auto(),
   focus: AutoValue<double>.auto(),
+  whiteBalance: WhiteBalance.auto(),
   enableRawStream: true,
   rawStreamHeight: 720,
 );
@@ -191,8 +192,11 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
         settings: _kInitialSettings,
       );
       // Restore processing params from previous session, or use identity defaults.
+      // Always clear black balance on startup — applying stale offsets makes the
+      // image look unexpectedly dark and confuses users.
       final persisted = await camera.getPersistedProcessingParams();
-      final initialParams = persisted ?? ProcessingParams();
+      final initialParams = (persisted ?? ProcessingParams())
+          .copyWith(blackR: 0.0, blackG: 0.0, blackB: 0.0);
       await camera.setProcessingParams(initialParams);
       final caps = camera.capabilities;
       final ranges = CameraRanges(
