@@ -12,8 +12,7 @@ import 'package:cambrian_camera/cambrian_camera.dart'
         FrameResult,
         ProcessingParams,
         quarterTurnsFromDisplayRotation,
-        RecordingState,
-        WhiteBalance;
+        RecordingState;
 import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
 
@@ -111,7 +110,6 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
       onExposureTimeNsChanged: _onExposureTimeNsChanged,
       onFocusChanged: _onFocusChanged,
       onZoomChanged: _onZoomChanged,
-      onWbLockChanged: _setWbLocked,
       onToggleAf: _toggleAf,
     );
     _fetchRotation();
@@ -232,13 +230,6 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
   void _applyProcessingParams(ProcessingParams params) {
     setState(() => _processingParams = params);
     _camera?.setProcessingParams(params);
-  }
-
-  void _setWbLocked(bool locked) {
-    setState(() => _values = _values.copyWith(wbLocked: locked));
-    _applySettings(CameraSettings(
-      whiteBalance: locked ? const WhiteBalance.locked() : const WhiteBalance.auto(),
-    ));
   }
 
   void _toggleAf() {
@@ -409,8 +400,7 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
     return switch (param) {
       CameraSettingType.iso ||
       CameraSettingType.shutter ||
-      CameraSettingType.focus ||
-      CameraSettingType.wb => true,
+      CameraSettingType.focus => true,
       CameraSettingType.zoom => false,
     };
   }
@@ -421,7 +411,6 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
       CameraSettingType.iso => _values.isoAuto,
       CameraSettingType.shutter => _values.exposureAuto,
       CameraSettingType.focus => _values.afEnabled,
-      CameraSettingType.wb => !_values.wbLocked,
       CameraSettingType.zoom => false,
     };
   }
@@ -447,8 +436,6 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
         ));
       case CameraSettingType.focus:
         _toggleAf();
-      case CameraSettingType.wb:
-        _setWbLocked(!_values.wbLocked);
       case CameraSettingType.zoom:
         break;
     }
