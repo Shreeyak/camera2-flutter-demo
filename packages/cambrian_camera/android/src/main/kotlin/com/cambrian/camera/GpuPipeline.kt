@@ -208,6 +208,24 @@ open class GpuPipeline(
         }
     }
 
+    /**
+     * Samples the center 16×16 pixel patch from the most recent rendered frame.
+     *
+     * Posts the GL read to [glHandler] and invokes [callback] on the GL thread
+     * with a [FloatArray] of size 3: {meanR, meanG, meanB} in [0.0, 1.0].
+     * Calls back immediately with {0.5f, 0.5f, 0.5f} if [gpuHandle] is 0.
+     */
+    fun sampleCenterPatch(callback: (FloatArray) -> Unit) {
+        val handle = gpuHandle
+        if (handle == 0L) {
+            callback(floatArrayOf(0.5f, 0.5f, 0.5f))
+            return
+        }
+        glHandler.post {
+            callback(nativeGpuSampleCenterPatch(handle))
+        }
+    }
+
     private fun scheduleStallCheck() {
         glHandler.postDelayed({
             if (gpuHandle == 0L) return@postDelayed
@@ -330,6 +348,9 @@ open class GpuPipeline(
 
         @JvmStatic
         external fun nativeGpuClearRebindFlag(gpuHandle: Long)
+
+        @JvmStatic
+        external fun nativeGpuSampleCenterPatch(gpuHandle: Long): FloatArray
 
         @JvmStatic
         external fun nativeGetDimensionMismatchCount(pipelineHandle: Long): Int

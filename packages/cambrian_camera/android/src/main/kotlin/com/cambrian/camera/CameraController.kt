@@ -940,6 +940,24 @@ class CameraController(
     }
 
     /**
+     * Samples the center 16×16 pixels of the most recent GPU-processed frame.
+     *
+     * Delegates to [GpuPipeline.sampleCenterPatch] and wraps the result back
+     * to [mainHandler] before invoking [callback].
+     * Returns {0.5f, 0.5f, 0.5f} if no pipeline is available.
+     */
+    fun sampleCenterPatch(callback: (FloatArray) -> Unit) {
+        val pipeline = gpuPipeline
+        if (pipeline == null) {
+            mainHandler.post { callback(floatArrayOf(0.5f, 0.5f, 0.5f)) }
+            return
+        }
+        pipeline.sampleCenterPatch { rgb ->
+            mainHandler.post { callback(rgb) }
+        }
+    }
+
+    /**
      * Captures a single JPEG frame and writes it to the app's cache directory.
      *
      * Captures via the pre-allocated JPEG [ImageReader], acquires the next image on a

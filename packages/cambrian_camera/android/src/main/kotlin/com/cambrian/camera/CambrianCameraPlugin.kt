@@ -304,6 +304,23 @@ class CambrianCameraPlugin : FlutterPlugin, ActivityAware, CameraHostApi {
     }
 
     /**
+     * Samples the center 16×16 pixel patch of the most recent GPU-rendered frame.
+     *
+     * @param handle   The camera handle.
+     * @param callback Invoked with [Result.success] containing a [CamRgbSample].
+     */
+    override fun sampleCenterPatch(handle: Long, callback: (Result<CamRgbSample>) -> Unit) {
+        val controller = sessions[handle]?.controller
+        if (controller == null) {
+            callback(Result.failure(FlutterError("invalid_handle", "No session for handle $handle", null)))
+            return
+        }
+        controller.sampleCenterPatch { rgb ->
+            callback(Result.success(CamRgbSample(r = rgb[0].toDouble(), g = rgb[1].toDouble(), b = rgb[2].toDouble())))
+        }
+    }
+
+    /**
      * Captures a still JPEG image and returns its file path.
      *
      * @param handle   The camera handle.
