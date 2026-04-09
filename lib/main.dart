@@ -18,6 +18,7 @@ import 'package:cambrian_camera/cambrian_camera.dart'
 import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
 
+import 'camera/calibration.dart';
 import 'camera/camera_callbacks.dart';
 import 'camera/camera_settings_values.dart';
 import 'theme/material_theme.dart';
@@ -337,24 +338,18 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
     var gainG = _latestFrameResult?.wbGainG ?? 1.0;
     var gainB = _latestFrameResult?.wbGainB ?? 1.0;
 
-    const maxIterations = 10;
-    const tolerance = 0.01;
-
-    for (var i = 0; i < maxIterations; i++) {
+    for (var i = 0; i < kWbMaxIterations; i++) {
       if (!mounted) return;
       setState(() => _calibrationIteration = i + 1);
 
       final sample = await camera.sampleCenterPatch();
       if (!mounted) return;
 
-      // Error: max normalized deviation from green reference.
-      final errR = (sample.r - sample.g).abs();
-      final errB = (sample.b - sample.g).abs();
-      final error = (errR > errB ? errR : errB) / sample.g.clamp(0.001, 1.0);
-      if (error < tolerance) break;
+      if (wbError(sample) < kWbTolerance) break;
 
-      if (sample.r > 0.001) gainR = gainR * (sample.g / sample.r);
-      if (sample.b > 0.001) gainB = gainB * (sample.g / sample.b);
+      final gains = wbStep((r: gainR, g: gainG, b: gainB), sample);
+      gainR = gains.r;
+      gainB = gains.b;
 
       _applySettings(CameraSettings(
         whiteBalance: WhiteBalance.manual(gainR: gainR, gainG: gainG, gainB: gainB),
@@ -380,24 +375,19 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
 
     var accR = 0.0, accG = 0.0, accB = 0.0;
 
-    const maxIterations = 10;
-    const tolerance = 0.01;
-
-    for (var i = 0; i < maxIterations; i++) {
+    for (var i = 0; i < kBbMaxIterations; i++) {
       if (!mounted) return;
       setState(() => _calibrationIteration = i + 1);
 
       final sample = await camera.sampleCenterPatch();
       if (!mounted) return;
 
-      final error = sample.r > sample.g
-          ? (sample.r > sample.b ? sample.r : sample.b)
-          : (sample.g > sample.b ? sample.g : sample.b);
-      if (error < tolerance) break;
+      if (bbError(sample) < kBbTolerance) break;
 
-      accR += sample.r;
-      accG += sample.g;
-      accB += sample.b;
+      final offsets = bbStep((r: accR, g: accG, b: accB), sample);
+      accR = offsets.r;
+      accG = offsets.g;
+      accB = offsets.b;
 
       _applyProcessingParams(
         _processingParams.copyWith(blackR: accR, blackG: accG, blackB: accB),
