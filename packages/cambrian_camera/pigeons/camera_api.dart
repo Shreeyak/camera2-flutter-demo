@@ -231,6 +231,14 @@ class CamFrameResult {
   double? wbGainB;
 }
 
+/// Mean R, G, B from a sampled image patch. All values in [0.0, 1.0].
+class CamRgbSample {
+  CamRgbSample({required this.r, required this.g, required this.b});
+  double r;
+  double g;
+  double b;
+}
+
 // ---------------------------------------------------------------------------
 // Host API  (Dart → Kotlin)
 // ---------------------------------------------------------------------------
@@ -280,6 +288,13 @@ abstract class CameraHostApi {
   /// for all four device orientations, since [MediaQuery.orientation] only
   /// distinguishes portrait from landscape.
   int getDisplayRotation();
+
+  /// Samples the center 16×16 pixel patch of the most recent GPU-processed
+  /// RGBA frame and returns the mean R, G, B as values in [0.0, 1.0].
+  ///
+  /// Returns (0.5, 0.5, 0.5) if no frame has been rendered yet.
+  @async
+  CamRgbSample sampleCenterPatch(int handle);
 }
 
 // ---------------------------------------------------------------------------

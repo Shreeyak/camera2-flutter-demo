@@ -386,6 +386,34 @@ data class CamFrameResult (
     )
   }
 }
+
+/**
+ * Mean R, G, B from a sampled image patch. All values in [0.0, 1.0].
+ *
+ * Generated class from Pigeon that represents data sent in messages.
+ */
+data class CamRgbSample (
+  val r: Double,
+  val g: Double,
+  val b: Double
+)
+ {
+  companion object {
+    fun fromList(pigeonVar_list: List<Any?>): CamRgbSample {
+      val r = pigeonVar_list[0] as Double
+      val g = pigeonVar_list[1] as Double
+      val b = pigeonVar_list[2] as Double
+      return CamRgbSample(r, g, b)
+    }
+  }
+  fun toList(): List<Any?> {
+    return listOf(
+      r,
+      g,
+      b,
+    )
+  }
+}
 private open class MessagesPigeonCodec : StandardMessageCodec() {
   override fun readValueOfType(type: Byte, buffer: ByteBuffer): Any? {
     return when (type) {
@@ -429,6 +457,11 @@ private open class MessagesPigeonCodec : StandardMessageCodec() {
           CamFrameResult.fromList(it)
         }
       }
+      137.toByte() -> {
+        return (readValue(buffer) as? List<Any?>)?.let {
+          CamRgbSample.fromList(it)
+        }
+      }
       else -> super.readValueOfType(type, buffer)
     }
   }
@@ -466,6 +499,10 @@ private open class MessagesPigeonCodec : StandardMessageCodec() {
         stream.write(136)
         writeValue(stream, value.toList())
       }
+      is CamRgbSample -> {
+        stream.write(137)
+        writeValue(stream, value.toList())
+      }
       else -> super.writeValue(stream, value)
     }
   }
@@ -500,6 +537,13 @@ interface CameraHostApi {
    * distinguishes portrait from landscape.
    */
   fun getDisplayRotation(): Long
+  /**
+   * Samples the center 16×16 pixel patch of the most recent GPU-processed
+   * RGBA frame and returns the mean R, G, B as values in [0.0, 1.0].
+   *
+   * Returns (0.5, 0.5, 0.5) if no frame has been rendered yet.
+   */
+  fun sampleCenterPatch(handle: Long, callback: (Result<CamRgbSample>) -> Unit)
 
   companion object {
     /** The codec used by CameraHostApi. */
@@ -757,6 +801,26 @@ interface CameraHostApi {
               wrapError(exception)
             }
             reply.reply(wrapped)
+          }
+        } else {
+          channel.setMessageHandler(null)
+        }
+      }
+      run {
+        val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.cambrian_camera.CameraHostApi.sampleCenterPatch$separatedMessageChannelSuffix", codec)
+        if (api != null) {
+          channel.setMessageHandler { message, reply ->
+            val args = message as List<Any?>
+            val handleArg = args[0] as Long
+            api.sampleCenterPatch(handleArg) { result: Result<CamRgbSample> ->
+              val error = result.exceptionOrNull()
+              if (error != null) {
+                reply.reply(wrapError(error))
+              } else {
+                val data = result.getOrNull()
+                reply.reply(wrapResult(data))
+              }
+            }
           }
         } else {
           channel.setMessageHandler(null)
