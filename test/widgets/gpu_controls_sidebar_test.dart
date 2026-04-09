@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:cambrian_camera/cambrian_camera.dart' show ProcessingParams;
+import 'package:cambrian_camera/cambrian_camera.dart' show ProcessingParams, WhiteBalance;
 import 'package:camera2_flutter_demo/widgets/gpu_controls_sidebar.dart'
     show GpuControlsSidebar;
 
@@ -14,6 +14,17 @@ void main() {
           GpuControlsSidebar(
             params: ProcessingParams(),
             onChanged: (_) {},
+            wbMode: const WhiteBalance.auto(),
+            lastWbGains: null,
+            bbLocked: false,
+            lastBbValues: null,
+            isCalibrating: false,
+            calibrationTarget: null,
+            calibrationIteration: 0,
+            onWbToggle: () {},
+            onBbToggle: () {},
+            onStartCalibration: (_) {},
+            onCapture: () {},
           ),
         ),
       );
@@ -38,6 +49,17 @@ void main() {
             GpuControlsSidebar(
               params: ProcessingParams(),
               onChanged: (p) => received = p,
+              wbMode: const WhiteBalance.auto(),
+              lastWbGains: null,
+              bbLocked: false,
+              lastBbValues: null,
+              isCalibrating: false,
+              calibrationTarget: null,
+              calibrationIteration: 0,
+              onWbToggle: () {},
+              onBbToggle: () {},
+              onStartCalibration: (_) {},
+              onCapture: () {},
             ),
           ),
         );
@@ -61,6 +83,17 @@ void main() {
             GpuControlsSidebar(
               params: ProcessingParams(),
               onChanged: (p) => received = p,
+              wbMode: const WhiteBalance.auto(),
+              lastWbGains: null,
+              bbLocked: false,
+              lastBbValues: null,
+              isCalibrating: false,
+              calibrationTarget: null,
+              calibrationIteration: 0,
+              onWbToggle: () {},
+              onBbToggle: () {},
+              onStartCalibration: (_) {},
+              onCapture: () {},
             ),
           ),
         );
@@ -84,6 +117,17 @@ void main() {
             GpuControlsSidebar(
               params: ProcessingParams(),
               onChanged: (p) => received = p,
+              wbMode: const WhiteBalance.auto(),
+              lastWbGains: null,
+              bbLocked: false,
+              lastBbValues: null,
+              isCalibrating: false,
+              calibrationTarget: null,
+              calibrationIteration: 0,
+              onWbToggle: () {},
+              onBbToggle: () {},
+              onStartCalibration: (_) {},
+              onCapture: () {},
             ),
           ),
         );
@@ -107,6 +151,17 @@ void main() {
             GpuControlsSidebar(
               params: ProcessingParams(),
               onChanged: (p) => received = p,
+              wbMode: const WhiteBalance.auto(),
+              lastWbGains: null,
+              bbLocked: false,
+              lastBbValues: null,
+              isCalibrating: false,
+              calibrationTarget: null,
+              calibrationIteration: 0,
+              onWbToggle: () {},
+              onBbToggle: () {},
+              onStartCalibration: (_) {},
+              onCapture: () {},
             ),
           ),
         );
@@ -130,6 +185,17 @@ void main() {
             GpuControlsSidebar(
               params: ProcessingParams(),
               onChanged: (p) => received = p,
+              wbMode: const WhiteBalance.auto(),
+              lastWbGains: null,
+              bbLocked: false,
+              lastBbValues: null,
+              isCalibrating: false,
+              calibrationTarget: null,
+              calibrationIteration: 0,
+              onWbToggle: () {},
+              onBbToggle: () {},
+              onStartCalibration: (_) {},
+              onCapture: () {},
             ),
           ),
         );
@@ -153,6 +219,17 @@ void main() {
             GpuControlsSidebar(
               params: ProcessingParams(),
               onChanged: (p) => received = p,
+              wbMode: const WhiteBalance.auto(),
+              lastWbGains: null,
+              bbLocked: false,
+              lastBbValues: null,
+              isCalibrating: false,
+              calibrationTarget: null,
+              calibrationIteration: 0,
+              onWbToggle: () {},
+              onBbToggle: () {},
+              onStartCalibration: (_) {},
+              onCapture: () {},
             ),
           ),
         );
@@ -176,6 +253,17 @@ void main() {
             GpuControlsSidebar(
               params: ProcessingParams(),
               onChanged: (p) => received = p,
+              wbMode: const WhiteBalance.auto(),
+              lastWbGains: null,
+              bbLocked: false,
+              lastBbValues: null,
+              isCalibrating: false,
+              calibrationTarget: null,
+              calibrationIteration: 0,
+              onWbToggle: () {},
+              onBbToggle: () {},
+              onStartCalibration: (_) {},
+              onCapture: () {},
             ),
           ),
         );
@@ -200,6 +288,17 @@ void main() {
             GpuControlsSidebar(
               params: initial,
               onChanged: (p) => received = p,
+              wbMode: const WhiteBalance.auto(),
+              lastWbGains: null,
+              bbLocked: false,
+              lastBbValues: null,
+              isCalibrating: false,
+              calibrationTarget: null,
+              calibrationIteration: 0,
+              onWbToggle: () {},
+              onBbToggle: () {},
+              onStartCalibration: (_) {},
+              onCapture: () {},
             ),
           ),
         );
@@ -229,6 +328,17 @@ void main() {
             GpuControlsSidebar(
               params: initial,
               onChanged: (p) => received = p,
+              wbMode: const WhiteBalance.auto(),
+              lastWbGains: null,
+              bbLocked: false,
+              lastBbValues: null,
+              isCalibrating: false,
+              calibrationTarget: null,
+              calibrationIteration: 0,
+              onWbToggle: () {},
+              onBbToggle: () {},
+              onStartCalibration: (_) {},
+              onCapture: () {},
             ),
           ),
         );
@@ -250,6 +360,17 @@ void main() {
             GpuControlsSidebar(
               params: ProcessingParams(brightness: 0.5),
               onChanged: (_) {},
+              wbMode: const WhiteBalance.auto(),
+              lastWbGains: null,
+              bbLocked: false,
+              lastBbValues: null,
+              isCalibrating: false,
+              calibrationTarget: null,
+              calibrationIteration: 0,
+              onWbToggle: () {},
+              onBbToggle: () {},
+              onStartCalibration: (_) {},
+              onCapture: () {},
             ),
           ),
         );
