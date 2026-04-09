@@ -9,7 +9,7 @@ void main() {
       expect(wbError((r: 0.5, g: 0.5, b: 0.5)), closeTo(0.0, 1e-9));
     });
 
-    test('equals 1.0 when red is half of green', () {
+    test('equals 0.5 when red is half of green', () {
       // |r - g| / g = |0.5 - 1.0| / 1.0 = 0.5, |b - g| = 0 → max = 0.5
       expect(wbError((r: 0.5, g: 1.0, b: 1.0)), closeTo(0.5, 1e-9));
     });
@@ -46,7 +46,7 @@ void main() {
       // sample.r = 0.5, sample.g = 1.0 → correction = 1.0 / 0.5 = 2.0
       final gains = wbStep(unity, (r: 0.5, g: 1.0, b: 1.0));
       expect(gains.r, closeTo(2.0, 1e-9));
-      expect(gains.g, equals(1.0));   // green never changes
+      expect(gains.g, equals(1.0)); // green never changes
       expect(gains.b, closeTo(1.0, 1e-9));
     });
 
@@ -63,7 +63,7 @@ void main() {
       // sample.b = 1.0, sample.g = 1.0 → newB = 0.8 * (1.0 / 1.0) = 0.8
       final gains = wbStep(start, (r: 0.5, g: 1.0, b: 1.0));
       expect(gains.r, closeTo(4.0, 1e-9));
-      expect(gains.g, equals(1.5));   // gainG never changes
+      expect(gains.g, equals(1.5)); // gainG never changes
       expect(gains.b, closeTo(0.8, 1e-9));
     });
 
@@ -78,11 +78,14 @@ void main() {
       expect(gains.b, equals(1.0));
     });
 
-    test('converges to neutral: unity gains on a neutral patch give unity gains back', () {
-      final gains = wbStep(unity, (r: 1.0, g: 1.0, b: 1.0));
-      expect(gains.r, closeTo(1.0, 1e-9));
-      expect(gains.b, closeTo(1.0, 1e-9));
-    });
+    test(
+      'converges to neutral: unity gains on a neutral patch give unity gains back',
+      () {
+        final gains = wbStep(unity, (r: 1.0, g: 1.0, b: 1.0));
+        expect(gains.r, closeTo(1.0, 1e-9));
+        expect(gains.b, closeTo(1.0, 1e-9));
+      },
+    );
   });
 
   // ── wbStep convergence simulation ────────────────────────────────────────
@@ -250,26 +253,29 @@ void main() {
       expect(acc.r, equals(0.0));
     });
 
-    test('accumulated offset equals raw black level after 1 iteration on a flat sensor', () {
-      // If the sensor has a flat black level of exactly (0.03, 0.02, 0.04),
-      // one iteration is sufficient to reach zero residual.
-      const rawBlack = (r: 0.03, g: 0.02, b: 0.04);
-      var acc = (r: 0.0, g: 0.0, b: 0.0);
-      final sample = rawBlack; // first iteration: no offset yet applied
+    test(
+      'accumulated offset equals raw black level after 1 iteration on a flat sensor',
+      () {
+        // If the sensor has a flat black level of exactly (0.03, 0.02, 0.04),
+        // one iteration is sufficient to reach zero residual.
+        const rawBlack = (r: 0.03, g: 0.02, b: 0.04);
+        var acc = (r: 0.0, g: 0.0, b: 0.0);
+        final sample = rawBlack; // first iteration: no offset yet applied
 
-      expect(bbError(sample), greaterThan(kBbTolerance));
-      acc = bbStep(acc, sample);
+        expect(bbError(sample), greaterThan(kBbTolerance));
+        acc = bbStep(acc, sample);
 
-      // Residual after applying the offset.
-      final residual = (
-        r: (rawBlack.r - acc.r).clamp(0.0, 1.0),
-        g: (rawBlack.g - acc.g).clamp(0.0, 1.0),
-        b: (rawBlack.b - acc.b).clamp(0.0, 1.0),
-      );
-      expect(bbError(residual), lessThan(kBbTolerance));
-      expect(acc.r, closeTo(rawBlack.r, 1e-9));
-      expect(acc.g, closeTo(rawBlack.g, 1e-9));
-      expect(acc.b, closeTo(rawBlack.b, 1e-9));
-    });
+        // Residual after applying the offset.
+        final residual = (
+          r: (rawBlack.r - acc.r).clamp(0.0, 1.0),
+          g: (rawBlack.g - acc.g).clamp(0.0, 1.0),
+          b: (rawBlack.b - acc.b).clamp(0.0, 1.0),
+        );
+        expect(bbError(residual), lessThan(kBbTolerance));
+        expect(acc.r, closeTo(rawBlack.r, 1e-9));
+        expect(acc.g, closeTo(rawBlack.g, 1e-9));
+        expect(acc.b, closeTo(rawBlack.b, 1e-9));
+      },
+    );
   });
 }

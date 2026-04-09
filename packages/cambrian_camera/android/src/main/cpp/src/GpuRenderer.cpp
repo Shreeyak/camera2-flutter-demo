@@ -1100,7 +1100,9 @@ GLuint GpuRenderer::linkProgram(GLuint vert, GLuint frag) {
 // ---------------------------------------------------------------------------
 
 void GpuRenderer::sampleCenterPatch(float& outR, float& outG, float& outB) {
-    if (fbo_ == 0) {
+    // fbo_ == 0: pipeline not yet initialised.
+    // firstFrame_: GPU has not rendered any frame yet — readback would return garbage.
+    if (fbo_ == 0 || firstFrame_) {
         outR = outG = outB = 0.5f;
         return;
     }

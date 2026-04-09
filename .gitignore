@@ -20,7 +20,7 @@ docs/user-to-do.md
 .wtp.yml
 # implementations, not to be used after
 .superpowers/
-docs/superpowers/plans/
+docs/superpowers/
 
 # Miscellaneous
 pubspec.lock

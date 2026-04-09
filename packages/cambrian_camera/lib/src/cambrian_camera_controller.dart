@@ -57,7 +57,8 @@ class CambrianCamera {
        _stateController = StreamController<CameraState>.broadcast(),
        _errorController = StreamController<CameraError>.broadcast(),
        _frameResultController = StreamController<FrameResult>.broadcast(),
-       _recordingStateController = StreamController<RecordingState>.broadcast() {
+       _recordingStateController =
+           StreamController<RecordingState>.broadcast() {
     // Register in the global instance map so FlutterApi callbacks can be
     // routed to the correct camera by handle.
     _instances[handle] = this;
@@ -150,10 +151,7 @@ class CambrianCamera {
     final enableRawStream = settings?.enableRawStream ?? false;
 
     // The handle returned by the platform is also used as the texture ID.
-    final handle = await api.open(
-      cameraId,
-      settings?.toCam(),
-    );
+    final handle = await api.open(cameraId, settings?.toCam());
 
     // Register the instance immediately after open() so that any state/error
     // callbacks fired during the getCapabilities round-trip are not dropped.
@@ -169,7 +167,9 @@ class CambrianCamera {
       final caps = await api.getCapabilities(handle);
       camera._capabilities = CameraCapabilities.fromPigeon(caps);
       if (kDebugMode) {
-        debugPrint('CC/Dart: opened handle=$handle ${caps.streamWidth}×${caps.streamHeight}');
+        debugPrint(
+          'CC/Dart: opened handle=$handle ${caps.streamWidth}×${caps.streamHeight}',
+        );
       }
       return camera;
     } catch (e) {
@@ -201,11 +201,13 @@ class CambrianCamera {
     }
     yield* stateStream
         .where((s) => s == CameraState.streaming)
-        .map((_) => CameraTextureInfo(
-              textureId: _handle,
-              width: _capabilities.streamWidth,
-              height: _capabilities.streamHeight,
-            ));
+        .map(
+          (_) => CameraTextureInfo(
+            textureId: _handle,
+            width: _capabilities.streamWidth,
+            height: _capabilities.streamHeight,
+          ),
+        );
   }
 
   /// Emits a [CameraTextureInfo] each time the raw (unprocessed) stream
@@ -228,15 +230,19 @@ class CambrianCamera {
       );
     }
     yield* stateStream
-        .where((s) =>
-            s == CameraState.streaming &&
-            _enableRawStream &&
-            _capabilities.rawStreamTextureId != 0)
-        .map((_) => CameraTextureInfo(
-              textureId: _capabilities.rawStreamTextureId,
-              width: _capabilities.rawStreamWidth,
-              height: _capabilities.rawStreamHeight,
-            ));
+        .where(
+          (s) =>
+              s == CameraState.streaming &&
+              _enableRawStream &&
+              _capabilities.rawStreamTextureId != 0,
+        )
+        .map(
+          (_) => CameraTextureInfo(
+            textureId: _capabilities.rawStreamTextureId,
+            width: _capabilities.rawStreamWidth,
+            height: _capabilities.rawStreamHeight,
+          ),
+        );
   }
 
   /// Device capabilities (resolution list, ISO/exposure ranges, etc.).
@@ -287,7 +293,8 @@ class CambrianCamera {
   /// Uses latest-value-wins: rapid calls do not pile up stale requests.
   /// The change takes effect on the next Camera2 capture request.
   Future<void> updateSettings(CameraSettings settings) async {
-    if (kDebugMode) debugPrint('CC/Dart: updateSettings handle=$_handle $settings');
+    if (kDebugMode)
+      debugPrint('CC/Dart: updateSettings handle=$_handle $settings');
     _serializer.send(settings);
   }
 
@@ -298,7 +305,8 @@ class CambrianCamera {
   /// for fire-and-forget semantics. No queuing is applied; the new parameters
   /// are picked up on the next processed frame.
   Future<void> setProcessingParams(ProcessingParams params) {
-    if (kDebugMode) debugPrint('CC/Dart: setProcessingParams handle=$_handle $params');
+    if (kDebugMode)
+      debugPrint('CC/Dart: setProcessingParams handle=$_handle $params');
     return _hostApi.setProcessingParams(_handle, params.toCam());
   }
 
@@ -339,7 +347,8 @@ class CambrianCamera {
   ///
   /// This is a device-level query, not a per-camera query. Used by preview widgets
   /// to select the correct [RotatedBox.quarterTurns] for all four device orientations.
-  static Future<int> getDisplayRotation() => CameraHostApi().getDisplayRotation();
+  static Future<int> getDisplayRotation() =>
+      CameraHostApi().getDisplayRotation();
 
   /// Starts recording to an MP4 file. Returns (contentUri, displayName).
   ///
@@ -349,12 +358,27 @@ class CambrianCamera {
   ///
   /// Recording state changes are delivered via [recordingStateStream].
   /// Throws [PlatformException] if recording cannot be started.
-  Future<(String, String)> startRecording({String? outputDirectory, String? fileName, int? bitrate, int? fps}) async {
-    final raw = await _hostApi.startRecording(_handle, outputDirectory, fileName, bitrate, fps);
+  Future<(String, String)> startRecording({
+    String? outputDirectory,
+    String? fileName,
+    int? bitrate,
+    int? fps,
+  }) async {
+    final raw = await _hostApi.startRecording(
+      _handle,
+      outputDirectory,
+      fileName,
+      bitrate,
+      fps,
+    );
     // Split on the first '|' only — the display name may itself contain '|'.
     final separatorIndex = raw.indexOf('|');
-    final uri = raw.substring(0, separatorIndex == -1 ? raw.length : separatorIndex);
-    if (kDebugMode) debugPrint('CC/Dart: startRecording handle=$_handle → $uri');
+    final uri = raw.substring(
+      0,
+      separatorIndex == -1 ? raw.length : separatorIndex,
+    );
+    if (kDebugMode)
+      debugPrint('CC/Dart: startRecording handle=$_handle → $uri');
     if (separatorIndex == -1) return (raw, '');
     return (uri, raw.substring(separatorIndex + 1));
   }
@@ -376,7 +400,6 @@ class CambrianCamera {
   /// via the `cambrian_camera_native.h` API.
   Future<int?> getNativePipelineHandle() =>
       _hostApi.getNativePipelineHandle(_handle);
-
 
   /// Pauses the camera: releases Camera2 resources but keeps the instance alive.
   ///
@@ -429,24 +452,29 @@ class CambrianCamera {
 
   void _onError(CamError error) {
     if (kDebugMode) {
-      debugPrint('CC/Dart: error=${error.code} fatal=${error.isFatal}: ${error.message}');
+      debugPrint(
+        'CC/Dart: error=${error.code} fatal=${error.isFatal}: ${error.message}',
+      );
     }
     _errorController.add(CameraError.fromPigeon(error));
   }
 
   void _onFrameResult(CamFrameResult result) {
-    _frameResultController.add(FrameResult(
-      iso: result.iso,
-      exposureTimeNs: result.exposureTimeNs,
-      focusDistanceDiopters: result.focusDistanceDiopters,
-      wbGainR: result.wbGainR,
-      wbGainG: result.wbGainG,
-      wbGainB: result.wbGainB,
-    ));
+    _frameResultController.add(
+      FrameResult(
+        iso: result.iso,
+        exposureTimeNs: result.exposureTimeNs,
+        focusDistanceDiopters: result.focusDistanceDiopters,
+        wbGainR: result.wbGainR,
+        wbGainG: result.wbGainG,
+        wbGainB: result.wbGainB,
+      ),
+    );
   }
 
   void _onRecordingStateChanged(String state) {
-    if (kDebugMode) debugPrint('CC/Dart: recordingState=$state handle=$_handle');
+    if (kDebugMode)
+      debugPrint('CC/Dart: recordingState=$state handle=$_handle');
     _recordingStateController.add(RecordingState.fromString(state));
   }
 }
@@ -479,4 +507,3 @@ class _FlutterApiDispatcher extends CameraFlutterApi {
     CambrianCamera._instances[handle]?._onRecordingStateChanged(state);
   }
 }
-

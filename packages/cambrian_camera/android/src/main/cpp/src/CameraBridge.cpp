@@ -650,6 +650,7 @@ JNIEXPORT jfloatArray JNICALL
 Java_com_cambrian_camera_GpuPipeline_nativeGpuSampleCenterPatch(
         JNIEnv* env, jclass /*clazz*/, jlong gpuHandle) {
     jfloatArray result = env->NewFloatArray(3);
+    if (result == nullptr) return nullptr; // OOM — JVM will throw OutOfMemoryError
     if (!gpuHandle) {
         float defaults[] = {0.5f, 0.5f, 0.5f};
         env->SetFloatArrayRegion(result, 0, 3, defaults);

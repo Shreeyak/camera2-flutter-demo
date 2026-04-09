@@ -767,14 +767,14 @@ Applied per-fragment in `GpuRenderer.cpp` (`kFragSrc`), in this order:
 Both algorithms are iterative and driven from the Flutter layer. The GPU shader applies the corrections; the Dart layer reads back a 16×16-pixel center patch via `sampleCenterPatch()` (JNI → GL thread → `glReadPixels` on `fbo_`) and adjusts the parameters.
 
 **White Balance** — uses Camera2 ISP hardware (`COLOR_CORRECTION_GAINS`, `RggbChannelVector`). Green is the fixed reference channel. Each iteration:
-```
+```text
 gainR *= sample.g / sample.r
 gainB *= sample.g / sample.b
 ```
 Convergence: `max(|r−g|, |b−g|) / g < 0.01`. Max 10 iterations.
 
 **Black Balance** — uses `ProcessingParams.blackR/G/B` (GPU shader: `rgb = max(rgb − black, 0)`). Each iteration accumulates the residual:
-```
+```text
 accR += sample.r,  accG += sample.g,  accB += sample.b
 ```
 Convergence: `max(r, g, b) < 0.01`. Max 10 iterations.

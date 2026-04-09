@@ -58,6 +58,7 @@ class GpuControlsSidebar extends StatelessWidget {
     required this.onBbToggle,
     required this.onStartCalibration,
     required this.onCapture,
+    required this.onResetAll,
   });
 
   final ProcessingParams params;
@@ -88,6 +89,9 @@ class GpuControlsSidebar extends StatelessWidget {
   /// Called when user taps "Capture" during calibration.
   final VoidCallback onCapture;
 
+  /// Resets all processing params, WB, and BB to factory defaults.
+  final VoidCallback onResetAll;
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -111,11 +115,12 @@ class GpuControlsSidebar extends StatelessWidget {
             _WbSection(
               wbMode: wbMode,
               lastGains: lastWbGains,
-              isActiveCalibration: isCalibrating &&
-                  calibrationTarget == CalibrationTarget.wb,
+              isActiveCalibration:
+                  isCalibrating && calibrationTarget == CalibrationTarget.wb,
               calibrationIteration: calibrationIteration,
               onToggle: onWbToggle,
-              onStartCalibration: () => onStartCalibration(CalibrationTarget.wb),
+              onStartCalibration: () =>
+                  onStartCalibration(CalibrationTarget.wb),
               onCapture: onCapture,
             ),
 
@@ -125,11 +130,12 @@ class GpuControlsSidebar extends StatelessWidget {
             _BbSection(
               bbLocked: bbLocked,
               lastValues: lastBbValues,
-              isActiveCalibration: isCalibrating &&
-                  calibrationTarget == CalibrationTarget.bb,
+              isActiveCalibration:
+                  isCalibrating && calibrationTarget == CalibrationTarget.bb,
               calibrationIteration: calibrationIteration,
               onToggle: onBbToggle,
-              onStartCalibration: () => onStartCalibration(CalibrationTarget.bb),
+              onStartCalibration: () =>
+                  onStartCalibration(CalibrationTarget.bb),
               onCapture: onCapture,
             ),
 
@@ -174,14 +180,8 @@ class GpuControlsSidebar extends StatelessWidget {
             ),
             const SizedBox(height: 12),
             OutlinedButton.icon(
-              // Resets brightness/contrast/saturation/gamma only.
-              // Preserves blackR/G/B so BB calibration is not discarded.
-              onPressed: () => onChanged(params.copyWith(
-                brightness: 0.0,
-                contrast: 0.0,
-                saturation: 0.0,
-                gamma: 1.0,
-              )),
+              // Resets all sliders, WB, and BB to factory defaults.
+              onPressed: onResetAll,
               icon: const Icon(Icons.refresh, size: 16),
               label: const Text('Reset all'),
             ),

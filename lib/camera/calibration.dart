@@ -57,9 +57,7 @@ const int kBbMaxIterations = 10;
 /// Maximum channel value in [s]. When this is below [kBbTolerance] the black
 /// point is considered calibrated and no further accumulation is needed.
 double bbError(RgbSample s) =>
-    s.r > s.g
-        ? (s.r > s.b ? s.r : s.b)
-        : (s.g > s.b ? s.g : s.b);
+    s.r > s.g ? (s.r > s.b ? s.r : s.b) : (s.g > s.b ? s.g : s.b);
 
 /// Accumulates one BB correction step.
 ///
