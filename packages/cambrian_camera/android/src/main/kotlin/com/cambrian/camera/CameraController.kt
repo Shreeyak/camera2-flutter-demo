@@ -227,6 +227,14 @@ class CameraController(
     @Volatile private var pendingSettings: CamSettings? = null
 
     /**
+     * User-requested stream resolution override. When non-zero, [resolveStreamFormat]
+     * returns these values instead of auto-selecting the largest 4:3 size.
+     * Written from [setResolution] on backgroundHandler; read from [startCaptureSession].
+     */
+    @Volatile private var requestedWidth: Int = 0
+    @Volatile private var requestedHeight: Int = 0
+
+    /**
      * Accumulated settings state. Each [updateSettings] call merges non-null
      * incoming fields into this object so that omitted fields retain their
      * previous values across calls (instead of reverting to Camera2 template
@@ -687,9 +695,59 @@ class CameraController(
     }
 
     /**
+     * Changes the camera stream resolution and reconfigures the capture session.
+     *
+     * Tears down the current session and GPU pipeline (keeping the [CameraDevice] open),
+     * stores the requested resolution, and rebuilds via [startCaptureSession].
+     * Emits "recovering" during reconfiguration and "streaming" when complete.
+     *
+     * Must not be called while recording. The caller (Dart) should guard against this.
+     *
+     * @param width  Requested stream width in pixels.
+     * @param height Requested stream height in pixels.
+     * @param callback Invoked on the main thread when reconfiguration completes or fails.
+     */
+    fun setResolution(width: Int, height: Int, callback: (Result<Unit>) -> Unit) {
+        backgroundHandler.post {
+            if (released || state == State.CLOSED) {
+                mainHandler.post { callback(Result.failure(FlutterError("invalid_state", "Camera not open", null))) }
+                return@post
+            }
+            if (isRecording) {
+                mainHandler.post { callback(Result.failure(FlutterError("recording", "Cannot change resolution while recording", null))) }
+                return@post
+            }
+            if (width == previewWidth && height == previewHeight) {
+                mainHandler.post { callback(Result.success(Unit)) }
+                return@post
+            }
+            Log.i("CC/Cam", "[$handle] setResolution ${previewWidth}x${previewHeight} -> ${width}x${height}")
+            requestedWidth = width
+            requestedHeight = height
+            setState(State.RECOVERING)
+            emitState("recovering")
+            teardownSession()
+            startCaptureSession { result ->
+                result.fold(
+                    onSuccess = {
+                        mainHandler.post { callback(Result.success(Unit)) }
+                    },
+                    onFailure = { e ->
+                        mainHandler.post {
+                            callback(Result.failure(
+                                FlutterError("reconfigure_failed", "Resolution change failed: ${e.message}", null)
+                            ))
+                        }
+                    },
+                )
+            }
+        }
+    }
+
+    /**
      * Queries [CameraCharacteristics] and returns real hardware capabilities.
      *
-     * Reports the three largest JPEG output sizes, sensor sensitivity and exposure ranges,
+     * Reports all YUV_420_888 output sizes, sensor sensitivity and exposure ranges,
      * focus distance range, zoom range, EV compensation range, and an estimate of the
      * memory used by the 4-slot ring buffer.
      *
@@ -706,12 +764,11 @@ class CameraController(
             val chars = cameraManager.getCameraCharacteristics(id)
             val configMap = chars.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
 
-            // Largest 3 JPEG output sizes, sorted descending by area.
-            val jpegSizes: List<CamSize> =
+            // All YUV_420_888 stream resolutions, sorted descending by area.
+            val yuvSizes: List<CamSize> =
                 configMap
-                    ?.getOutputSizes(ImageFormat.JPEG)
+                    ?.getOutputSizes(ImageFormat.YUV_420_888)
                     ?.sortedByDescending { it.width.toLong() * it.height }
-                    ?.take(3)
                     ?.map { CamSize(it.width.toLong(), it.height.toLong()) }
                     ?: emptyList()
 
@@ -728,7 +785,7 @@ class CameraController(
 
             val caps =
                 CamCapabilities(
-                    supportedSizes = jpegSizes,
+                    supportedSizes = yuvSizes,
                     isoMin = isoRange?.lower?.toLong() ?: 100L,
                     isoMax = isoRange?.upper?.toLong() ?: 3200L,
                     exposureTimeMinNs = expRange?.lower ?: 100_000L,
@@ -1337,12 +1394,23 @@ class CameraController(
     private fun resolveStreamFormat(device: CameraDevice): Triple<Int, Int, Int> {
         val chars = cameraManager.getCameraCharacteristics(device.id)
         val configMap = chars.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+        val yuvSizes = configMap?.getOutputSizes(ImageFormat.YUV_420_888)
+
+        // If caller requested a specific resolution, validate it against supported sizes.
+        if (requestedWidth > 0 && requestedHeight > 0) {
+            val match = yuvSizes?.find { it.width == requestedWidth && it.height == requestedHeight }
+            if (match != null) {
+                return Triple(ImageFormat.YUV_420_888, match.width, match.height)
+            }
+            Log.w("CC/Cam", "Requested ${requestedWidth}x${requestedHeight} not in supported YUV sizes — falling back to default")
+        }
+
+        // Default: largest 4:3 YUV size.
         // Filter to 4:3: most sensors have a 4:3 active pixel array (SENSOR_INFO_ACTIVE_ARRAY_SIZE).
         // Non-4:3 output sizes crop that area, discarding live pixels. The largest 4:3 YUV size
         // = full sensor utilisation. getOutputSizes() is the authoritative valid-size list;
         // any size from it is guaranteed accepted by createCaptureSession.
-        val largest = configMap
-            ?.getOutputSizes(ImageFormat.YUV_420_888)
+        val largest = yuvSizes
             ?.filter { it.width * 3 == it.height * 4 }
             ?.maxByOrNull { it.width.toLong() * it.height }
         return if (largest != null) {
