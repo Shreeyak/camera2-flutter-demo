@@ -16,7 +16,11 @@ tmp_files/*
 docs/redundant
 docs/user-to-do.md
 .claude
+# git worktree cli
 .wtp.yml
+# implementations, not to be used after
+.superpowers/
+docs/superpowers/plans/
 
 # Miscellaneous
 pubspec.lock

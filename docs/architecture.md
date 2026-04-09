@@ -750,6 +750,25 @@ flowchart TD
 3. **Gamma + brightness** — single pre-computed 256-entry LUT per channel (rebuilt atomically on `ProcessingParams` change)
 4. **Saturation** — RGB luminance-deviation method (not HSV; 3 multiplies + 3 adds per pixel)
 
+### White Balance and Black Balance calibration
+
+Both algorithms are iterative and driven from the Flutter layer. The GPU shader applies the corrections; the Dart layer reads back a 16×16-pixel center patch via `sampleCenterPatch()` (JNI → GL thread → `glReadPixels` on `fbo_`) and adjusts the parameters.
+
+**White Balance** — uses Camera2 ISP hardware (`COLOR_CORRECTION_GAINS`, `RggbChannelVector`). Green is the fixed reference channel. Each iteration:
+```
+gainR *= sample.g / sample.r
+gainB *= sample.g / sample.b
+```
+Convergence: `max(|r−g|, |b−g|) / g < 0.01`. Max 10 iterations.
+
+**Black Balance** — uses `ProcessingParams.blackR/G/B` (GPU shader: `rgb = max(rgb − black, 0)`). Each iteration accumulates the residual:
+```
+accR += sample.r,  accG += sample.g,  accB += sample.b
+```
+Convergence: `max(r, g, b) < 0.01`. Max 10 iterations.
+
+Pure math lives in `lib/camera/calibration.dart` (`wbError`, `wbStep`, `bbError`, `bbStep`); the loop and UI state live in `_CameraScreenState` in `main.dart`.
+
 ### Consumer fan-out
 
 After GPU rendering and PBO readback, the pipeline fans out to registered sinks. Each sink has its own dispatch thread and 1-slot mailbox. Per-sink transforms (downscale via `cv::resize`, channel extraction) are applied before posting.

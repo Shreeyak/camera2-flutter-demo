@@ -159,15 +159,23 @@ class CameraSettingChip extends StatelessWidget {
 }
 
 /// A small toggle button used to switch a specific parameter between Auto and Manual.
+///
+/// [isAuto] controls the highlighted state. When false (manual/locked),
+/// [lockedIcon] is shown — pass `Icons.lock_outline` where a lock is meaningful.
 class CameraAutoToggleButton extends StatelessWidget {
   const CameraAutoToggleButton({
     super.key,
     required this.isAuto,
     required this.onTap,
+    this.lockedIcon,
   });
 
   final bool isAuto;
   final VoidCallback onTap;
+
+  /// Icon shown when [isAuto] is false. Defaults to the same auto icon so
+  /// existing usages are unchanged.
+  final IconData? lockedIcon;
 
   @override
   Widget build(BuildContext context) {
@@ -176,7 +184,7 @@ class CameraAutoToggleButton extends StatelessWidget {
     return IconButton(
       onPressed: onTap,
       isSelected: isAuto,
-      icon: const Icon(Symbols.autofps_select_rounded),
+      icon: Icon(lockedIcon ?? Symbols.autofps_select_rounded),
       selectedIcon: const Icon(Symbols.autofps_select_rounded),
       style: ButtonStyle(
         fixedSize: WidgetStateProperty.all(const Size(44, 44)),

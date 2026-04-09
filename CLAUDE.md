@@ -113,3 +113,12 @@ Reference: `backgroundSuspend()`, `backgroundResume()`, `close()`. Never call `t
 - **Match surrounding patterns.** Find 2-3 similar functions and match their threading, error handling, and state notification patterns. Code samples in plans are sketches — the codebase is the source of truth for HOW to implement.
 - **State notifications are mandatory.** Any path that changes camera, recording, or error state MUST notify Dart via `flutterApi.*` posted on `mainHandler`.
 - **Verify before claiming "doesn't exist."** Fields may be far from your edit site in a large file.
+
+<!-- claude-mem-lite: auto-updated context. To avoid git noise, add CLAUDE.md to .gitignore -->
+<claude-mem-context>
+### Recent Activity
+- Error: pubspec.yaml, awb: 79c3b7a Merge pull request #5 from Shreeyak/featu…
+- Configure claude-hud for cambrian/camera2_flutter_demo project
+- Created gamestate-memory.md for civ6-ml project
+
+</claude-mem-context>

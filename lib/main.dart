@@ -308,6 +308,24 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
       _calibrationTarget = target;
       _calibrationIteration = 0;
     });
+
+    // Reset the calibration state so the image starts from a known baseline.
+    if (target == CalibrationTarget.wb) {
+      // Return to auto WB so any previous bad gains don't bias the new calibration.
+      setState(() => _wbMode = const WhiteBalance.auto());
+      _applySettings(const CameraSettings(whiteBalance: WhiteBalance.auto()));
+    } else {
+      // Clear accumulated BB offsets so the image is not stuck in a dark state.
+      setState(() {
+        _bbLocked = false;
+        _lastBbR = 0.0;
+        _lastBbG = 0.0;
+        _lastBbB = 0.0;
+      });
+      _applyProcessingParams(
+        _processingParams.copyWith(blackR: 0.0, blackG: 0.0, blackB: 0.0),
+      );
+    }
   }
 
   Future<void> _onCapture() async {

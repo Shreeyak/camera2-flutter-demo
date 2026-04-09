@@ -233,6 +233,7 @@ class _WbSection extends StatelessWidget {
             CameraAutoToggleButton(
               isAuto: wbMode is WbAuto,
               onTap: onToggle,
+              lockedIcon: Icons.lock_outline,
             ),
             const SizedBox(width: 8),
             Expanded(
@@ -308,10 +309,11 @@ class _BbSection extends StatelessWidget {
         const SizedBox(height: 8),
         Row(
           children: [
-            // isAuto: bbLocked — highlighted when lock is active.
+            // isAuto: !bbLocked — highlighted when gains are NOT applied (default/auto state).
             CameraAutoToggleButton(
-              isAuto: bbLocked,
+              isAuto: !bbLocked,
               onTap: onToggle,
+              lockedIcon: Icons.lock_outline,
             ),
             const SizedBox(width: 8),
             Expanded(
