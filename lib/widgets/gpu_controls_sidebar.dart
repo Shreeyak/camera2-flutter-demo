@@ -1,49 +1,92 @@
+import 'package:cambrian_camera/cambrian_camera.dart'
+    show ProcessingParams, WhiteBalance, WbAuto;
 import 'package:flutter/material.dart'
     show
-    BuildContext,
-    Color,
-    Colors,
-    Column,
-    Container,
-    CrossAxisAlignment,
-    Divider,
-    EdgeInsets,
-    FontFeature,
-    FontWeight,
-    GestureDetector,
-    Icon,
-    Icons,
-    ListView,
-    MainAxisAlignment,
-    OutlinedButton,
-    Padding,
-    Row,
-    RoundSliderOverlayShape,
-    RoundSliderThumbShape,
-    SafeArea,
-    SizedBox,
-    Slider,
-    SliderTheme,
-    StatelessWidget,
-    Text,
-    Theme,
-    ValueChanged,
-    Widget;
-import 'package:cambrian_camera/cambrian_camera.dart' show ProcessingParams;
+        BuildContext,
+        Column,
+        Container,
+        CrossAxisAlignment,
+        Divider,
+        EdgeInsets,
+        ElevatedButton,
+        Expanded,
+        FontFeature,
+        FontWeight,
+        GestureDetector,
+        Icon,
+        Icons,
+        ListView,
+        MainAxisAlignment,
+        OutlinedButton,
+        Padding,
+        Row,
+        RoundSliderOverlayShape,
+        RoundSliderThumbShape,
+        SafeArea,
+        SizedBox,
+        Slider,
+        SliderTheme,
+        StatelessWidget,
+        Text,
+        TextOverflow,
+        Theme,
+        ValueChanged,
+        VoidCallback,
+        Widget;
+import 'bottom_bar_buttons.dart' show CameraAutoToggleButton;
 
-/// Right-side panel with Material3 sliders for each GPU shader uniform.
+/// Which calibration target is currently active.
+enum CalibrationTarget { wb, bb }
+
+/// Right-side panel containing WB controls, BB controls, and GPU shader sliders.
 ///
-/// [params] is the current value displayed by the sliders.
-/// [onChanged] is called immediately on every drag with the updated params.
+/// Sections appear in pipeline order: White Balance → Black Balance →
+/// Brightness → Contrast → Saturation → Gamma.
 class GpuControlsSidebar extends StatelessWidget {
   const GpuControlsSidebar({
     super.key,
     required this.params,
     required this.onChanged,
+    required this.wbMode,
+    required this.lastWbGains,
+    required this.bbLocked,
+    required this.lastBbValues,
+    required this.isCalibrating,
+    required this.calibrationTarget,
+    required this.calibrationIteration,
+    required this.onWbToggle,
+    required this.onBbToggle,
+    required this.onStartCalibration,
+    required this.onCapture,
   });
 
   final ProcessingParams params;
   final ValueChanged<ProcessingParams> onChanged;
+
+  /// Current WB mode applied to the camera.
+  final WhiteBalance wbMode;
+
+  /// Last calibrated WB gains (gainR, gainG, gainB). Null when no calibration
+  /// has been performed yet (status line hidden).
+  final (double r, double g, double b)? lastWbGains;
+
+  /// Whether BB lock is active (calibrated values being applied).
+  final bool bbLocked;
+
+  /// Last calibrated BB offsets (r, g, b). Null = no status line shown.
+  /// Non-null only after calibration has been performed and lock is active.
+  final (double r, double g, double b)? lastBbValues;
+
+  final bool isCalibrating;
+  final CalibrationTarget? calibrationTarget;
+  final int calibrationIteration;
+
+  final VoidCallback onWbToggle;
+  final VoidCallback onBbToggle;
+  final void Function(CalibrationTarget) onStartCalibration;
+
+  /// Called when user taps "Capture" during calibration.
+  final VoidCallback onCapture;
 
   @override
   Widget build(BuildContext context) {
@@ -62,7 +105,37 @@ class GpuControlsSidebar extends StatelessWidget {
                 fontWeight: FontWeight.w600,
               ),
             ),
-            const SizedBox(height: 8),
+            const SizedBox(height: 12),
+
+            // ── White Balance ──────────────────────────────────────────────
+            _WbSection(
+              wbMode: wbMode,
+              lastGains: lastWbGains,
+              isActiveCalibration: isCalibrating &&
+                  calibrationTarget == CalibrationTarget.wb,
+              calibrationIteration: calibrationIteration,
+              onToggle: onWbToggle,
+              onStartCalibration: () => onStartCalibration(CalibrationTarget.wb),
+              onCapture: onCapture,
+            ),
+
+            const Divider(height: 24),
+
+            // ── Black Balance ──────────────────────────────────────────────
+            _BbSection(
+              bbLocked: bbLocked,
+              lastValues: lastBbValues,
+              isActiveCalibration: isCalibrating &&
+                  calibrationTarget == CalibrationTarget.bb,
+              calibrationIteration: calibrationIteration,
+              onToggle: onBbToggle,
+              onStartCalibration: () => onStartCalibration(CalibrationTarget.bb),
+              onCapture: onCapture,
+            ),
+
+            const Divider(height: 24),
+
+            // ── GPU sliders ────────────────────────────────────────────────
             _ShaderSlider(
               label: 'Brightness',
               value: params.brightness,
@@ -99,47 +172,16 @@ class GpuControlsSidebar extends StatelessWidget {
               valueLabel: params.gamma.toStringAsFixed(2),
               onChanged: (v) => onChanged(params.copyWith(gamma: v)),
             ),
-            const Divider(height: 24),
-            Text(
-              'Black Balance',
-              style: theme.textTheme.labelMedium?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
-              ),
-            ),
-            const SizedBox(height: 4),
-            _ShaderSlider(
-              label: 'R',
-              value: params.blackR,
-              min: 0.0,
-              max: 0.5,
-              defaultValue: 0.0,
-              valueLabel: params.blackR.toStringAsFixed(3),
-              activeColor: Colors.redAccent,
-              onChanged: (v) => onChanged(params.copyWith(blackR: v)),
-            ),
-            _ShaderSlider(
-              label: 'G',
-              value: params.blackG,
-              min: 0.0,
-              max: 0.5,
-              defaultValue: 0.0,
-              valueLabel: params.blackG.toStringAsFixed(3),
-              activeColor: Colors.greenAccent,
-              onChanged: (v) => onChanged(params.copyWith(blackG: v)),
-            ),
-            _ShaderSlider(
-              label: 'B',
-              value: params.blackB,
-              min: 0.0,
-              max: 0.5,
-              defaultValue: 0.0,
-              valueLabel: params.blackB.toStringAsFixed(3),
-              activeColor: Colors.blueAccent,
-              onChanged: (v) => onChanged(params.copyWith(blackB: v)),
-            ),
             const SizedBox(height: 12),
             OutlinedButton.icon(
-              onPressed: () => onChanged(ProcessingParams()),
+              // Resets brightness/contrast/saturation/gamma only.
+              // Preserves blackR/G/B so BB calibration is not discarded.
+              onPressed: () => onChanged(params.copyWith(
+                brightness: 0.0,
+                contrast: 0.0,
+                saturation: 0.0,
+                gamma: 1.0,
+              )),
               icon: const Icon(Icons.refresh, size: 16),
               label: const Text('Reset all'),
             ),
@@ -150,6 +192,165 @@ class GpuControlsSidebar extends StatelessWidget {
   }
 }
 
+// ── White Balance section ──────────────────────────────────────────────────
+
+class _WbSection extends StatelessWidget {
+  const _WbSection({
+    required this.wbMode,
+    required this.lastGains,
+    required this.isActiveCalibration,
+    required this.calibrationIteration,
+    required this.onToggle,
+    required this.onStartCalibration,
+    required this.onCapture,
+  });
+
+  final WhiteBalance wbMode;
+  final (double r, double g, double b)? lastGains;
+  final bool isActiveCalibration;
+  final int calibrationIteration;
+  final VoidCallback onToggle;
+  final VoidCallback onStartCalibration;
+  final VoidCallback onCapture;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final gains = lastGains;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'WHITE BALANCE',
+          style: theme.textTheme.labelSmall?.copyWith(
+            color: theme.colorScheme.onSurfaceVariant,
+            letterSpacing: 1.0,
+          ),
+        ),
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            CameraAutoToggleButton(
+              isAuto: wbMode is WbAuto,
+              onTap: onToggle,
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: isActiveCalibration
+                  ? ElevatedButton.icon(
+                      onPressed: onCapture,
+                      icon: const Icon(Icons.radio_button_checked, size: 16),
+                      label: Text(
+                        calibrationIteration > 0
+                            ? 'Capture ($calibrationIteration)'
+                            : 'Capture',
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    )
+                  : OutlinedButton(
+                      onPressed: onStartCalibration,
+                      child: const Text('Calibrate'),
+                    ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 4),
+        if (wbMode is! WbAuto && gains != null)
+          Text(
+            'R×${gains.$1.toStringAsFixed(2)}  '
+            'G×${gains.$2.toStringAsFixed(2)}  '
+            'B×${gains.$3.toStringAsFixed(2)}',
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.primary,
+              fontFeatures: const [FontFeature.tabularFigures()],
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+// ── Black Balance section ──────────────────────────────────────────────────
+
+class _BbSection extends StatelessWidget {
+  const _BbSection({
+    required this.bbLocked,
+    required this.lastValues,
+    required this.isActiveCalibration,
+    required this.calibrationIteration,
+    required this.onToggle,
+    required this.onStartCalibration,
+    required this.onCapture,
+  });
+
+  final bool bbLocked;
+  final (double r, double g, double b)? lastValues;
+  final bool isActiveCalibration;
+  final int calibrationIteration;
+  final VoidCallback onToggle;
+  final VoidCallback onStartCalibration;
+  final VoidCallback onCapture;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final vals = lastValues;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'BLACK BALANCE',
+          style: theme.textTheme.labelSmall?.copyWith(
+            color: theme.colorScheme.onSurfaceVariant,
+            letterSpacing: 1.0,
+          ),
+        ),
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            // isAuto: bbLocked — highlighted when lock is active.
+            CameraAutoToggleButton(
+              isAuto: bbLocked,
+              onTap: onToggle,
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: isActiveCalibration
+                  ? ElevatedButton.icon(
+                      onPressed: onCapture,
+                      icon: const Icon(Icons.radio_button_checked, size: 16),
+                      label: Text(
+                        calibrationIteration > 0
+                            ? 'Capture ($calibrationIteration)'
+                            : 'Capture',
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    )
+                  : OutlinedButton(
+                      onPressed: onStartCalibration,
+                      child: const Text('Calibrate'),
+                    ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 4),
+        if (bbLocked && vals != null)
+          Text(
+            'R ${vals.$1.toStringAsFixed(3)}  '
+            'G ${vals.$2.toStringAsFixed(3)}  '
+            'B ${vals.$3.toStringAsFixed(3)}',
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.primary,
+              fontFeatures: const [FontFeature.tabularFigures()],
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+// ── Shared slider widget ───────────────────────────────────────────────────
+
 class _ShaderSlider extends StatelessWidget {
   const _ShaderSlider({
     required this.label,
@@ -159,7 +360,6 @@ class _ShaderSlider extends StatelessWidget {
     required this.defaultValue,
     required this.valueLabel,
     required this.onChanged,
-    this.activeColor,
   });
 
   final String label;
@@ -169,7 +369,6 @@ class _ShaderSlider extends StatelessWidget {
   final double defaultValue;
   final String valueLabel;
   final ValueChanged<double> onChanged;
-  final Color? activeColor;
 
   @override
   Widget build(BuildContext context) {
@@ -200,8 +399,6 @@ class _ShaderSlider extends StatelessWidget {
               trackHeight: 2,
               thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
               overlayShape: const RoundSliderOverlayShape(overlayRadius: 14),
-              activeTrackColor: activeColor,
-              thumbColor: activeColor,
             ),
             child: Slider(
               value: value.clamp(min, max),
