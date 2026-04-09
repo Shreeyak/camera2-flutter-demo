@@ -156,6 +156,7 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
         if (_isRecording) {
           _camera?.stopRecording().catchError((Object e) {
             debugPrint('auto-stop on background failed: $e');
+            return '';
           });
         }
         _camera?.pause();
@@ -514,10 +515,12 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
         await camera.stopRecording();
       } else {
         final (_, displayName) = await camera.startRecording();
-        if (mounted) setState(() {
-          _isRecording = true;
-          _recordingDisplayName = displayName;
-        });
+        if (mounted) {
+          setState(() {
+            _isRecording = true;
+            _recordingDisplayName = displayName;
+          });
+        }
       }
     } catch (e) {
       if (mounted) {
