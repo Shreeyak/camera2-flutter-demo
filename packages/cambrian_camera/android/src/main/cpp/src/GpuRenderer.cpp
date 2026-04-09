@@ -1051,4 +1051,38 @@ GLuint GpuRenderer::linkProgram(GLuint vert, GLuint frag) {
     return prog;
 }
 
+// ---------------------------------------------------------------------------
+// Public: center-patch sampling
+// ---------------------------------------------------------------------------
+
+void GpuRenderer::sampleCenterPatch(float& outR, float& outG, float& outB) {
+    if (fbo_ == 0) {
+        outR = outG = outB = 0.5f;
+        return;
+    }
+
+    constexpr int kPatchW = 16;
+    constexpr int kPatchH = 16;
+    const int cx = (width_  - kPatchW) / 2;
+    const int cy = (height_ - kPatchH) / 2;
+
+    uint8_t pixels[kPatchW * kPatchH * 4];
+
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo_);
+    glReadPixels(cx, cy, kPatchW, kPatchH, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+    uint64_t sumR = 0, sumG = 0, sumB = 0;
+    constexpr int kN = kPatchW * kPatchH;
+    for (int i = 0; i < kN; i++) {
+        sumR += pixels[i * 4 + 0];
+        sumG += pixels[i * 4 + 1];
+        sumB += pixels[i * 4 + 2];
+    }
+
+    outR = static_cast<float>(sumR) / (kN * 255.0f);
+    outG = static_cast<float>(sumG) / (kN * 255.0f);
+    outB = static_cast<float>(sumB) / (kN * 255.0f);
+}
+
 } // namespace cam

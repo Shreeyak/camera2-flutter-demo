@@ -638,6 +638,32 @@ Java_com_cambrian_camera_GpuPipeline_nativeGpuClearRebindFlag(
 }
 
 // ---------------------------------------------------------------------------
+// nativeGpuSampleCenterPatch
+//
+// Samples the center 16×16 pixels of the most recent rendered FBO.
+// Must be called on the GL thread.
+//
+// @param gpuHandle  Handle returned by nativeGpuInit.
+// @return  float[3] = {meanR, meanG, meanB} in [0, 1]. {0.5,0.5,0.5} on error.
+// ---------------------------------------------------------------------------
+JNIEXPORT jfloatArray JNICALL
+Java_com_cambrian_camera_GpuPipeline_nativeGpuSampleCenterPatch(
+        JNIEnv* env, jclass /*clazz*/, jlong gpuHandle) {
+    jfloatArray result = env->NewFloatArray(3);
+    if (!gpuHandle) {
+        float defaults[] = {0.5f, 0.5f, 0.5f};
+        env->SetFloatArrayRegion(result, 0, 3, defaults);
+        return result;
+    }
+    cam::GpuRenderer* renderer = rendererFromHandle(gpuHandle);
+    float r, g, b;
+    renderer->sampleCenterPatch(r, g, b);
+    float vals[] = {r, g, b};
+    env->SetFloatArrayRegion(result, 0, 3, vals);
+    return result;
+}
+
+// ---------------------------------------------------------------------------
 // nativeGetDimensionMismatchCount
 //
 // Previously returned the InputRing dimension mismatch counter.

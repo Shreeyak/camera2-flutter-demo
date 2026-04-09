@@ -121,6 +121,13 @@ public:
     /// Reset the swap failure counter after rebinding the preview surface.
     void clearRebindFlag() { consecutiveSwapFailures_ = 0; }
 
+    /// Sample the center 16×16 pixels of the full-res FBO and return the mean
+    /// R, G, B as normalized [0, 1] floats.
+    ///
+    /// Must be called on the GL thread. Returns 0.5 for all channels if the FBO
+    /// is not yet initialized (no frame rendered).
+    void sampleCenterPatch(float& outR, float& outG, float& outB);
+
 private:
     int consecutiveSwapFailures_ = 0;
     static constexpr int kSwapFailureThreshold = 3;
