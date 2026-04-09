@@ -109,10 +109,12 @@ Reference: `backgroundSuspend()`, `backgroundResume()`, `close()`. Never call `t
 
 ## Rules for AI Agents
 
+- **Always read error logs first.** When debugging frame delivery, GPU, or Camera2 failures, request and read logcat output IMMEDIATELY before proposing hypotheses. Logs are the primary diagnostic tool — they pinpoint the exact component failure. Do not skip this even for "obvious" issues.
 - **Never leave TODOs for required behavior.** If a plan says to call an API and you can't find it, search broadly (`grep -r` across `packages/cambrian_camera/`). Only report NEEDS_CONTEXT after exhaustive search. Do not comment out calls or stub them.
 - **Match surrounding patterns.** Find 2-3 similar functions and match their threading, error handling, and state notification patterns. Code samples in plans are sketches — the codebase is the source of truth for HOW to implement.
 - **State notifications are mandatory.** Any path that changes camera, recording, or error state MUST notify Dart via `flutterApi.*` posted on `mainHandler`.
 - **Verify before claiming "doesn't exist."** Fields may be far from your edit site in a large file.
+- **Comment magic numbers and non-obvious scaling.** Any constant multiplier, threshold, or range remapping MUST have an inline comment explaining WHY it exists. Bare `* 0.5` or `+ 0.1` without context is unacceptable — future readers cannot reverse-engineer the intent.
 
 <!-- claude-mem-lite: auto-updated context. To avoid git noise, add CLAUDE.md to .gitignore -->
 <claude-mem-context>
