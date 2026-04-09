@@ -31,10 +31,15 @@ class CameraRanges {
 class CameraSettingsValues {
   final int isoValue;
   final int exposureTimeNs;
+  /// Focus distance in diopters. Only used when [afEnabled] is false.
   final double focusDiopters;
   final double zoomRatio;
   final bool afEnabled;
+
+  /// When true, Camera2 auto-exposure controls ISO.
   final bool isoAuto;
+
+  /// When true, Camera2 auto-exposure controls shutter speed.
   final bool exposureAuto;
 
   const CameraSettingsValues({
@@ -47,6 +52,9 @@ class CameraSettingsValues {
     this.exposureAuto = true,
   });
 
+  /// Builds a [CameraSettingsValues] snapshot from live [CameraSettings] and
+  /// the camera's [CameraRanges]. Used to initialize UI controls when the
+  /// camera starts or settings change.
   factory CameraSettingsValues.fromSettings(
     CameraSettings settings,
     CameraRanges ranges,
