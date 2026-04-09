@@ -61,7 +61,9 @@ const vec3 kLuma = vec3(0.299, 0.587, 0.114);
 
 // Brightness: gamma-curve lift (positive) or linear dim (negative).
 // uBrightness in [-1, +1]; 0 = identity.
+// Input clamped to [0,1] so pow() never receives a negative base.
 vec3 applyBrightness(vec3 color, float b) {
+    color = clamp(color, 0.0, 1.0);
     if (b >= 0.0) {
         float gamma = pow(2.7, b);
         return 1.0 - pow(1.0 - color, vec3(gamma));
@@ -74,15 +76,17 @@ vec3 applyBrightness(vec3 color, float b) {
 // Contrast adjustment in [-1, +1]; 0 = identity.
 // Denominator guarded with max(..., 1e-3) to prevent division by zero at c = ±1.
 vec3 applyContrast(vec3 color, float c) {
-    c = clamp(c, -1.0, 1.0);
+    // UI slider range [-1,1] scaled to [-0.5,0.5] — full sigmoid at ±1
+    // produces unusable extremes (solid grey / blown out).
+    c = clamp(c, -1.0, 1.0) * 0.5;
     vec3 e = color - 0.5;
     if (c >= 0.0) {
         float k = 1.0 - c;
-        float denom = max(k + abs(2.0 * e) * (1.0 - k), 1e-3);
+        vec3 denom = max(k + abs(2.0 * e) * (1.0 - k), 1e-3);
         return 0.5 + e / denom;
     } else {
         float k = 1.0 + c;
-        float denom = max(1.0 - abs(2.0 * e) * (1.0 - k), 1e-3);
+        vec3 denom = max(1.0 - abs(2.0 * e) * (1.0 - k), 1e-3);
         return 0.5 + e * k / denom;
     }
 }
@@ -91,7 +95,7 @@ vec3 applyContrast(vec3 color, float c) {
 // uSaturation in [-1, +1]; 0 = identity, -1 = greyscale, +1 = double sat.
 vec3 applySaturation(vec3 color, float s) {
     float lum = dot(color, kLuma);
-    return mix(vec3(lum), color, 1.0 + s);
+    return clamp(mix(vec3(lum), color, 1.0 + s), 0.0, 1.0);
 }
 
 // Gamma correction. Clamp g away from zero to avoid division by zero.
