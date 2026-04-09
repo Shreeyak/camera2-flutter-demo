@@ -320,6 +320,15 @@ class CambrianCamera {
     );
   }
 
+  /// Samples the center 16×16 pixel patch of the most recent GPU-processed frame.
+  ///
+  /// Returns the mean R, G, B as a Dart record with values in [0.0, 1.0].
+  /// Returns (r: 0.5, g: 0.5, b: 0.5) if no frame has been rendered yet.
+  Future<({double r, double g, double b})> sampleCenterPatch() async {
+    final cam = await _hostApi.sampleCenterPatch(_handle);
+    return (r: cam.r, g: cam.g, b: cam.b);
+  }
+
   /// Captures a high-quality still image and returns its file path.
   ///
   /// Uses a dedicated JPEG ImageReader pre-allocated at session setup time.
