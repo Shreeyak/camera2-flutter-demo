@@ -8,6 +8,7 @@ import 'package:cambrian_camera/cambrian_camera.dart'
         CameraError,
         CameraErrorCode,
         CameraSettings,
+        CameraSize,
         CameraTextureInfo,
         FrameResult,
         ProcessingParams,
@@ -99,6 +100,12 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
 
   /// Display rotation in degrees CW from portrait: 0, 90, 180, or 270.
   int _displayRotationDeg = 0;
+
+  /// Current stream resolution label (e.g. "4032x3024").
+  String _currentResolutionLabel = '';
+
+  /// Available YUV stream resolutions from capabilities.
+  List<CameraSize> _availableResolutions = [];
 
   @override
   void initState() {
@@ -197,6 +204,8 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
         _ranges = ranges;
         _values = CameraSettingsValues.fromSettings(_kInitialSettings, ranges);
         _processingParams = initialParams; // sidebar sliders reflect persisted or default values
+        _availableResolutions = caps.supportedSizes;
+        _currentResolutionLabel = '${caps.streamWidth}x${caps.streamHeight}';
       });
       _frameResultSub = camera.frameResultStream.listen(_onFrameResult);
       _errorSub = camera.errorStream.listen(_onCameraError);
@@ -289,6 +298,22 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
   void _onZoomChanged(double ratio) {
     setState(() => _values = _values.copyWith(zoomRatio: ratio));
     _applySettings(CameraSettings(zoomRatio: ratio));
+  }
+
+  /// Handles user selection of a new stream resolution from the popup menu.
+  Future<void> _onResolutionSelected(CameraSize size) async {
+    final camera = _camera;
+    if (camera == null || _isRecording) return;
+    try {
+      await camera.setResolution(size.width, size.height);
+      if (!mounted) return;
+      final caps = camera.capabilities;
+      setState(() {
+        _currentResolutionLabel = '${caps.streamWidth}x${caps.streamHeight}';
+      });
+    } catch (e) {
+      if (mounted) _showError('Resolution change failed: $e');
+    }
   }
 
   /// Updates slider positions from live hardware sensor values.
@@ -568,6 +593,9 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
                       onToggleSettings: _toggleSettingsDrawer,
                       onSettingChipTap: _onSettingChipTap,
                       onToggleGpuControls: () => setState(() => _sidebarOpen = !_sidebarOpen),
+                      currentResolutionLabel: _currentResolutionLabel,
+                      availableResolutions: _availableResolutions,
+                      onResolutionSelected: _onResolutionSelected,
                       isRecording: _isRecording,
                       onToggleRecording: _toggleRecording,
                     ),
