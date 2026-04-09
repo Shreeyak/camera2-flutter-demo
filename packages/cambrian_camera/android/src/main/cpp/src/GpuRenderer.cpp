@@ -57,21 +57,61 @@ uniform vec2  uCropOffset;
 in  vec2 vTexCoord;
 out vec4 fragColor;
 
-const vec3 kLuma = vec3(0.2126, 0.7152, 0.0722);
+const vec3 kLuma = vec3(0.299, 0.587, 0.114);
+
+// Brightness: gamma-curve lift (positive) or linear dim (negative).
+// uBrightness in [-1, +1]; 0 = identity.
+vec3 applyBrightness(vec3 color, float b) {
+    if (b >= 0.0) {
+        float gamma = pow(2.7, b);
+        return 1.0 - pow(1.0 - color, vec3(gamma));
+    } else {
+        float k = 1.0 + b * 0.75;
+        return color * k;
+    }
+}
+
+// Contrast adjustment in [-1, +1]; 0 = identity.
+// Denominator guarded with max(..., 1e-3) to prevent division by zero at c = ±1.
+vec3 applyContrast(vec3 color, float c) {
+    c = clamp(c, -1.0, 1.0);
+    vec3 e = color - 0.5;
+    if (c >= 0.0) {
+        float k = 1.0 - c;
+        float denom = max(k + abs(2.0 * e) * (1.0 - k), 1e-3);
+        return 0.5 + e / denom;
+    } else {
+        float k = 1.0 + c;
+        float denom = max(1.0 - abs(2.0 * e) * (1.0 - k), 1e-3);
+        return 0.5 + e * k / denom;
+    }
+}
+
+// Saturation: blend toward luminance.
+// uSaturation in [-1, +1]; 0 = identity, -1 = greyscale, +1 = double sat.
+vec3 applySaturation(vec3 color, float s) {
+    float lum = dot(color, kLuma);
+    return mix(vec3(lum), color, 1.0 + s);
+}
+
+// Gamma correction. Clamp g away from zero to avoid division by zero.
+vec3 applyGamma(vec3 color, float g) {
+    return pow(color, vec3(1.0 / max(g, 0.001)));
+}
 
 void main() {
     vec2 uv    = vTexCoord * uCropScale + uCropOffset;
     vec2 texUv = (uTexMatrix * vec4(uv, 0.0, 1.0)).xy;
-    vec3 rgb   = texture(uTexture, texUv).rgb;
+    vec4 color = texture(uTexture, texUv);
+    vec3 rgb   = color.rgb;
 
     rgb = max(rgb - uBlackBalance, 0.0);
-    rgb += uBrightness;
-    rgb = (rgb - 0.5) * (uContrast + 1.0) + 0.5;
-    float luma = dot(rgb, kLuma);
-    rgb = mix(vec3(luma), rgb, uSaturation + 1.0);
-    rgb = pow(max(rgb, 0.0), vec3(1.0 / uGamma));
+    rgb = applyBrightness(rgb, uBrightness);
+    rgb = applyContrast(rgb, uContrast);
+    rgb = applySaturation(rgb, uSaturation);
+    rgb = applyGamma(max(rgb, 0.0), uGamma);
 
-    fragColor = vec4(clamp(rgb, 0.0, 1.0), 1.0);
+    fragColor = vec4(clamp(rgb, 0.0, 1.0), color.a);
 }
 )glsl";
 

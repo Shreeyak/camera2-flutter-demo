@@ -384,11 +384,15 @@ class ProcessingParams {
   /// Gamma correction exponent in [0.1, 4.0]. 1.0 = identity.
   final double gamma;
 
-  /// Brightness offset in [-1.0, +1.0]. 0.0 = no change (identity).
+  /// Brightness in [-1.0, +1.0]. 0.0 = identity.
+  /// Positive: reverse-gamma curve lift (shadows and midtones raised nonlinearly).
+  /// Negative: linear dim (multiplies by 1 + b×0.75).
   final double brightness;
 
-  /// Contrast adjustment in [-1.0, +1.0]. 0.0 = no change (identity).
-  /// Maps to internal multiplier [0.0, 2.0] where 0.0 = flat grey, 2.0 = maximum contrast.
+  /// Contrast in [-1.0, +1.0]. 0.0 = identity.
+  /// Uses a piecewise sigmoid: positive values squeeze the tonal curve (S-curve),
+  /// negative values flatten it (expand toward grey). The shader guards against
+  /// division by zero at the ±1.0 endpoints.
   final double contrast;
 
   /// Saturation adjustment in [-1.0, +1.0]. 0.0 = no change (identity/full natural color).
