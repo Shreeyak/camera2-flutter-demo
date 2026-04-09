@@ -171,6 +171,7 @@ class CameraCapabilities {
         streamHeight: c.streamHeight,
       );
 
+  /// All supported YUV_420_888 stream resolutions, sorted descending by area.
   final List<CameraSize> supportedSizes;
   final int isoMin;
   final int isoMax;

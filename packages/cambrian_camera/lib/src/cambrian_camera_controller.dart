@@ -291,6 +291,22 @@ class CambrianCamera {
     _serializer.send(settings);
   }
 
+  /// Changes the camera stream resolution and reconfigures the capture session.
+  ///
+  /// [width] and [height] must be one of the sizes in [capabilities.supportedSizes].
+  /// The camera will briefly transition through [CameraState.recovering] while the
+  /// session is rebuilt, then back to [CameraState.streaming].
+  ///
+  /// Must not be called while recording. Throws [PlatformException] on failure.
+  Future<void> setResolution(int width, int height) async {
+    if (_closed) return;
+    if (kDebugMode) debugPrint('CC/Dart: setResolution handle=$_handle ${width}x$height');
+    await _hostApi.setResolution(_handle, width, height);
+    // Re-fetch capabilities so streamWidth/streamHeight reflect the new resolution.
+    final caps = await _hostApi.getCapabilities(_handle);
+    _capabilities = CameraCapabilities.fromPigeon(caps);
+  }
+
   /// Updates C++ pipeline processing parameters immediately.
   ///
   /// The returned [Future] completes when the platform channel round-trip
