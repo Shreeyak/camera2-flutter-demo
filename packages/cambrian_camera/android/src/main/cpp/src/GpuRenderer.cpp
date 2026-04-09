@@ -71,16 +71,19 @@ vec3 applyBrightness(vec3 color, float b) {
     }
 }
 
-// Contrast: sigmoid squeeze (positive) or expand (negative).
-// uContrast in [-0.99, +0.99], clamped on CPU; 0 = identity.
+// Contrast adjustment in [-1, +1]; 0 = identity.
+// Denominator guarded with max(..., 1e-3) to prevent division by zero at c = ±1.
 vec3 applyContrast(vec3 color, float c) {
+    c = clamp(c, -1.0, 1.0);
     vec3 e = color - 0.5;
     if (c >= 0.0) {
         float k = 1.0 - c;
-        return 0.5 + e / (k + abs(2.0 * e) * (1.0 - k));
+        float denom = max(k + abs(2.0 * e) * (1.0 - k), 1e-3);
+        return 0.5 + e / denom;
     } else {
         float k = 1.0 + c;
-        return 0.5 + e * k / (1.0 - abs(2.0 * e) * (1.0 - k));
+        float denom = max(1.0 - abs(2.0 * e) * (1.0 - k), 1e-3);
+        return 0.5 + e * k / denom;
     }
 }
 

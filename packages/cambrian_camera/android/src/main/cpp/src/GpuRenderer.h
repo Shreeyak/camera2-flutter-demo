@@ -90,9 +90,12 @@ public:
         RawCallback rawCb = nullptr);
 
     /// Update shader uniforms. Thread-safe; changes take effect on the next drawAndReadback().
-    /// @param brightness   Additive brightness offset [-1, 1]; 0 = identity
-    /// @param contrast     Contrast adjustment [-1, 1]; 0 = identity (shader applies uContrast + 1.0)
-    /// @param saturation   Saturation adjustment [-1, 1]; 0 = identity (shader applies uSaturation + 1.0)
+    /// @param brightness   Brightness in [-1, 1]; 0 = identity. Positive: reverse-gamma lift
+    ///                     (1 − (1−color)^(2.7^b)); negative: linear dim (color × (1 + b×0.75)).
+    /// @param contrast     Contrast in [-1, 1]; 0 = identity. Uses a piecewise sigmoid: positive
+    ///                     values squeeze the curve, negative values expand it. Denominator is
+    ///                     guarded to prevent division by zero at the ±1 endpoints.
+    /// @param saturation   Saturation adjustment [-1, 1]; 0 = identity (shader blends toward luma)
     /// @param blackR/G/B   Per-channel black-level subtraction [0, 0.5]; 0 = identity
     void setAdjustments(float brightness, float contrast, float saturation,
                         float blackR, float blackG, float blackB, float gamma);
