@@ -72,8 +72,13 @@ class GpuControlsSidebar extends StatelessWidget {
   /// Non-null only after calibration has been performed and lock is active.
   final (double r, double g, double b)? lastBbValues;
 
+  /// Called when the white-balance toggle button is pressed.
   final VoidCallback onWbToggle;
+
+  /// Called when the black-balance lock toggle is pressed.
   final VoidCallback onBbToggle;
+
+  /// Called to open the calibration overlay for the given [CalibrationTarget].
   final void Function(CalibrationTarget) onStartCalibration;
 
   /// Resets all processing params, WB, and BB to factory defaults.

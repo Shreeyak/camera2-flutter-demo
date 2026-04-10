@@ -1099,6 +1099,24 @@ GLuint GpuRenderer::linkProgram(GLuint vert, GLuint frag) {
 // Public: center-patch sampling
 // ---------------------------------------------------------------------------
 
+/**
+ * @brief Samples the center 96×96 pixel patch of the rendered frame and writes
+ *        trimmed-mean RGB values to the output references.
+ *
+ * Binds the full-resolution FBO, calls glReadPixels to fetch RGBA pixel data,
+ * then computes a 15% trimmed mean per channel using an O(n) histogram approach
+ * to suppress hot pixels, specular highlights, and dust artefacts.
+ *
+ * @param[out] outR  Trimmed-mean red channel value, normalised to [0.0, 1.0].
+ * @param[out] outG  Trimmed-mean green channel value, normalised to [0.0, 1.0].
+ * @param[out] outB  Trimmed-mean blue channel value, normalised to [0.0, 1.0].
+ * @return true on success; false if fbo_ is uninitialised, no frame has been
+ *         rendered yet, the framebuffer is smaller than the patch, or a GL
+ *         error occurs during readback.
+ *
+ * @note Must be called on the GL thread. glReadPixels blocks until the GPU
+ *       completes the readback.
+ */
 bool GpuRenderer::sampleCenterPatch(float& outR, float& outG, float& outB) {
     // fbo_ == 0: pipeline not yet initialised.
     // firstFrame_: GPU has not rendered any frame yet — readback would return garbage.
@@ -1116,6 +1134,12 @@ bool GpuRenderer::sampleCenterPatch(float& outR, float& outG, float& outB) {
     constexpr float kTrimFraction = 0.15f;               // discard bottom/top 15% per channel
     constexpr int   kTrimCount    = static_cast<int>(kN * kTrimFraction);  // 1 382
 
+    // Guard against framebuffers smaller than the patch — glReadPixels with a
+    // negative origin or a patch that exceeds the surface is undefined behaviour.
+    if (width_ < kPatchW || height_ < kPatchH) {
+        return false;
+    }
+
     const int cx = (width_  - kPatchW) / 2;
     const int cy = (height_ - kPatchH) / 2;
 
@@ -1123,7 +1147,12 @@ bool GpuRenderer::sampleCenterPatch(float& outR, float& outG, float& outB) {
 
     glBindFramebuffer(GL_FRAMEBUFFER, fbo_);
     glReadPixels(cx, cy, kPatchW, kPatchH, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+    const GLenum readError = glGetError();
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+    if (readError != GL_NO_ERROR) {
+        return false;
+    }
 
     // Build per-channel histograms (256 bins — full uint8_t range).
     int histR[256]{}, histG[256]{}, histB[256]{};

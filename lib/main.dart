@@ -129,6 +129,15 @@ class _CameraScreenState extends State<CameraScreen>
   bool _isCalibrating = false;
   CalibrationTarget? _calibrationTarget;
 
+  // Snapshot of WB/BB state captured at the moment calibration starts, used
+  // to restore the exact prior values if the user cancels.
+  WhiteBalance? _preCalibrationWbMode;
+  bool? _preCalibrationBbLocked;
+  double? _preCalibrationBbR;
+  double? _preCalibrationBbG;
+  double? _preCalibrationBbB;
+  ProcessingParams? _preCalibrationProcessingParams;
+
   /// Most recent FrameResult — used by WB lock to read current sensor gains.
   FrameResult? _latestFrameResult;
 
@@ -348,14 +357,42 @@ class _CameraScreenState extends State<CameraScreen>
   }
 
   void _onStartCalibration(CalibrationTarget target) {
-    // Second tap on the same target cancels calibration.
+    // Second tap on the same target cancels calibration — restore prior state.
     if (_isCalibrating && _calibrationTarget == target) {
+      final wbMode = _preCalibrationWbMode;
+      final bbLocked = _preCalibrationBbLocked;
+      final bbR = _preCalibrationBbR;
+      final bbG = _preCalibrationBbG;
+      final bbB = _preCalibrationBbB;
+      final processingParams = _preCalibrationProcessingParams;
+
       setState(() {
         _isCalibrating = false;
         _calibrationTarget = null;
+        if (wbMode != null) _wbMode = wbMode;
+        if (bbLocked != null) _bbLocked = bbLocked;
+        if (bbR != null) _lastBbR = bbR;
+        if (bbG != null) _lastBbG = bbG;
+        if (bbB != null) _lastBbB = bbB;
       });
+
+      if (wbMode != null) {
+        _applySettings(CameraSettings(whiteBalance: wbMode));
+      }
+      if (processingParams != null) {
+        _applyProcessingParams(processingParams);
+      }
       return;
     }
+
+    // Snapshot current state before any changes so cancellation can restore it.
+    _preCalibrationWbMode = _wbMode;
+    _preCalibrationBbLocked = _bbLocked;
+    _preCalibrationBbR = _lastBbR;
+    _preCalibrationBbG = _lastBbG;
+    _preCalibrationBbB = _lastBbB;
+    _preCalibrationProcessingParams = _processingParams;
+
     setState(() {
       _isCalibrating = true;
       _calibrationTarget = target;

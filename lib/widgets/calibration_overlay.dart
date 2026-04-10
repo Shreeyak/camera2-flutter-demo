@@ -149,12 +149,6 @@ class CalibrationOverlay extends StatelessWidget {
 class _PatchBorderPainter extends CustomPainter {
   const _PatchBorderPainter();
 
-  // Crosshair arm dimensions (logical pixels, fixed regardless of patch size).
-  static const double _gap = 18.0; // gap from center to arm start
-  static const double _len = 32.0; // arm length
-  static const double _w = 10.0; // arm width
-  static const double _r = _w / 2; // corner radius
-
   // Square border stroke widths.
   // Shadow is wider than the foreground stroke so it peeks out on both sides,
   // creating a readable outline on any background color.
@@ -171,6 +165,16 @@ class _PatchBorderPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     final cx = size.width / 2;
     final cy = size.height / 2;
+
+    // ── Crosshair arm dimensions ───────────────────────────────────────────
+    // Pixel values are tuned for a typical on-screen patch of ~170 dp.
+    // Proportional caps ensure gap + len ≤ 49% of side, so arms never
+    // overdraw the patch boundary (half-side = 50%).
+    final s = size.shortestSide; // patch is square, so shortestSide == width
+    final gap = 18.0.clamp(0.0, s * 0.19); // gap from center; 19% cap kicks in below ~95 dp
+    final len = 32.0.clamp(0.0, s * 0.30); // arm length; 30% cap keeps gap+len ≤ 49% of s
+    final w   = 10.0.clamp(0.0, s * 0.10); // arm width; 10% cap keeps proportional at small sizes
+    final r   = w / 2;                      // corner radius of arm rects
 
     // ── Square border ──────────────────────────────────────────────────────
     final rect = Rect.fromLTWH(0, 0, size.width, size.height);
@@ -204,7 +208,7 @@ class _PatchBorderPainter extends CustomPainter {
     // ── Crosshair arms ─────────────────────────────────────────────────────
     void drawArm(Rect armRect, Color color) {
       canvas.drawRRect(
-        RRect.fromRectAndRadius(armRect, const Radius.circular(_r)),
+        RRect.fromRectAndRadius(armRect, Radius.circular(r)),
         Paint()
           ..color = color
           ..style = PaintingStyle.fill,
@@ -212,15 +216,13 @@ class _PatchBorderPainter extends CustomPainter {
     }
 
     // Top arm (vertical, above center)
-    drawArm(
-        Rect.fromLTWH(cx - _w / 2, cy - _gap - _len, _w, _len), _colorTop);
+    drawArm(Rect.fromLTWH(cx - w / 2, cy - gap - len, w, len), _colorTop);
     // Bottom arm (vertical, below center)
-    drawArm(Rect.fromLTWH(cx - _w / 2, cy + _gap, _w, _len), _colorBottom);
+    drawArm(Rect.fromLTWH(cx - w / 2, cy + gap, w, len), _colorBottom);
     // Left arm (horizontal, left of center)
-    drawArm(
-        Rect.fromLTWH(cx - _gap - _len, cy - _w / 2, _len, _w), _colorSide);
+    drawArm(Rect.fromLTWH(cx - gap - len, cy - w / 2, len, w), _colorSide);
     // Right arm (horizontal, right of center)
-    drawArm(Rect.fromLTWH(cx + _gap, cy - _w / 2, _len, _w), _colorSide);
+    drawArm(Rect.fromLTWH(cx + gap, cy - w / 2, len, w), _colorSide);
   }
 
   @override

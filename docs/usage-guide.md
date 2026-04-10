@@ -458,15 +458,15 @@ Future<WbCalibrationResult> calibrateWhiteBalance({
 
 Runs the iterative white balance calibration loop. Point the camera at a neutral grey or white surface before calling.
 
-The package samples a **96×96 pixel center patch** before any corrections are applied (`patchBefore`), then iteratively adjusts the R/G/B gains until the patch error falls below 1% or 10 iterations are exhausted. The final gains are applied and a second patch sample is taken (`patchAfter`). The app never needs to call `sampleCenterPatch()` directly.
+The package takes a trimmed-mean RGB sample of the **96×96 pixel center patch** at the start of the loop (`patchBefore`), then iteratively adjusts R/G/B gains until the patch error falls below 1% or 10 iterations are exhausted. The final gains are applied and a second sample is taken (`patchAfter`). The app never needs to call `sampleCenterPatch()` directly.
 
 Returns a `WbCalibrationResult`:
 
 | Field | Type | Description |
 |-------|------|-------------|
 | `gains` | `WbGains` | Converged `(r, g, b)` gain multipliers |
-| `patchBefore` | `RgbSample` | Mean 96×96 patch RGB before any corrections |
-| `patchAfter` | `RgbSample` | Mean 96×96 patch RGB after convergence |
+| `patchBefore` | `RgbSample` | Trimmed-mean RGB of the center patch at loop start |
+| `patchAfter` | `RgbSample` | Trimmed-mean RGB of the center patch after convergence |
 
 Pass `gains` to `WhiteBalance.manual()` to lock the result:
 
@@ -500,15 +500,15 @@ Future<BbCalibrationResult> calibrateBlackBalance({
 
 Runs the iterative black balance calibration loop. Cover the lens (or point at a fully dark scene) before calling.
 
-The package samples a **96×96 pixel center patch** before any offsets are applied (`patchBefore`), then iteratively accumulates per-channel black-level offsets until the patch maximum falls below 1% or 10 iterations are exhausted. A second patch sample is taken after convergence (`patchAfter`). The non-black fields in `params` are preserved throughout.
+The package takes a trimmed-mean RGB sample of the **96×96 pixel center patch** at the start of the loop (`patchBefore`), then iteratively accumulates per-channel black-level offsets until the patch maximum falls below 1% or 10 iterations are exhausted. A second sample is taken after convergence (`patchAfter`). The non-black fields in `params` are preserved throughout.
 
 Returns a `BbCalibrationResult`:
 
 | Field | Type | Description |
 |-------|------|-------------|
 | `offsets` | `BbOffsets` | Converged `(r, g, b)` black-level offsets |
-| `patchBefore` | `RgbSample` | Mean 96×96 patch RGB before any offsets |
-| `patchAfter` | `RgbSample` | Mean 96×96 patch RGB after convergence |
+| `patchBefore` | `RgbSample` | Trimmed-mean RGB of the center patch at loop start |
+| `patchAfter` | `RgbSample` | Trimmed-mean RGB of the center patch after convergence |
 
 Apply the result via `setProcessingParams()`:
 

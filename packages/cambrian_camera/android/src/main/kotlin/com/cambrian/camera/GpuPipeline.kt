@@ -221,11 +221,16 @@ open class GpuPipeline(
     fun sampleCenterPatch(callback: (FloatArray?) -> Unit) {
         val handle = gpuHandle
         if (handle == 0L || stopping) {
-            // Post to glHandler for consistent callback thread (both paths on GL thread).
             glHandler.post { callback(null) }
             return
         }
         glHandler.post {
+            // Re-check stopping: stop() may have run between the outer check and
+            // this lambda executing, releasing the native handle.
+            if (stopping || gpuHandle == 0L) {
+                callback(null)
+                return@post
+            }
             callback(nativeGpuSampleCenterPatch(handle))
         }
     }

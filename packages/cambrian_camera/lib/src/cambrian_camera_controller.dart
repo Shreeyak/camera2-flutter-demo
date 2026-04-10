@@ -383,27 +383,42 @@ class CambrianCamera {
     final gainG = initialGainG;
     var gainB = initialGainB;
 
+    // Snapshot the entry-point settings so they can be restored if the loop
+    // throws before reaching the final committed updateSettings call.
+    final originalSettings = CameraSettings(
+      whiteBalance: WhiteBalance.manual(
+        gainR: initialGainR,
+        gainG: initialGainG,
+        gainB: initialGainB,
+      ),
+    );
+
     final patchBefore = await sampleCenterPatch();
     var lastSample = patchBefore;
 
-    for (var i = 0; i < kWbMaxIterations; i++) {
-      if (wbError(lastSample) < kWbTolerance) break;
-      final gains = wbStep((r: gainR, g: gainG, b: gainB), lastSample);
-      gainR = gains.r;
-      gainB = gains.b;
-      await updateSettings(
-        CameraSettings(
-          whiteBalance: WhiteBalance.manual(
-            gainR: gainR,
-            gainG: gainG,
-            gainB: gainB,
+    try {
+      for (var i = 0; i < kWbMaxIterations; i++) {
+        if (wbError(lastSample) < kWbTolerance) break;
+        final gains = wbStep((r: gainR, g: gainG, b: gainB), lastSample);
+        gainR = gains.r;
+        gainB = gains.b;
+        await updateSettings(
+          CameraSettings(
+            whiteBalance: WhiteBalance.manual(
+              gainR: gainR,
+              gainG: gainG,
+              gainB: gainB,
+            ),
           ),
-        ),
-      );
-      await Future<void>.delayed(
-        const Duration(milliseconds: kCalibrationSettleMs),
-      );
-      lastSample = await sampleCenterPatch();
+        );
+        await Future<void>.delayed(
+          const Duration(milliseconds: kCalibrationSettleMs),
+        );
+        lastSample = await sampleCenterPatch();
+      }
+    } catch (_) {
+      await updateSettings(originalSettings);
+      rethrow;
     }
 
     // Always apply final gains — handles the already-neutral case where the
@@ -444,23 +459,31 @@ class CambrianCamera {
   }) async {
     var accR = 0.0, accG = 0.0, accB = 0.0;
 
+    // Snapshot the caller-supplied params so the original black offsets can be
+    // restored if the loop throws after partial mutations.
+    final originalParams = params;
+
     final patchBefore = await sampleCenterPatch();
     var lastSample = patchBefore;
 
-    for (var i = 0; i < kBbMaxIterations; i++) {
-      if (bbError(lastSample) < kBbTolerance) break;
-      final offsets = bbStep((r: accR, g: accG, b: accB), lastSample);
-      accR = offsets.r;
-      accG = offsets.g;
-      accB = offsets.b;
-      // setProcessingParams is fire-and-forget (void) — no await needed.
-      setProcessingParams(
-        params.copyWith(blackR: accR, blackG: accG, blackB: accB),
-      );
-      await Future<void>.delayed(
-        const Duration(milliseconds: kCalibrationSettleMs),
-      );
-      lastSample = await sampleCenterPatch();
+    try {
+      for (var i = 0; i < kBbMaxIterations; i++) {
+        if (bbError(lastSample) < kBbTolerance) break;
+        final offsets = bbStep((r: accR, g: accG, b: accB), lastSample);
+        accR = offsets.r;
+        accG = offsets.g;
+        accB = offsets.b;
+        await setProcessingParams(
+          params.copyWith(blackR: accR, blackG: accG, blackB: accB),
+        );
+        await Future<void>.delayed(
+          const Duration(milliseconds: kCalibrationSettleMs),
+        );
+        lastSample = await sampleCenterPatch();
+      }
+    } catch (_) {
+      await setProcessingParams(originalParams);
+      rethrow;
     }
 
     final patchAfter = await sampleCenterPatch();
