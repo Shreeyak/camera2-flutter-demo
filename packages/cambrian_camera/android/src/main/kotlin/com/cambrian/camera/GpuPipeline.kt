@@ -25,8 +25,8 @@ import java.util.concurrent.CountDownLatch
  * The preview [Surface] (from Flutter SurfaceProducer) may be null for headless use.
  */
 open class GpuPipeline(
-    private val width: Int,
-    private val height: Int,
+    private var width: Int,
+    private var height: Int,
     private val previewSurface: Surface?,
     private val rawPreviewSurface: Surface?,
     private val rawW: Int,
@@ -168,14 +168,25 @@ open class GpuPipeline(
         var ok = false
         val latch = CountDownLatch(1)
         glHandler.post {
-            // Update SurfaceTexture buffer dimensions before GL resources so the buffer
-            // queue starts allocating new-sized buffers immediately.
-            surfaceTexture?.setDefaultBufferSize(newW, newH)
-            ok = nativeGpuResize(handle, newW, newH, newRawW, newRawH)
-            if (!ok) Log.e(TAG, "nativeGpuResize failed for ${newW}x${newH}")
-            latch.countDown()
+            try {
+                // Update SurfaceTexture buffer dimensions before GL resources so the buffer
+                // queue starts allocating new-sized buffers immediately.
+                surfaceTexture?.setDefaultBufferSize(newW, newH)
+                ok = nativeGpuResize(handle, newW, newH, newRawW, newRawH)
+                if (!ok) Log.e(TAG, "nativeGpuResize failed for ${newW}x${newH}")
+            } finally {
+                latch.countDown()
+            }
         }
-        latch.await()
+        // Timeout guards against indefinite hang if stop() clears the GL handler mid-resize.
+        if (!latch.await(5, java.util.concurrent.TimeUnit.SECONDS)) {
+            Log.e(TAG, "resize: timed out waiting for GL thread")
+            return false
+        }
+        if (ok) {
+            width = newW
+            height = newH
+        }
         return ok
     }
 
