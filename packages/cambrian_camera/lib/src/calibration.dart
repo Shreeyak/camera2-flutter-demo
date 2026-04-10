@@ -1,11 +1,15 @@
 /// Pure calibration math for White Balance and Black Balance.
 ///
 /// These functions contain no Flutter or camera dependencies — they operate
-/// only on numeric inputs and return new values. Extracting them here makes
-/// the algorithms independently testable.
+/// only on numeric inputs and return new values, making them independently
+/// testable.
+///
+/// High-level callers should use [CambrianCamera.calibrateWhiteBalance] and
+/// [CambrianCamera.calibrateBlackBalance] instead of calling these primitives
+/// directly.
 library;
 
-/// A sampled RGB triple from the center patch of the GPU framebuffer.
+/// The mean R, G, B of the 16×16 center patch sampled from the GPU framebuffer.
 /// All values are normalized to [0.0, 1.0].
 typedef RgbSample = ({double r, double g, double b});
 
@@ -14,6 +18,33 @@ typedef WbGains = ({double r, double g, double b});
 
 /// BB accumulated offset triple: (blackR, blackG, blackB).
 typedef BbOffsets = ({double r, double g, double b});
+
+/// Result returned by [CambrianCamera.calibrateWhiteBalance].
+///
+/// [gains] — converged R/G/B gain multipliers; pass to [WhiteBalance.manual].
+/// [patchBefore] — mean RGB of the 16×16 center patch sampled before any
+///   corrections were applied. Each channel in [0.0, 1.0].
+/// [patchAfter] — mean RGB of the 16×16 center patch sampled after the final
+///   gains settled. Useful for before/after display in the UI.
+typedef WbCalibrationResult = ({
+  WbGains gains,
+  RgbSample patchBefore,
+  RgbSample patchAfter,
+});
+
+/// Result returned by [CambrianCamera.calibrateBlackBalance].
+///
+/// [offsets] — converged R/G/B black-level offsets; store and toggle via
+///   [ProcessingParams.copyWith].
+/// [patchBefore] — mean RGB of the 16×16 center patch sampled before any
+///   offsets were applied. Each channel in [0.0, 1.0].
+/// [patchAfter] — mean RGB of the 16×16 center patch sampled after the final
+///   offsets settled.
+typedef BbCalibrationResult = ({
+  BbOffsets offsets,
+  RgbSample patchBefore,
+  RgbSample patchAfter,
+});
 
 // ── White Balance ────────────────────────────────────────────────────────────
 

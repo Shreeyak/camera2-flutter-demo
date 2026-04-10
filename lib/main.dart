@@ -11,14 +11,14 @@ import 'package:cambrian_camera/cambrian_camera.dart'
         CameraTextureInfo,
         FrameResult,
         ProcessingParams,
+        RgbSample,
         quarterTurnsFromDisplayRotation,
         RecordingState,
+        WbGains,
         WhiteBalance,
         WbAuto;
 import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
-
-import 'camera/calibration.dart';
 import 'camera/camera_callbacks.dart';
 import 'camera/camera_settings_values.dart';
 import 'theme/material_theme.dart';
@@ -27,6 +27,7 @@ import 'widgets/bottom_bar.dart';
 import 'widgets/bottom_bar_buttons.dart' show CameraAutoToggleButton;
 import 'widgets/camera_control_overlay.dart'
     show CameraControlOverlay, kCameraDialMaxWidth;
+import 'widgets/calibration_overlay.dart' show CalibrationOverlay;
 import 'widgets/gpu_controls_sidebar.dart'
     show GpuControlsSidebar, CalibrationTarget;
 import 'widgets/recording_hud.dart' show RecordingHud;
@@ -104,16 +105,23 @@ class _CameraScreenState extends State<CameraScreen>
 
   // ── White Balance state ─────────────────────────────────────────────────
   WhiteBalance _wbMode = const WhiteBalance.auto();
-  double? _lastWbGainR, _lastWbGainG, _lastWbGainB;
+  WbGains? _lastWbGains;
+  // ignore: unused_field — stored for future before/after UI display
+  RgbSample? _lastWbPatchBefore;
+  // ignore: unused_field — stored for future before/after UI display
+  RgbSample? _lastWbPatchAfter;
 
   // ── Black Balance state ─────────────────────────────────────────────────
   bool _bbLocked = false;
   double _lastBbR = 0.0, _lastBbG = 0.0, _lastBbB = 0.0;
+  // ignore: unused_field — stored for future before/after UI display
+  RgbSample? _lastBbPatchBefore;
+  // ignore: unused_field — stored for future before/after UI display
+  RgbSample? _lastBbPatchAfter;
 
   // ── Calibration flow state (shared WB/BB) ───────────────────────────────
   bool _isCalibrating = false;
   CalibrationTarget? _calibrationTarget;
-  int _calibrationIteration = 0;
 
   /// Most recent FrameResult — used by WB lock to read current sensor gains.
   FrameResult? _latestFrameResult;
@@ -282,9 +290,7 @@ class _CameraScreenState extends State<CameraScreen>
       final gainB = _latestFrameResult?.wbGainB ?? 1.0;
       setState(() {
         _wbMode = WhiteBalance.manual(gainR: gainR, gainG: gainG, gainB: gainB);
-        _lastWbGainR = gainR;
-        _lastWbGainG = gainG;
-        _lastWbGainB = gainB;
+        _lastWbGains = (r: gainR, g: gainG, b: gainB);
       });
       _applySettings(CameraSettings(whiteBalance: _wbMode));
     } else {
@@ -320,9 +326,9 @@ class _CameraScreenState extends State<CameraScreen>
     _applyProcessingParams(ProcessingParams());
     setState(() {
       _wbMode = const WhiteBalance.auto();
-      _lastWbGainR = null;
-      _lastWbGainG = null;
-      _lastWbGainB = null;
+      _lastWbGains = null;
+      _lastWbPatchBefore = null;
+      _lastWbPatchAfter = null;
       _bbLocked = false;
       _lastBbR = 0.0;
       _lastBbG = 0.0;
@@ -332,10 +338,17 @@ class _CameraScreenState extends State<CameraScreen>
   }
 
   void _onStartCalibration(CalibrationTarget target) {
+    // Second tap on the same target cancels calibration.
+    if (_isCalibrating && _calibrationTarget == target) {
+      setState(() {
+        _isCalibrating = false;
+        _calibrationTarget = null;
+      });
+      return;
+    }
     setState(() {
       _isCalibrating = true;
       _calibrationTarget = target;
-      _calibrationIteration = 0;
     });
 
     // Reset the calibration state so the image starts from a known baseline.
@@ -379,7 +392,6 @@ class _CameraScreenState extends State<CameraScreen>
         setState(() {
           _isCalibrating = false;
           _calibrationTarget = null;
-          _calibrationIteration = 0;
         });
       }
     }
@@ -387,94 +399,39 @@ class _CameraScreenState extends State<CameraScreen>
 
   Future<void> _runWbCalibration() async {
     final camera = _camera;
-    if (camera == null) return;
-
-    var gainR = _latestFrameResult?.wbGainR ?? 1.0;
-    var gainG = _latestFrameResult?.wbGainG ?? 1.0;
-    var gainB = _latestFrameResult?.wbGainB ?? 1.0;
-
-    for (var i = 0; i < kWbMaxIterations; i++) {
-      if (!mounted) return;
-      setState(() => _calibrationIteration = i + 1);
-
-      final sample = await camera.sampleCenterPatch();
-      if (!mounted) return;
-
-      if (wbError(sample) < kWbTolerance) break;
-
-      final gains = wbStep((r: gainR, g: gainG, b: gainB), sample);
-      gainR = gains.r;
-      gainB = gains.b;
-
-      _applySettings(
-        CameraSettings(
-          whiteBalance: WhiteBalance.manual(
-            gainR: gainR,
-            gainG: gainG,
-            gainB: gainB,
-          ),
-        ),
-      );
-
-      await Future.delayed(const Duration(milliseconds: 200));
-      if (!mounted) return;
-    }
-
-    // Always apply the final gains — the loop may have broken early on the
-    // first iteration if the patch was already neutral, leaving the camera in
-    // auto WB without this call.
+    if (camera == null || !mounted) return;
+    final result = await camera.calibrateWhiteBalance(
+      initialGainR: _latestFrameResult?.wbGainR ?? 1.0,
+      initialGainG: _latestFrameResult?.wbGainG ?? 1.0,
+      initialGainB: _latestFrameResult?.wbGainB ?? 1.0,
+    );
     if (mounted) {
-      _applySettings(
-        CameraSettings(
-          whiteBalance: WhiteBalance.manual(
-            gainR: gainR,
-            gainG: gainG,
-            gainB: gainB,
-          ),
-        ),
-      );
       setState(() {
-        _wbMode = WhiteBalance.manual(gainR: gainR, gainG: gainG, gainB: gainB);
-        _lastWbGainR = gainR;
-        _lastWbGainG = gainG;
-        _lastWbGainB = gainB;
+        _wbMode = WhiteBalance.manual(
+          gainR: result.gains.r,
+          gainG: result.gains.g,
+          gainB: result.gains.b,
+        );
+        _lastWbGains = result.gains;
+        _lastWbPatchBefore = result.patchBefore;
+        _lastWbPatchAfter = result.patchAfter;
       });
     }
   }
 
   Future<void> _runBbCalibration() async {
     final camera = _camera;
-    if (camera == null) return;
-
-    var accR = 0.0, accG = 0.0, accB = 0.0;
-
-    for (var i = 0; i < kBbMaxIterations; i++) {
-      if (!mounted) return;
-      setState(() => _calibrationIteration = i + 1);
-
-      final sample = await camera.sampleCenterPatch();
-      if (!mounted) return;
-
-      if (bbError(sample) < kBbTolerance) break;
-
-      final offsets = bbStep((r: accR, g: accG, b: accB), sample);
-      accR = offsets.r;
-      accG = offsets.g;
-      accB = offsets.b;
-
-      _applyProcessingParams(
-        _processingParams.copyWith(blackR: accR, blackG: accG, blackB: accB),
-      );
-
-      await Future.delayed(const Duration(milliseconds: 200));
-      if (!mounted) return;
-    }
-
+    if (camera == null || !mounted) return;
+    final result = await camera.calibrateBlackBalance(
+      params: _processingParams,
+    );
     if (mounted) {
       setState(() {
-        _lastBbR = accR;
-        _lastBbG = accG;
-        _lastBbB = accB;
+        _lastBbR = result.offsets.r;
+        _lastBbG = result.offsets.g;
+        _lastBbB = result.offsets.b;
+        _lastBbPatchBefore = result.patchBefore;
+        _lastBbPatchAfter = result.patchAfter;
         _bbLocked = true;
       });
     }
@@ -749,27 +706,20 @@ class _CameraScreenState extends State<CameraScreen>
                                 params: _processingParams,
                                 onChanged: _applyProcessingParams,
                                 wbMode: _wbMode,
-                                lastWbGains:
-                                    (_lastWbGainR != null &&
-                                        _lastWbGainG != null &&
-                                        _lastWbGainB != null)
+                                lastWbGains: _lastWbGains != null
                                     ? (
-                                        _lastWbGainR!,
-                                        _lastWbGainG!,
-                                        _lastWbGainB!,
+                                        _lastWbGains!.r,
+                                        _lastWbGains!.g,
+                                        _lastWbGains!.b,
                                       )
                                     : null,
                                 bbLocked: _bbLocked,
                                 lastBbValues: _bbLocked
                                     ? (_lastBbR, _lastBbG, _lastBbB)
                                     : null,
-                                isCalibrating: _isCalibrating,
-                                calibrationTarget: _calibrationTarget,
-                                calibrationIteration: _calibrationIteration,
                                 onWbToggle: _onWbToggle,
                                 onBbToggle: _onBbToggle,
                                 onStartCalibration: _onStartCalibration,
-                                onCapture: () => unawaited(_onCapture()),
                                 onResetAll: _onResetAll,
                               ),
                             ),
@@ -895,7 +845,13 @@ class _CameraScreenState extends State<CameraScreen>
             );
           },
         ),
-        if (_isCalibrating) const Positioned.fill(child: _CrosshairOverlay()),
+        if (_isCalibrating && _calibrationTarget != null)
+          Positioned.fill(
+            child: CalibrationOverlay(
+              target: _calibrationTarget!,
+              onConfirm: () => unawaited(_onCapture()),
+            ),
+          ),
       ],
     );
   }
@@ -925,39 +881,4 @@ class _CameraScreenState extends State<CameraScreen>
       },
     );
   }
-}
-
-/// A thin white crosshair centered on the camera preview used during calibration.
-class _CrosshairOverlay extends StatelessWidget {
-  const _CrosshairOverlay();
-
-  @override
-  Widget build(BuildContext context) {
-    return CustomPaint(painter: _CrosshairPainter());
-  }
-}
-
-class _CrosshairPainter extends CustomPainter {
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = Colors.white.withValues(alpha: 0.85)
-      ..strokeWidth = 1.5
-      ..strokeCap = StrokeCap.round;
-
-    final cx = size.width / 2;
-    final cy = size.height / 2;
-    const arm = 24.0;
-    const gap = 8.0;
-
-    // Horizontal arms
-    canvas.drawLine(Offset(cx - arm - gap, cy), Offset(cx - gap, cy), paint);
-    canvas.drawLine(Offset(cx + gap, cy), Offset(cx + arm + gap, cy), paint);
-    // Vertical arms
-    canvas.drawLine(Offset(cx, cy - arm - gap), Offset(cx, cy - gap), paint);
-    canvas.drawLine(Offset(cx, cy + gap), Offset(cx, cy + arm + gap), paint);
-  }
-
-  @override
-  bool shouldRepaint(covariant CustomPainter old) => false;
 }

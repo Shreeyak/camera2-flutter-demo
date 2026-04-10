@@ -383,7 +383,7 @@ void setProcessingParams(ProcessingParams params)
 
 Updates the C++ post-processing pipeline. **Fire-and-forget** — the next frame picks up the new values. No queuing or serialization is applied.
 
-Currently **saturation** is the only parameter applied per-frame. The remaining fields (black balance, gamma, histogram stretch, brightness) are stored and will be wired incrementally.
+All parameters are applied in pipeline order: black balance → brightness → contrast → saturation → gamma.
 
 #### `ProcessingParams`
 
@@ -394,15 +394,16 @@ All fields have sensible defaults (identity/no-op).
 | `blackR` | `double` | 0.0 | [0.0, 0.5] | Red channel black level subtraction |
 | `blackG` | `double` | 0.0 | [0.0, 0.5] | Green channel black level subtraction |
 | `blackB` | `double` | 0.0 | [0.0, 0.5] | Blue channel black level subtraction |
+| `brightness` | `double` | 0.0 | [-1.0, 1.0] | Additive brightness offset |
+| `contrast` | `double` | 0.0 | [-1.0, 1.0] | Contrast adjustment (0.0 = identity) |
+| `saturation` | `double` | 0.0 | [-1.0, 1.0] | Saturation adjustment (0.0 = identity) |
 | `gamma` | `double` | 1.0 | [0.1, 4.0] | Gamma correction (1.0 = identity) |
-| `brightness` | `double` | 0.0 | [-1.0, 1.0] | Brightness offset |
-| `saturation` | `double` | 1.0 | [0, 3] | Saturation multiplier (1.0 = identity) |
 
 ```dart
 camera.setProcessingParams(ProcessingParams(
   gamma: 1.2,
   brightness: 0.1,
-  saturation: 1.3,
+  saturation: 0.3,
 ));
 ```
 
@@ -423,6 +424,105 @@ await camera.setProcessingParams(params);
 ```
 
 See [Settings Persistence](#settings-persistence) for full details.
+
+#### `camera.sampleCenterPatch()`
+
+```dart
+Future<RgbSample> sampleCenterPatch()
+```
+
+Reads the average RGB values from a **16×16 pixel patch** at the center of the current GPU frame. The patch is sampled from the processed pipeline output — after WB and black balance are applied.
+
+Returns an `RgbSample` with `r`, `g`, `b` fields in `[0.0, 1.0]`.
+
+For white balance and black balance calibration, prefer the high-level `calibrateWhiteBalance()` / `calibrateBlackBalance()` methods — they own all patch sampling internally and return `patchBefore`/`patchAfter` for before/after display. Use `sampleCenterPatch()` directly only if you need a one-off measurement.
+
+```dart
+final sample = await camera.sampleCenterPatch();
+print('R: ${sample.r}, G: ${sample.g}, B: ${sample.b}');
+```
+
+> **Note:** `sampleCenterPatch()` reads from the GPU framebuffer via PBO readback. It may return slightly stale pixel values (up to one frame behind) due to the async readback pipeline.
+
+---
+
+#### `camera.calibrateWhiteBalance()`
+
+```dart
+Future<WbCalibrationResult> calibrateWhiteBalance({
+  double initialGainR = 1.0,
+  double initialGainG = 1.0,
+  double initialGainB = 1.0,
+})
+```
+
+Runs the iterative white balance calibration loop. Point the camera at a neutral grey or white surface before calling.
+
+The package samples a **16×16 pixel center patch** before any corrections are applied (`patchBefore`), then iteratively adjusts the R/G/B gains until the patch error falls below 1% or 10 iterations are exhausted. The final gains are applied and a second patch sample is taken (`patchAfter`). The app never needs to call `sampleCenterPatch()` directly.
+
+Returns a `WbCalibrationResult`:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `gains` | `WbGains` | Converged `(r, g, b)` gain multipliers |
+| `patchBefore` | `RgbSample` | Mean 16×16 patch RGB before any corrections |
+| `patchAfter` | `RgbSample` | Mean 16×16 patch RGB after convergence |
+
+Pass `gains` to `WhiteBalance.manual()` to lock the result:
+
+```dart
+final result = await camera.calibrateWhiteBalance(
+  initialGainR: frameResult.wbGainR,
+  initialGainG: frameResult.wbGainG,
+  initialGainB: frameResult.wbGainB,
+);
+camera.updateSettings(CameraSettings(
+  whiteBalance: WhiteBalance.manual(
+    gainR: result.gains.r,
+    gainG: result.gains.g,
+    gainB: result.gains.b,
+  ),
+));
+// Optional: show before/after to the user
+print('Before: ${result.patchBefore}');
+print('After:  ${result.patchAfter}');
+```
+
+---
+
+#### `camera.calibrateBlackBalance()`
+
+```dart
+Future<BbCalibrationResult> calibrateBlackBalance({
+  required ProcessingParams params,
+})
+```
+
+Runs the iterative black balance calibration loop. Cover the lens (or point at a fully dark scene) before calling.
+
+The package samples a **16×16 pixel center patch** before any offsets are applied (`patchBefore`), then iteratively accumulates per-channel black-level offsets until the patch maximum falls below 1% or 10 iterations are exhausted. A second patch sample is taken after convergence (`patchAfter`). The non-black fields in `params` are preserved throughout.
+
+Returns a `BbCalibrationResult`:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `offsets` | `BbOffsets` | Converged `(r, g, b)` black-level offsets |
+| `patchBefore` | `RgbSample` | Mean 16×16 patch RGB before any offsets |
+| `patchAfter` | `RgbSample` | Mean 16×16 patch RGB after convergence |
+
+Apply the result via `setProcessingParams()`:
+
+```dart
+final result = await camera.calibrateBlackBalance(params: currentParams);
+camera.setProcessingParams(currentParams.copyWith(
+  blackR: result.offsets.r,
+  blackG: result.offsets.g,
+  blackB: result.offsets.b,
+));
+// Optional: show before/after to the user
+print('Before: ${result.patchBefore}');
+print('After:  ${result.patchAfter}');
+```
 
 ---
 

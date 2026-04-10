@@ -8,7 +8,6 @@ import 'package:flutter/material.dart'
         CrossAxisAlignment,
         Divider,
         EdgeInsets,
-        ElevatedButton,
         Expanded,
         FontFeature,
         FontWeight,
@@ -28,7 +27,6 @@ import 'package:flutter/material.dart'
         SliderTheme,
         StatelessWidget,
         Text,
-        TextOverflow,
         Theme,
         ValueChanged,
         VoidCallback,
@@ -51,13 +49,9 @@ class GpuControlsSidebar extends StatelessWidget {
     required this.lastWbGains,
     required this.bbLocked,
     required this.lastBbValues,
-    required this.isCalibrating,
-    required this.calibrationTarget,
-    required this.calibrationIteration,
     required this.onWbToggle,
     required this.onBbToggle,
     required this.onStartCalibration,
-    required this.onCapture,
     required this.onResetAll,
   });
 
@@ -78,16 +72,9 @@ class GpuControlsSidebar extends StatelessWidget {
   /// Non-null only after calibration has been performed and lock is active.
   final (double r, double g, double b)? lastBbValues;
 
-  final bool isCalibrating;
-  final CalibrationTarget? calibrationTarget;
-  final int calibrationIteration;
-
   final VoidCallback onWbToggle;
   final VoidCallback onBbToggle;
   final void Function(CalibrationTarget) onStartCalibration;
-
-  /// Called when user taps "Capture" during calibration.
-  final VoidCallback onCapture;
 
   /// Resets all processing params, WB, and BB to factory defaults.
   final VoidCallback onResetAll;
@@ -115,13 +102,9 @@ class GpuControlsSidebar extends StatelessWidget {
             _WbSection(
               wbMode: wbMode,
               lastGains: lastWbGains,
-              isActiveCalibration:
-                  isCalibrating && calibrationTarget == CalibrationTarget.wb,
-              calibrationIteration: calibrationIteration,
               onToggle: onWbToggle,
               onStartCalibration: () =>
                   onStartCalibration(CalibrationTarget.wb),
-              onCapture: onCapture,
             ),
 
             const Divider(height: 24),
@@ -130,13 +113,9 @@ class GpuControlsSidebar extends StatelessWidget {
             _BbSection(
               bbLocked: bbLocked,
               lastValues: lastBbValues,
-              isActiveCalibration:
-                  isCalibrating && calibrationTarget == CalibrationTarget.bb,
-              calibrationIteration: calibrationIteration,
               onToggle: onBbToggle,
               onStartCalibration: () =>
                   onStartCalibration(CalibrationTarget.bb),
-              onCapture: onCapture,
             ),
 
             const Divider(height: 24),
@@ -198,20 +177,14 @@ class _WbSection extends StatelessWidget {
   const _WbSection({
     required this.wbMode,
     required this.lastGains,
-    required this.isActiveCalibration,
-    required this.calibrationIteration,
     required this.onToggle,
     required this.onStartCalibration,
-    required this.onCapture,
   });
 
   final WhiteBalance wbMode;
   final (double r, double g, double b)? lastGains;
-  final bool isActiveCalibration;
-  final int calibrationIteration;
   final VoidCallback onToggle;
   final VoidCallback onStartCalibration;
-  final VoidCallback onCapture;
 
   @override
   Widget build(BuildContext context) {
@@ -237,21 +210,10 @@ class _WbSection extends StatelessWidget {
             ),
             const SizedBox(width: 8),
             Expanded(
-              child: isActiveCalibration
-                  ? ElevatedButton.icon(
-                      onPressed: onCapture,
-                      icon: const Icon(Icons.radio_button_checked, size: 16),
-                      label: Text(
-                        calibrationIteration > 0
-                            ? 'Capture ($calibrationIteration)'
-                            : 'Capture',
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    )
-                  : OutlinedButton(
-                      onPressed: onStartCalibration,
-                      child: const Text('Calibrate'),
-                    ),
+              child: OutlinedButton(
+                onPressed: onStartCalibration,
+                child: const Text('Calibrate'),
+              ),
             ),
           ],
         ),
@@ -277,20 +239,14 @@ class _BbSection extends StatelessWidget {
   const _BbSection({
     required this.bbLocked,
     required this.lastValues,
-    required this.isActiveCalibration,
-    required this.calibrationIteration,
     required this.onToggle,
     required this.onStartCalibration,
-    required this.onCapture,
   });
 
   final bool bbLocked;
   final (double r, double g, double b)? lastValues;
-  final bool isActiveCalibration;
-  final int calibrationIteration;
   final VoidCallback onToggle;
   final VoidCallback onStartCalibration;
-  final VoidCallback onCapture;
 
   @override
   Widget build(BuildContext context) {
@@ -317,21 +273,10 @@ class _BbSection extends StatelessWidget {
             ),
             const SizedBox(width: 8),
             Expanded(
-              child: isActiveCalibration
-                  ? ElevatedButton.icon(
-                      onPressed: onCapture,
-                      icon: const Icon(Icons.radio_button_checked, size: 16),
-                      label: Text(
-                        calibrationIteration > 0
-                            ? 'Capture ($calibrationIteration)'
-                            : 'Capture',
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    )
-                  : OutlinedButton(
-                      onPressed: onStartCalibration,
-                      child: const Text('Calibrate'),
-                    ),
+              child: OutlinedButton(
+                onPressed: onStartCalibration,
+                child: const Text('Calibrate'),
+              ),
             ),
           ],
         ),

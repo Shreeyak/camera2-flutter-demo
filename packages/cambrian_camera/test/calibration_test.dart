@@ -1,5 +1,14 @@
+import 'package:cambrian_camera/src/calibration.dart'
+    show
+        kWbTolerance,
+        kWbMaxIterations,
+        wbError,
+        wbStep,
+        kBbTolerance,
+        kBbMaxIterations,
+        bbError,
+        bbStep;
 import 'package:flutter_test/flutter_test.dart';
-import 'package:camera2_flutter_demo/camera/calibration.dart';
 
 void main() {
   // ── wbError ─────────────────────────────────────────────────────────────

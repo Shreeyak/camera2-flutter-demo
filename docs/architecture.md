@@ -764,7 +764,7 @@ Applied per-fragment in `GpuRenderer.cpp` (`kFragSrc`), in this order:
 
 ### White Balance and Black Balance calibration
 
-Both algorithms are iterative and driven from the Flutter layer. The GPU shader applies the corrections; the Dart layer reads back a 16×16-pixel center patch via `sampleCenterPatch()` (JNI → GL thread → `glReadPixels` on `fbo_`) and adjusts the parameters.
+Both algorithms are iterative and fully encapsulated inside the `cambrian_camera` package. Callers invoke `camera.calibrateWhiteBalance()` or `camera.calibrateBlackBalance()` — the package owns all patch sampling and returns before/after results. The GPU shader applies the corrections; the Dart layer reads back a **16×16-pixel center patch** via `sampleCenterPatch()` (JNI → GL thread → `glReadPixels` on `fbo_`) between iterations.
 
 **White Balance** — uses Camera2 ISP hardware (`COLOR_CORRECTION_GAINS`, `RggbChannelVector`). Green is the fixed reference channel. Each iteration:
 ```text
@@ -779,7 +779,7 @@ accR += sample.r,  accG += sample.g,  accB += sample.b
 ```
 Convergence: `max(r, g, b) < 0.01`. Max 10 iterations.
 
-Pure math lives in `lib/camera/calibration.dart` (`wbError`, `wbStep`, `bbError`, `bbStep`); the loop and UI state live in `_CameraScreenState` in `main.dart`.
+Pure math primitives (`wbError`, `wbStep`, `bbError`, `bbStep`) live in `packages/cambrian_camera/lib/src/calibration.dart`. The high-level loops, patch sampling, and settings updates are in `CambrianCamera.calibrateWhiteBalance()` / `calibrateBlackBalance()` in `cambrian_camera_controller.dart`. Both methods return a result struct with `patchBefore` and `patchAfter` fields (the 16×16 mean RGB sampled before and after convergence) so callers can display a before/after comparison without calling `sampleCenterPatch()` themselves.
 
 ### Consumer fan-out
 

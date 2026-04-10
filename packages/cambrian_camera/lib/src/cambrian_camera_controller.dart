@@ -3,6 +3,19 @@ import 'dart:async';
 import 'package:flutter/foundation.dart' show debugPrint, kDebugMode;
 import 'package:flutter/widgets.dart';
 
+import 'calibration.dart'
+    show
+        BbCalibrationResult,
+        RgbSample,
+        WbCalibrationResult,
+        bbError,
+        bbStep,
+        kBbMaxIterations,
+        kBbTolerance,
+        kWbMaxIterations,
+        kWbTolerance,
+        wbError,
+        wbStep;
 import 'camera_settings.dart';
 import 'camera_settings_serializer.dart';
 import 'camera_state.dart';
@@ -330,11 +343,122 @@ class CambrianCamera {
 
   /// Samples the center 16×16 pixel patch of the most recent GPU-processed frame.
   ///
-  /// Returns the mean R, G, B as a Dart record with values in [0.0, 1.0].
+  /// Returns the mean R, G, B as [RgbSample] with values in [0.0, 1.0].
   /// Returns (r: 0.5, g: 0.5, b: 0.5) if no frame has been rendered yet.
-  Future<({double r, double g, double b})> sampleCenterPatch() async {
+  ///
+  /// Most callers should use [calibrateWhiteBalance] or [calibrateBlackBalance]
+  /// instead of calling this directly.
+  Future<RgbSample> sampleCenterPatch() async {
     final cam = await _hostApi.sampleCenterPatch(_handle);
     return (r: cam.r, g: cam.g, b: cam.b);
+  }
+
+  /// Runs the iterative white balance calibration loop.
+  ///
+  /// Samples the mean RGB of a 16×16 pixel patch at the center of the processed
+  /// frame. Takes a snapshot before any corrections ([patchBefore]) and another
+  /// after convergence ([patchAfter]) — useful for before/after display in the UI.
+  /// Between samples, applies proportional R/G/B gain corrections via
+  /// [updateSettings] until the patch error falls below [kWbTolerance] or
+  /// [kWbMaxIterations] is reached.
+  ///
+  /// The app does not need to call [sampleCenterPatch] directly — this method
+  /// owns both patch reads and returns them in [WbCalibrationResult].
+  ///
+  /// [initialGainR], [initialGainG], [initialGainB] seed the first loop
+  /// iteration. Pass the current AWB values from [FrameResult] when available;
+  /// defaults to 1.0.
+  Future<WbCalibrationResult> calibrateWhiteBalance({
+    double initialGainR = 1.0,
+    double initialGainG = 1.0,
+    double initialGainB = 1.0,
+  }) async {
+    var gainR = initialGainR;
+    final gainG = initialGainG;
+    var gainB = initialGainB;
+
+    final patchBefore = await sampleCenterPatch();
+    var lastSample = patchBefore;
+
+    for (var i = 0; i < kWbMaxIterations; i++) {
+      if (wbError(lastSample) < kWbTolerance) break;
+      final gains = wbStep((r: gainR, g: gainG, b: gainB), lastSample);
+      gainR = gains.r;
+      gainB = gains.b;
+      await updateSettings(
+        CameraSettings(
+          whiteBalance: WhiteBalance.manual(
+            gainR: gainR,
+            gainG: gainG,
+            gainB: gainB,
+          ),
+        ),
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+      lastSample = await sampleCenterPatch();
+    }
+
+    // Always apply final gains — handles the already-neutral case where the
+    // loop exits on the first iteration without ever calling updateSettings.
+    await updateSettings(
+      CameraSettings(
+        whiteBalance: WhiteBalance.manual(
+          gainR: gainR,
+          gainG: gainG,
+          gainB: gainB,
+        ),
+      ),
+    );
+    final patchAfter = await sampleCenterPatch();
+    return (
+      gains: (r: gainR, g: gainG, b: gainB),
+      patchBefore: patchBefore,
+      patchAfter: patchAfter,
+    );
+  }
+
+  /// Runs the iterative black balance calibration loop.
+  ///
+  /// Samples the mean RGB of a 16×16 pixel patch at the center of the processed
+  /// frame. Takes a snapshot before any corrections ([patchBefore]) and another
+  /// after convergence ([patchAfter]) — useful for before/after display in the UI.
+  /// Between samples, accumulates per-channel black-level offsets and applies
+  /// them via [setProcessingParams] until the patch error falls below
+  /// [kBbTolerance] or [kBbMaxIterations] is reached.
+  ///
+  /// The app does not need to call [sampleCenterPatch] directly — this method
+  /// owns both patch reads and returns them in [BbCalibrationResult].
+  ///
+  /// [params] is the current [ProcessingParams]; non-black fields are preserved
+  /// across each iteration's [setProcessingParams] call.
+  Future<BbCalibrationResult> calibrateBlackBalance({
+    required ProcessingParams params,
+  }) async {
+    var accR = 0.0, accG = 0.0, accB = 0.0;
+
+    final patchBefore = await sampleCenterPatch();
+    var lastSample = patchBefore;
+
+    for (var i = 0; i < kBbMaxIterations; i++) {
+      if (bbError(lastSample) < kBbTolerance) break;
+      final offsets = bbStep((r: accR, g: accG, b: accB), lastSample);
+      accR = offsets.r;
+      accG = offsets.g;
+      accB = offsets.b;
+      // setProcessingParams is fire-and-forget (void) — no await needed.
+      setProcessingParams(
+        params.copyWith(blackR: accR, blackG: accG, blackB: accB),
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+      lastSample = await sampleCenterPatch();
+    }
+
+    final patchAfter = await sampleCenterPatch();
+    return (
+      offsets: (r: accR, g: accG, b: accB),
+      patchBefore: patchBefore,
+      patchAfter: patchAfter,
+    );
   }
 
   /// Captures a high-quality still image and returns its file path.
