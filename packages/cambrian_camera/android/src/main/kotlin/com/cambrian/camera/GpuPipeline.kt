@@ -27,8 +27,8 @@ import java.util.concurrent.CountDownLatch
 open class GpuPipeline(
     private var width: Int,
     private var height: Int,
-    private val previewSurface: Surface?,
-    private val rawPreviewSurface: Surface?,
+    private var previewSurface: Surface?,
+    private var rawPreviewSurface: Surface?,
     private val rawW: Int,
     private val rawH: Int,
     private val context: Context,
@@ -173,15 +173,7 @@ open class GpuPipeline(
                 // queue starts allocating new-sized buffers immediately.
                 surfaceTexture?.setDefaultBufferSize(newW, newH)
                 ok = nativeGpuResize(handle, newW, newH, newRawW, newRawH)
-                if (!ok) {
-                    Log.e(TAG, "nativeGpuResize failed for ${newW}x${newH}")
-                } else {
-                    // Recreate the EGL window surface so its backing buffer geometry matches
-                    // the new dimensions. Without this, the old EGL surface is still sized at
-                    // the previous resolution; the blit only fills its top-left corner and the
-                    // rest of the frame shows the stale previous image.
-                    nativeGpuRebindPreviewSurface(handle, previewSurface)
-                }
+                if (!ok) Log.e(TAG, "nativeGpuResize failed for ${newW}x${newH}")
             } finally {
                 latch.countDown()
             }
@@ -218,6 +210,7 @@ open class GpuPipeline(
     fun rebindRawSurface(surface: Surface?) {
         val handle = gpuHandle
         if (handle == 0L) return
+        rawPreviewSurface = surface
         glHandler.post {
             nativeGpuRebindRawSurface(handle, surface)
         }
@@ -230,6 +223,7 @@ open class GpuPipeline(
     fun rebindPreviewSurface(surface: Surface?) {
         val handle = gpuHandle
         if (handle == 0L) return
+        previewSurface = surface
         glHandler.post {
             nativeGpuRebindPreviewSurface(handle, surface)
         }
