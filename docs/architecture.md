@@ -307,7 +307,7 @@ class FrameResult {
 
 Defined in `packages/cambrian_camera/pigeons/camera_api.dart`. Generated outputs: `messages.g.dart` (Dart), `Messages.g.kt` (Kotlin), `Messages.g.swift` (iOS stub).
 
-**HostApi** (Dart → Kotlin): `open`, `getCapabilities`, `updateSettings`, `setProcessingParams`, `setResolution`, `takePicture`, `getNativePipelineHandle`, `startRecording`, `stopRecording`, `getDisplayRotation`, `close`
+**HostApi** (Dart → Kotlin): `open`, `getCapabilities`, `updateSettings`, `setResolution`, `setProcessingParams`, `takePicture`, `getNativePipelineHandle`, `startRecording`, `stopRecording`, `close`, `pause`, `resume`, `getPersistedProcessingParams`, `getDisplayRotation`
 
 **FlutterApi** (Kotlin → Dart): `onStateChanged`, `onError`, `onFrameResult`, `onRecordingStateChanged`
 

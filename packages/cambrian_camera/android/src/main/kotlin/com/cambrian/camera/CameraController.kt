@@ -721,6 +721,11 @@ class CameraController(
                 mainHandler.post { callback(Result.success(Unit)) }
                 return@post
             }
+            // Cancel any pending recovery retry — a scheduled retry can fire while we are
+            // mid-reconfigure (state stays RECOVERING throughout) and call teardown()/doReopenCamera()
+            // concurrently, corrupting the capture session rebuild.
+            pendingRetryRunnable?.let { backgroundHandler.removeCallbacks(it) }
+            pendingRetryRunnable = null
             Log.i("CC/Cam", "[$handle] setResolution ${previewWidth}x${previewHeight} -> ${width}x${height}")
             requestedWidth = width
             requestedHeight = height

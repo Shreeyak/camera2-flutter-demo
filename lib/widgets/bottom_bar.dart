@@ -153,7 +153,9 @@ class _MainActionBar extends StatelessWidget {
               const SizedBox(width: 16),
               BottomBarActionButton(
                 icon: Icons.photo_size_select_large,
-                label: 'RESOLUTION',
+                label: currentResolutionLabel.isNotEmpty
+                    ? currentResolutionLabel
+                    : 'RESOLUTION',
                 isDisabled: availableResolutions.isEmpty,
                 onTap: () => showResolutionPicker(
                   context,

@@ -303,16 +303,20 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
   /// Handles user selection of a new stream resolution from the popup menu.
   Future<void> _onResolutionSelected(CameraSize size) async {
     final camera = _camera;
-    if (camera == null || _isRecording) return;
+    if (camera == null || _isRecording || _recordingActionInProgress) return;
+    setState(() => _recordingActionInProgress = true);
     try {
       await camera.setResolution(size.width, size.height);
       if (!mounted) return;
       final caps = camera.capabilities;
       setState(() {
         _currentResolutionLabel = '${caps.streamWidth}x${caps.streamHeight}';
+        _availableResolutions = caps.supportedSizes;
       });
     } catch (e) {
       if (mounted) _showError('Resolution change failed: $e');
+    } finally {
+      if (mounted) setState(() => _recordingActionInProgress = false);
     }
   }
 
