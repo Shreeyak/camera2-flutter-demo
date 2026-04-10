@@ -50,6 +50,13 @@ class _ResolutionPickerDialogState extends State<_ResolutionPickerDialog> {
   // Wide enough for the longest resolution label (e.g. "4208x3120") in
   // monospace, plus ListTile horizontal padding. Keeps the dialog compact.
   static const double _contentWidth = 160.0;
+  // Vertical inset between the dialog title and the list, and below the list.
+  // 8 px matches AlertDialog's default section spacing without adding extra whitespace.
+  static const double _dialogVerticalPadding = 8.0;
+  // Extra horizontal room added to _contentWidth for the dialog border/shadow.
+  // AlertDialog adds ~24 px of internal horizontal padding on each side; 48 px
+  // total ensures the dialog chrome never clips the content.
+  static const double _dialogWidthPadding = 48.0;
 
   late final ScrollController _scrollController;
   late final int _selectedIndex;
@@ -91,9 +98,9 @@ class _ResolutionPickerDialogState extends State<_ResolutionPickerDialog> {
     final cs = Theme.of(context).colorScheme;
     return AlertDialog(
       title: const Text('Resolution'),
-      contentPadding: const EdgeInsets.symmetric(vertical: 8),
+      contentPadding: const EdgeInsets.symmetric(vertical: _dialogVerticalPadding),
       // Constrain dialog width so it wraps the text rather than filling the screen.
-      constraints: const BoxConstraints(maxWidth: _contentWidth + 48),
+      constraints: const BoxConstraints(maxWidth: _contentWidth + _dialogWidthPadding),
       content: SizedBox(
         width: _contentWidth,
         height: _listHeight,

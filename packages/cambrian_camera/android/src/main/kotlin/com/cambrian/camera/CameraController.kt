@@ -755,7 +755,18 @@ class CameraController(
             captureResultCount = 0L
 
             // Resolve new stream format (uses requestedWidth/requestedHeight set above).
-            val (_, streamWidth, streamHeight) = resolveStreamFormat(device)
+            // If the requested size is not in the supported list, resolveStreamFormat throws.
+            // Reset the request to the last-known-good size and let handleNonFatalError recover
+            // rather than leaving the camera stuck in RECOVERING with no capture session.
+            val (_, streamWidth, streamHeight) = try {
+                resolveStreamFormat(device)
+            } catch (e: IllegalArgumentException) {
+                requestedWidth = previewWidth
+                requestedHeight = previewHeight
+                handleNonFatalError(CamErrorCode.CONFIGURATION_FAILED, e.message ?: "Unsupported resolution")
+                mainHandler.post { callback(Result.failure(FlutterError("unsupported_resolution", e.message, null))) }
+                return@post
+            }
             previewWidth = streamWidth
             previewHeight = streamHeight
             surfaceProducer.setSize(streamWidth, streamHeight)
@@ -1528,7 +1539,7 @@ class CameraController(
             if (match != null) {
                 return Triple(ImageFormat.YUV_420_888, match.width, match.height)
             }
-            Log.w("CC/Cam", "Requested ${requestedWidth}x${requestedHeight} not in supported YUV sizes — falling back to default")
+            throw IllegalArgumentException("Requested ${requestedWidth}x${requestedHeight} not in supported YUV sizes")
         }
 
         // Default: largest 4:3 YUV size.

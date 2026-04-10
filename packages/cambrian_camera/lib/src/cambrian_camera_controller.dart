@@ -323,8 +323,10 @@ class CambrianCamera {
     if (_closed) return;
     if (kDebugMode) debugPrint('CC/Dart: setResolution handle=$_handle ${width}x$height');
     await _hostApi.setResolution(_handle, width, height);
+    if (_closed) return;
     // Re-fetch capabilities so streamWidth/streamHeight reflect the new resolution.
     final caps = await _hostApi.getCapabilities(_handle);
+    if (_closed) return;
     _capabilities = CameraCapabilities.fromPigeon(caps);
     // The Kotlin "streaming" state event fires before setResolution() returns its
     // Pigeon reply, so toneMappedTexture emits with stale capabilities. Re-emit

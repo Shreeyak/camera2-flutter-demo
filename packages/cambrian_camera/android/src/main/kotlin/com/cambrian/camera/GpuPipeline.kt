@@ -396,6 +396,21 @@ open class GpuPipeline(
         @JvmStatic
         external fun nativeGpuRelease(gpuHandle: Long)
 
+        /**
+         * Releases and reinitialises GL resources (FBOs, PBOs, textures) at new dimensions.
+         *
+         * Must be called from the GL thread — the same thread that owns the EGL context
+         * and executes all other GPU operations (drawAndReadback, sampleCenterPatch, etc.).
+         *
+         * @param gpuHandle Opaque handle returned by [nativeGpuInit].
+         * @param newW      New processed-preview frame width in pixels.
+         * @param newH      New processed-preview frame height in pixels.
+         * @param newRawW   New raw-stream width in pixels (0 if raw stream is disabled).
+         * @param newRawH   New raw-stream height in pixels (0 if raw stream is disabled).
+         * @return true if GL re-init succeeded and the pipeline is ready to render at the
+         *         new size; false if any GL call failed (caller should treat this as a
+         *         non-recoverable GPU error and delegate to full camera recovery).
+         */
         @JvmStatic
         external fun nativeGpuResize(gpuHandle: Long, newW: Int, newH: Int, newRawW: Int, newRawH: Int): Boolean
 
