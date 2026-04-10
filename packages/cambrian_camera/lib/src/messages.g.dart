@@ -459,6 +459,38 @@ class CamFrameResult {
   }
 }
 
+/// Mean R, G, B from a sampled image patch. All values in [0.0, 1.0].
+class CamRgbSample {
+  CamRgbSample({
+    required this.r,
+    required this.g,
+    required this.b,
+  });
+
+  double r;
+
+  double g;
+
+  double b;
+
+  Object encode() {
+    return <Object?>[
+      r,
+      g,
+      b,
+    ];
+  }
+
+  static CamRgbSample decode(Object result) {
+    result as List<Object?>;
+    return CamRgbSample(
+      r: result[0]! as double,
+      g: result[1]! as double,
+      b: result[2]! as double,
+    );
+  }
+}
+
 
 class _PigeonCodec extends StandardMessageCodec {
   const _PigeonCodec();
@@ -491,6 +523,9 @@ class _PigeonCodec extends StandardMessageCodec {
     }    else if (value is CamFrameResult) {
       buffer.putUint8(136);
       writeValue(buffer, value.encode());
+    }    else if (value is CamRgbSample) {
+      buffer.putUint8(137);
+      writeValue(buffer, value.encode());
     } else {
       super.writeValue(buffer, value);
     }
@@ -516,6 +551,8 @@ class _PigeonCodec extends StandardMessageCodec {
         return CamError.decode(readValue(buffer)!);
       case 136: 
         return CamFrameResult.decode(readValue(buffer)!);
+      case 137: 
+        return CamRgbSample.decode(readValue(buffer)!);
       default:
         return super.readValueOfType(type, buffer);
     }
@@ -891,6 +928,37 @@ class CameraHostApi {
       );
     } else {
       return (pigeonVar_replyList[0] as int?)!;
+    }
+  }
+
+  /// Samples the center 16×16 pixel patch of the most recent GPU-processed
+  /// RGBA frame and returns the mean R, G, B as values in [0.0, 1.0].
+  ///
+  /// Returns (0.5, 0.5, 0.5) if no frame has been rendered yet.
+  Future<CamRgbSample> sampleCenterPatch(int handle) async {
+    final String pigeonVar_channelName = 'dev.flutter.pigeon.cambrian_camera.CameraHostApi.sampleCenterPatch$pigeonVar_messageChannelSuffix';
+    final BasicMessageChannel<Object?> pigeonVar_channel = BasicMessageChannel<Object?>(
+      pigeonVar_channelName,
+      pigeonChannelCodec,
+      binaryMessenger: pigeonVar_binaryMessenger,
+    );
+    final List<Object?>? pigeonVar_replyList =
+        await pigeonVar_channel.send(<Object?>[handle]) as List<Object?>?;
+    if (pigeonVar_replyList == null) {
+      throw _createConnectionError(pigeonVar_channelName);
+    } else if (pigeonVar_replyList.length > 1) {
+      throw PlatformException(
+        code: pigeonVar_replyList[0]! as String,
+        message: pigeonVar_replyList[1] as String?,
+        details: pigeonVar_replyList[2],
+      );
+    } else if (pigeonVar_replyList[0] == null) {
+      throw PlatformException(
+        code: 'null-error',
+        message: 'Host platform returned null value for non-null return value.',
+      );
+    } else {
+      return (pigeonVar_replyList[0] as CamRgbSample?)!;
     }
   }
 }

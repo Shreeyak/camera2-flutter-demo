@@ -754,19 +754,39 @@ flowchart TD
 
 Applied per-fragment in `GpuRenderer.cpp` (`kFragSrc`), in this order:
 
-1. **Black balance** — per-channel level subtraction: `rgb = max(rgb - uBlackBalance, 0.0)`
-2. **Brightness** (`uBrightness` in [-1, +1], 0 = identity) — branch on sign:
+1. **White balance gains** — Camera2 ISP hardware (`COLOR_CORRECTION_GAINS`), applied before the frame reaches the GPU
+2. **Black balance** — per-channel level subtraction: `rgb = max(rgb - uBlackBalance, 0.0)`
+3. **Brightness** (`uBrightness` in [-1, +1], 0 = identity) — branch on sign:
    - Positive: reverse gamma lift — `output = 1.0 - pow(1.0 - color, vec3(pow(2.7, b)))` (flat toe, highlights lift fast)
    - Negative: multiplicative dim — `output = color * (1.0 + b * 0.75)` (black anchored, highlights scale down)
    - Input clamped to [0, 1] before `pow()` to prevent NaN on super-white pixels.
-3. **Contrast** (`uContrast` in [-1, +1], 0 = identity) — forward/inverse sigmoid per channel. UI range [-1, +1] is scaled to [-0.5, +0.5] internally to keep extremes usable. Let `e = color - 0.5`:
+4. **Contrast** (`uContrast` in [-1, +1], 0 = identity) — forward/inverse sigmoid per channel. UI range [-1, +1] is scaled to [-0.5, +0.5] internally to keep extremes usable. Let `e = color - 0.5`:
    - `c >= 0`: `k = 1 - c`, `output = 0.5 + e / (k + abs(2*e) * (1 - k))`
    - `c < 0`:  `k = 1 + c`, `output = 0.5 + e*k / (1 - abs(2*e) * (1 - k))`
    - Denominator guarded with `max(..., 1e-3)` to prevent division by zero.
-4. **Saturation** (`uSaturation` in [-1, +1], 0 = identity) — luminance-weighted blend:
+5. **Saturation** (`uSaturation` in [-1, +1], 0 = identity) — luminance-weighted blend:
    - `lum = dot(color, vec3(0.299, 0.587, 0.114))`
    - `output = clamp(mix(vec3(lum), color, 1.0 + s), 0.0, 1.0)`
-5. **Gamma** (`uGamma`, 1.0 = identity) — standard power curve: `output = pow(color, vec3(1.0 / max(g, 0.001)))`
+6. **Gamma** (`uGamma`, 1.0 = identity) — standard power curve: `output = pow(color, vec3(1.0 / max(g, 0.001)))`
+
+### White Balance and Black Balance calibration
+
+Both algorithms are iterative and fully encapsulated inside the `cambrian_camera` package. Callers invoke `camera.calibrateWhiteBalance()` or `camera.calibrateBlackBalance()` — the package owns all patch sampling and returns before/after results. The GPU shader applies the corrections; the Dart layer reads back a **96×96-pixel center patch** via `sampleCenterPatch()` (JNI → GL thread → `glReadPixels` on `fbo_`) between iterations. The average discards the top and bottom 15% of pixel values per channel (histogram-based trimmed mean) to eliminate hot pixels and specular outliers.
+
+**White Balance** — uses Camera2 ISP hardware (`COLOR_CORRECTION_GAINS`, `RggbChannelVector`). Green is the fixed reference channel. Each iteration:
+```text
+gainR *= sample.g / sample.r
+gainB *= sample.g / sample.b
+```
+Convergence: `max(|r−g|, |b−g|) / g < 0.01`. Max 10 iterations.
+
+**Black Balance** — uses `ProcessingParams.blackR/G/B` (GPU shader: `rgb = max(rgb − black, 0)`). Each iteration accumulates the residual:
+```text
+accR += sample.r,  accG += sample.g,  accB += sample.b
+```
+Convergence: `max(r, g, b) < 0.01`. Max 10 iterations.
+
+Pure math primitives (`wbError`, `wbStep`, `bbError`, `bbStep`) live in `packages/cambrian_camera/lib/src/calibration.dart`. The high-level loops, patch sampling, and settings updates are in `CambrianCamera.calibrateWhiteBalance()` / `calibrateBlackBalance()` in `cambrian_camera_controller.dart`. Both methods return a result struct with `patchBefore` and `patchAfter` fields (the 96×96 trimmed-mean RGB sampled before and after convergence) so callers can display a before/after comparison without calling `sampleCenterPatch()` themselves.
 
 ### Consumer fan-out
 

@@ -3,7 +3,7 @@ import 'dart:math' show max, min;
 import 'package:cambrian_camera/cambrian_camera.dart'
     show CameraSettings, Manual;
 
-enum CameraSettingType { iso, shutter, focus, wb, zoom }
+enum CameraSettingType { iso, shutter, focus, zoom }
 
 class CameraRanges {
   final int isoMin;
@@ -31,18 +31,15 @@ class CameraRanges {
 class CameraSettingsValues {
   final int isoValue;
   final int exposureTimeNs;
-
-  /// Focus distance in diopters. Valid range is [0.0, minFocusDiopters].
-  /// Higher diopter values indicate closer focus distance.
+  /// Focus distance in diopters. Only used when [afEnabled] is false.
   final double focusDiopters;
   final double zoomRatio;
   final bool afEnabled;
-  final bool wbLocked;
 
-  /// When true, Camera2 auto-exposure controls ISO; [isoValue] is ignored.
+  /// When true, Camera2 auto-exposure controls ISO.
   final bool isoAuto;
 
-  /// When true, Camera2 auto-exposure controls shutter speed; [exposureTimeNs] is ignored.
+  /// When true, Camera2 auto-exposure controls shutter speed.
   final bool exposureAuto;
 
   const CameraSettingsValues({
@@ -51,16 +48,13 @@ class CameraSettingsValues {
     this.focusDiopters = 0.1,
     this.zoomRatio = 1.0,
     this.afEnabled = false,
-    this.wbLocked = false,
     this.isoAuto = true,
     this.exposureAuto = true,
   });
 
-  /// Constructs the initial UI state from the [CameraSettings] passed to
-  /// [CambrianCamera.open] and the device capability [ranges].
-  ///
-  /// This keeps the open() call and the UI's initial display in sync: whatever
-  /// is passed to the camera is exactly what the UI reflects.
+  /// Builds a [CameraSettingsValues] snapshot from live [CameraSettings] and
+  /// the camera's [CameraRanges]. Used to initialize UI controls when the
+  /// camera starts or settings change.
   factory CameraSettingsValues.fromSettings(
     CameraSettings settings,
     CameraRanges ranges,
@@ -86,21 +80,18 @@ class CameraSettingsValues {
       focusDiopters: focusDiopters,
       zoomRatio: settings.zoomRatio ?? ranges.minZoomRatio,
       afEnabled: afEnabled,
-      wbLocked: false,
       isoAuto: isoAuto,
       exposureAuto: exposureAuto,
     );
   }
 
   factory CameraSettingsValues.initialFromRanges(CameraRanges ranges) {
-    final clampedFocusDiopters = min(0.1, ranges.focusMaxDiopters);
     return CameraSettingsValues(
       isoValue: max(ranges.isoMin, min(200, ranges.isoMax)),
       exposureTimeNs: max(ranges.exposureTimeMinNs, min(250000, ranges.exposureTimeMaxNs)),
-      focusDiopters: clampedFocusDiopters,
+      focusDiopters: min(0.1, ranges.focusMaxDiopters),
       zoomRatio: ranges.minZoomRatio,
       afEnabled: true,
-      wbLocked: false,
       isoAuto: true,
       exposureAuto: true,
     );
@@ -112,7 +103,6 @@ class CameraSettingsValues {
     double? focusDiopters,
     double? zoomRatio,
     bool? afEnabled,
-    bool? wbLocked,
     bool? isoAuto,
     bool? exposureAuto,
   }) {
@@ -122,7 +112,6 @@ class CameraSettingsValues {
       focusDiopters: focusDiopters ?? this.focusDiopters,
       zoomRatio: zoomRatio ?? this.zoomRatio,
       afEnabled: afEnabled ?? this.afEnabled,
-      wbLocked: wbLocked ?? this.wbLocked,
       isoAuto: isoAuto ?? this.isoAuto,
       exposureAuto: exposureAuto ?? this.exposureAuto,
     );

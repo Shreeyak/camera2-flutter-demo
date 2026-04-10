@@ -93,17 +93,6 @@ class CameraSettingsBar extends StatelessWidget {
                         ),
                       ),
                       CameraSettingChip(
-                        icon: Icons.wb_auto,
-                        label: 'WB',
-                        valueLabel: values.wbLocked ? 'LOCK' : 'AUTO',
-                        isActive: activeSetting == CameraSettingType.wb,
-                        onTap: () => onSettingChipTap(
-                          activeSetting == CameraSettingType.wb
-                              ? null
-                              : CameraSettingType.wb,
-                        ),
-                      ),
-                      CameraSettingChip(
                         icon: Icons.zoom_in,
                         label: 'ZOOM',
                         valueLabel: '${values.zoomRatio.toStringAsFixed(1)}×',

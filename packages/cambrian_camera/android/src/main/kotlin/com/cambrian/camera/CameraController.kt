@@ -952,6 +952,25 @@ class CameraController(
     }
 
     /**
+     * Samples the center 96×96 pixels of the most recent GPU-processed frame.
+     *
+     * Delegates to [GpuPipeline.sampleCenterPatch] and wraps the result back
+     * to [mainHandler] before invoking [callback].
+     * Calls back with null if the GPU pipeline is unavailable or no frame has
+     * been rendered yet — callers must treat null as an error.
+     */
+    fun sampleCenterPatch(callback: (FloatArray?) -> Unit) {
+        val pipeline = gpuPipeline
+        if (pipeline == null) {
+            mainHandler.post { callback(null) }
+            return
+        }
+        pipeline.sampleCenterPatch { rgb ->
+            mainHandler.post { callback(rgb) }
+        }
+    }
+
+    /**
      * Captures a still JPEG image using Camera2's hardware ISP ImageReader.
      *
      * **Important:** This method bypasses the GPU post-processing pipeline. The resulting image
