@@ -34,7 +34,7 @@ import 'messages.g.dart';
 /// ));
 /// camera.setProcessingParams(ProcessingParams(brightness: 0.2));
 /// // Capture a still image
-/// final path = await camera.takePicture();
+/// final path = await camera.captureNaturalPicture();
 /// // Clean up
 /// await camera.close();
 /// ```
@@ -320,11 +320,38 @@ class CambrianCamera {
     );
   }
 
-  /// Captures a high-quality still image and returns its file path.
+  /// Captures a still image using Camera2's hardware ISP and returns its file path.
+  ///
+  /// **Important:** This method bypasses the GPU post-processing pipeline. The resulting
+  /// image reflects raw ISP output — no LUT, color transforms (saturation, contrast,
+  /// brightness, black-level, gamma) or other adjustments applied by the GPU pipeline
+  /// are present. Use this when you need the highest-fidelity hardware-encoded JPEG.
+  ///
+  /// For a post-processed image matching what the user sees on screen, use [captureImage].
   ///
   /// Uses a dedicated JPEG ImageReader pre-allocated at session setup time.
   /// Does not interrupt the streaming pipeline.
-  Future<String> takePicture() => _hostApi.takePicture(_handle);
+  Future<String> captureNaturalPicture() => _hostApi.captureNaturalPicture(_handle);
+
+  /// Captures the GPU post-processed frame (what the user sees on screen) and saves to disk.
+  ///
+  /// Reads the next full-resolution RGBA frame from the C++ pipeline after the call
+  /// (~one frame interval delay, ≤33 ms at 30 fps), then encodes and saves it.
+  ///
+  /// **Format** is inferred from [fileName]'s extension:
+  /// - `.jpg` / `.jpeg` → JPEG (quality 90)
+  /// - `.png` or absent / unrecognised extension → PNG (lossless)
+  ///
+  /// **Default directory** is the app-specific Pictures folder
+  /// (`getExternalFilesDir(DIRECTORY_PICTURES)`). No extra storage permissions are
+  /// required on Android 13+.
+  ///
+  /// **EXIF metadata** (ISO, exposure time, focal length, aperture, white-balance gains,
+  /// orientation, and capture timestamp) is written automatically.
+  ///
+  /// Returns the absolute file path of the saved image.
+  Future<String> captureImage({String? outputDirectory, String? fileName}) =>
+      _hostApi.captureImage(_handle, outputDirectory, fileName);
 
   /// Returns the current display rotation in degrees CW from portrait: 0, 90, 180, or 270.
   ///

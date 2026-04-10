@@ -153,8 +153,15 @@ The file is written to disk continuously from the moment `startRecording()` retu
 
 ## Capture
 
+Two capture methods are available:
+
 ```dart
-final path = await camera.takePicture();
+// Hardware ISP JPEG (no GPU post-processing — highest quality):
+final path = await camera.captureNaturalPicture();
+
+// GPU post-processed frame (what the user sees on screen):
+final path = await camera.captureImage();                      // PNG (default)
+final path = await camera.captureImage(fileName: 'shot.jpg'); // JPEG
 print('Image saved to: $path');
 ```
 

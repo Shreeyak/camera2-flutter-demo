@@ -44,7 +44,8 @@ import java.util.concurrent.atomic.AtomicBoolean
  * - Routes shader adjustment params via [GpuPipeline.setAdjustments].
  * - Implements an auto-recovery state machine with exponential backoff.
  * - Applies per-request ISP settings via [updateSettings].
- * - Provides [takePicture] to capture a single JPEG frame to the app's cache directory.
+ * - Provides [captureNaturalPicture] (hardware ISP JPEG, no post-processing) and
+ *   [captureImage] (GPU post-processed frame from the C++ pipeline, JPEG or PNG).
  *
  * @param context     Application or activity context (used for camera manager and cache dir).
  * @param surfaceProducer  Flutter texture backing the camera preview.
@@ -266,6 +267,14 @@ class CameraController(
      */
     @Volatile private var lastKnownIso: Int? = null
     @Volatile private var lastKnownExposureTimeNs: Long? = null
+
+    // Additional capture-result fields used for EXIF metadata in captureImage().
+    @Volatile private var lastKnownFocalLengthMm: Float? = null
+    @Volatile private var lastKnownAperture: Float? = null          // f-number, e.g. 1.8
+    @Volatile private var lastKnownFocusDistanceDiopters: Float? = null
+    @Volatile private var lastKnownWbGainR: Float? = null
+    @Volatile private var lastKnownWbGainG: Float? = null           // average of greenEven + greenOdd
+    @Volatile private var lastKnownWbGainB: Float? = null
 
     // -------------------------------------------------------------------------
     // Frame stall watchdog
@@ -940,14 +949,21 @@ class CameraController(
     }
 
     /**
-     * Captures a single JPEG frame and writes it to the app's cache directory.
+     * Captures a still JPEG image using Camera2's hardware ISP ImageReader.
+     *
+     * **Important:** This method bypasses the GPU post-processing pipeline. The resulting image
+     * reflects raw ISP output — no LUT, color transforms (saturation, contrast, brightness,
+     * black-level, gamma) or other adjustments applied by [GpuPipeline] are present.
+     * Use this when you need the highest-fidelity hardware-encoded JPEG.
+     *
+     * For a post-processed image that matches what the user sees on screen, use [captureImage].
      *
      * Captures via the pre-allocated JPEG [ImageReader], acquires the next image on a
      * background thread, and writes the bytes to `<cacheDir>/capture_<timestamp>.jpg`.
      *
      * @param callback Invoked with the absolute file path on success, or a [FlutterError].
      */
-    fun takePicture(callback: (Result<String>) -> Unit) {
+    fun captureNaturalPicture(callback: (Result<String>) -> Unit) {
         val session = captureSession
         val device = cameraDevice
         val jpegReader = jpegImageReader
@@ -1009,6 +1025,153 @@ class CameraController(
             callback(Result.failure(FlutterError("capture_failed", e.message, null)))
         }
     }
+
+    /**
+     * Captures the next GPU post-processed full-resolution RGBA frame from the C++ pipeline,
+     * encodes it as JPEG or PNG, saves it to disk, and writes EXIF metadata.
+     *
+     * Format is inferred from the [fileName] extension:
+     * - `.jpg` / `.jpeg` → JPEG (quality 90)
+     * - `.png` or absent / unrecognised extension → PNG (lossless)
+     *
+     * The default output directory is the app-specific Pictures folder
+     * ([Context.getExternalFilesDir] with [android.os.Environment.DIRECTORY_PICTURES]).
+     * No additional storage permissions are required on API 33+.
+     *
+     * EXIF metadata (ISO, exposure time, focal length, aperture, WB gains, orientation,
+     * and capture timestamp) is written using [androidx.exifinterface.media.ExifInterface]
+     * after the file has been successfully encoded. Metadata fields are best-effort:
+     * if a value was not reported by the hardware, the corresponding EXIF tag is omitted.
+     *
+     * @param outputDirectory Absolute path to the target directory, or null for the default.
+     * @param fileName        Filename including extension, or null for a timestamped default.
+     * @param callback        Invoked with the absolute file path on success, or a [FlutterError].
+     */
+    fun captureImage(
+        outputDirectory: String?,
+        fileName: String?,
+        callback: (Result<String>) -> Unit,
+    ) {
+        val pipelinePtr = nativePipelinePtr
+        if (pipelinePtr == 0L) {
+            callback(Result.failure(FlutterError("not_streaming", "Pipeline not initialized", null)))
+            return
+        }
+
+        backgroundHandler.post {
+            // Resolve output directory: use caller-supplied path or default to app Pictures folder.
+            val dir = if (outputDirectory != null) {
+                File(outputDirectory).also { it.mkdirs() }
+            } else {
+                context.getExternalFilesDir(android.os.Environment.DIRECTORY_PICTURES)
+                    ?: context.cacheDir
+            }
+
+            // Resolve filename; default to PNG with a timestamp if omitted or extension-less.
+            val ts = System.currentTimeMillis()
+            val resolvedName = when {
+                fileName.isNullOrBlank()   -> "capture_$ts.png"
+                !fileName.contains('.')    -> "$fileName.png"
+                else                       -> fileName
+            }
+            val lowerName = resolvedName.lowercase(java.util.Locale.ROOT)
+            // JPEG quality 90: good perceptual quality with reasonable file size.
+            val jpegQuality = 90
+
+            val file = File(dir, resolvedName)
+            val errorMsg = nativeCaptureImage(pipelinePtr, file.absolutePath, jpegQuality)
+
+            if (errorMsg.isNotEmpty()) {
+                mainHandler.post {
+                    callback(Result.failure(FlutterError("capture_failed", errorMsg, null)))
+                }
+                return@post
+            }
+
+            // Write EXIF metadata. ExifInterface supports JPEG and PNG on API 31+;
+            // minSdk is 33 so this is always safe.
+            if (lowerName.endsWith(".jpg") || lowerName.endsWith(".jpeg") || lowerName.endsWith(".png")) {
+                try {
+                    writeExifMetadata(file)
+                } catch (e: Exception) {
+                    // Non-fatal: the image file is already saved. Log and continue.
+                    Log.w("CC/Cam", "[$handle] captureImage: failed to write EXIF — ${e.message}")
+                }
+            }
+
+            mainHandler.post { callback(Result.success(file.absolutePath)) }
+        }
+    }
+
+    /**
+     * Writes available capture-result metadata into [file] as EXIF tags.
+     *
+     * All fields are best-effort: if the hardware did not report a value in recent
+     * capture results, the corresponding EXIF tag is omitted rather than zeroed.
+     */
+    private fun writeExifMetadata(file: File) {
+        // android.media.ExifInterface supports JPEG and PNG on API 31+; minSdk is 33.
+        val exif = android.media.ExifInterface(file.absolutePath)
+
+        // Exposure time in seconds (stored as decimal string per ExifInterface spec).
+        lastKnownExposureTimeNs?.let { ns ->
+            val secs = ns / 1_000_000_000.0
+            exif.setAttribute(android.media.ExifInterface.TAG_EXPOSURE_TIME, secs.toString())
+        }
+
+        // ISO sensitivity.
+        lastKnownIso?.let { iso ->
+            exif.setAttribute(android.media.ExifInterface.TAG_ISO_SPEED_RATINGS, iso.toString())
+        }
+
+        // Focal length as a rational: "numerator/denominator" (millimetres × 1000 / 1000).
+        lastKnownFocalLengthMm?.let { fl ->
+            exif.setAttribute(android.media.ExifInterface.TAG_FOCAL_LENGTH,
+                "${(fl * 1000).toInt()}/1000")
+        }
+
+        // f-number (aperture).
+        lastKnownAperture?.let { ap ->
+            exif.setAttribute(android.media.ExifInterface.TAG_F_NUMBER, ap.toString())
+        }
+
+        // White-balance gains stored as JSON in UserComment (no standard EXIF WB-gains tag exists).
+        lastKnownWbGainR?.let { r ->
+            val g = lastKnownWbGainG ?: 1f
+            val b = lastKnownWbGainB ?: 1f
+            exif.setAttribute(android.media.ExifInterface.TAG_USER_COMMENT,
+                """{"wb":{"r":$r,"g":$g,"b":$b}}""")
+        }
+
+        // Orientation derived from the current display rotation.
+        @Suppress("DEPRECATION")
+        val displayRot = when (
+            (context.getSystemService(Context.WINDOW_SERVICE) as android.view.WindowManager)
+                .defaultDisplay.rotation
+        ) {
+            android.view.Surface.ROTATION_90  ->  90
+            android.view.Surface.ROTATION_180 -> 180
+            android.view.Surface.ROTATION_270 -> 270
+            else                              ->   0
+        }
+        val orientationTag = when (displayRot) {
+            90  -> android.media.ExifInterface.ORIENTATION_ROTATE_90
+            180 -> android.media.ExifInterface.ORIENTATION_ROTATE_180
+            270 -> android.media.ExifInterface.ORIENTATION_ROTATE_270
+            else -> android.media.ExifInterface.ORIENTATION_NORMAL
+        }
+        exif.setAttribute(android.media.ExifInterface.TAG_ORIENTATION, orientationTag.toString())
+
+        // Capture timestamp in EXIF datetime format "YYYY:MM:DD HH:MM:SS".
+        val sdf = java.text.SimpleDateFormat("yyyy:MM:dd HH:mm:ss", java.util.Locale.US)
+        exif.setAttribute(android.media.ExifInterface.TAG_DATETIME_ORIGINAL,
+            sdf.format(java.util.Date()))
+
+        exif.saveAttributes()
+    }
+
+    /** JNI: request the next full-res RGBA frame from the C++ pipeline, encode, and save. */
+    private external fun nativeCaptureImage(pipelinePtr: Long, outputPath: String, jpegQuality: Int): String
 
     /**
      * Returns the opaque native pipeline pointer for direct JNI interop, or null if
@@ -1371,7 +1534,7 @@ class CameraController(
      * (so the GPU OES SurfaceTexture receives camera frames) and [CaptureRequest.CONTROL_MODE_AUTO]
      * applied. Encoder output is routed via [GpuPipeline.setEncoderSurface] rather than as a
      * Camera2 session target. The JPEG [jpegImageReader] is intentionally excluded — it is
-     * targeted only by the one-shot request in [takePicture].
+     * targeted only by the one-shot request in [captureNaturalPicture].
      */
     private fun createRepeatingRequestBuilder(
         device: CameraDevice,
@@ -1670,6 +1833,12 @@ class CameraController(
         aeSearchingStartMs = 0L
         lastKnownIso = null
         lastKnownExposureTimeNs = null
+        lastKnownFocalLengthMm = null
+        lastKnownAperture = null
+        lastKnownFocusDistanceDiopters = null
+        lastKnownWbGainR = null
+        lastKnownWbGainG = null
+        lastKnownWbGainB = null
         lastAeState = null
         lastAfState = null
         lastAwbState = null
@@ -1880,6 +2049,17 @@ class CameraController(
                 // can seed the partner field with the last live AE value.
                 result.get(CaptureResult.SENSOR_SENSITIVITY)?.let { lastKnownIso = it }
                 result.get(CaptureResult.SENSOR_EXPOSURE_TIME)?.let { lastKnownExposureTimeNs = it }
+
+                // Additional fields used for EXIF metadata in captureImage().
+                result.get(CaptureResult.LENS_FOCAL_LENGTH)?.let { lastKnownFocalLengthMm = it }
+                result.get(CaptureResult.LENS_APERTURE)?.let { lastKnownAperture = it }
+                result.get(CaptureResult.LENS_FOCUS_DISTANCE)?.let { lastKnownFocusDistanceDiopters = it }
+                result.get(CaptureResult.COLOR_CORRECTION_GAINS)?.let { gains ->
+                    lastKnownWbGainR = gains.red
+                    // Average the two green channels (greenEven and greenOdd from Bayer pattern)
+                    lastKnownWbGainG = (gains.greenEven + gains.greenOdd) / 2f
+                    lastKnownWbGainB = gains.blue
+                }
 
                 captureResultCount++
 

@@ -77,7 +77,7 @@ camera.updateSettings(CameraSettings(
 ));
 
 // 5. Capture a still image
-final path = await camera.takePicture();
+final path = await camera.captureNaturalPicture();
 
 // 6. Record video
 final (uri, name) = await camera.startRecording();
@@ -428,17 +428,52 @@ See [Settings Persistence](#settings-persistence) for full details.
 
 ### Still Capture
 
-#### `camera.takePicture()`
+There are two capture methods with different trade-offs:
+
+| Method | Source | Post-processing | Format | Quality |
+|--------|--------|-----------------|--------|---------|
+| `captureNaturalPicture()` | Camera2 hardware ISP | None | JPEG | Highest (hardware encoder) |
+| `captureImage()` | GPU post-processed pipeline | Full (LUT, color, gamma…) | JPEG or PNG | Good (software encoder) |
+
+#### `camera.captureNaturalPicture()`
 
 ```dart
-Future<String> takePicture()
+Future<String> captureNaturalPicture()
 ```
 
-Captures a JPEG still image using a pre-allocated ImageReader. Returns the absolute file path. Does not interrupt the streaming pipeline.
+Captures a JPEG still image using Camera2's hardware ISP ImageReader. Returns the absolute file path. Does **not** interrupt the streaming pipeline.
+
+**Important:** This method bypasses the GPU post-processing pipeline. The resulting image reflects raw ISP output — no LUT, color transforms (saturation, contrast, brightness, black-level, gamma) are applied. Use this when you need the highest-fidelity hardware-encoded JPEG.
 
 ```dart
-final path = await camera.takePicture();
+final path = await camera.captureNaturalPicture();
 // path is something like /data/.../cache/capture_1711929600000.jpg
+```
+
+#### `camera.captureImage()`
+
+```dart
+Future<String> captureImage({String? outputDirectory, String? fileName})
+```
+
+Captures the GPU post-processed frame (exactly what the user sees on screen) from the C++ pipeline. Encodes as JPEG or PNG and writes EXIF metadata (ISO, exposure, focal length, aperture, WB gains, orientation, timestamp).
+
+- **Format:** inferred from `fileName` extension (`.jpg`/`.jpeg` → JPEG quality 90, else → PNG)
+- **Default directory:** app-specific Pictures folder (no storage permission needed on API 33+)
+- **Default filename:** `capture_<timestamp>.png`
+
+```dart
+// Save as PNG (default)
+final path = await camera.captureImage();
+
+// Save as JPEG with a specific name
+final path = await camera.captureImage(fileName: 'my_photo.jpg');
+
+// Save to a custom directory as PNG
+final path = await camera.captureImage(
+  outputDirectory: '/sdcard/MyApp/captures',
+  fileName: 'frame_001.png',
+);
 ```
 
 ---
@@ -1053,7 +1088,7 @@ class _MyCameraScreenState extends State<MyCameraScreen> {
             ),
             ElevatedButton(
               onPressed: () async {
-                final path = await camera.takePicture();
+                final path = await camera.captureNaturalPicture();
                 if (mounted) {
                   ScaffoldMessenger.of(context).showSnackBar(
                     SnackBar(content: Text('Saved: $path')),

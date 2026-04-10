@@ -533,7 +533,15 @@ protocol CameraHostApi {
   func getCapabilities(handle: Int64, completion: @escaping (Result<CamCapabilities, Error>) -> Void)
   func updateSettings(handle: Int64, settings: CamSettings) throws
   func setProcessingParams(handle: Int64, params: CamProcessingParams) throws
-  func takePicture(handle: Int64, completion: @escaping (Result<String, Error>) -> Void)
+  /// Captures a still JPEG image using Camera2's hardware ISP.
+  /// Does NOT include GPU post-processing (LUT, saturation, contrast, brightness, gamma).
+  /// Returns the absolute file path of the saved image.
+  func captureNaturalPicture(handle: Int64, completion: @escaping (Result<String, Error>) -> Void)
+  /// Captures the next GPU post-processed frame and saves it to disk.
+  /// Format is inferred from [fileName] extension: .jpg/.jpeg → JPEG (quality 90),
+  /// .png or absent extension → PNG. [outputDirectory] null = app Pictures directory.
+  /// Returns the absolute file path of the saved image.
+  func captureImage(handle: Int64, outputDirectory: String?, fileName: String?, completion: @escaping (Result<String, Error>) -> Void)
   func getNativePipelineHandle(handle: Int64, completion: @escaping (Result<Int64?, Error>) -> Void)
   func startRecording(handle: Int64, outputDirectory: String?, fileName: String?, bitrate: Int64?, fps: Int64?, completion: @escaping (Result<String, Error>) -> Void)
   func stopRecording(handle: Int64, completion: @escaping (Result<String, Error>) -> Void)
@@ -626,12 +634,15 @@ class CameraHostApiSetup {
     } else {
       setProcessingParamsChannel.setMessageHandler(nil)
     }
-    let takePictureChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.cambrian_camera.CameraHostApi.takePicture\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
+    /// Captures a still JPEG image using Camera2's hardware ISP.
+    /// Does NOT include GPU post-processing (LUT, saturation, contrast, brightness, gamma).
+    /// Returns the absolute file path of the saved image.
+    let captureNaturalPictureChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.cambrian_camera.CameraHostApi.captureNaturalPicture\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
     if let api = api {
-      takePictureChannel.setMessageHandler { message, reply in
+      captureNaturalPictureChannel.setMessageHandler { message, reply in
         let args = message as! [Any?]
         let handleArg = args[0] as! Int64
-        api.takePicture(handle: handleArg) { result in
+        api.captureNaturalPicture(handle: handleArg) { result in
           switch result {
           case .success(let res):
             reply(wrapResult(res))
@@ -641,7 +652,30 @@ class CameraHostApiSetup {
         }
       }
     } else {
-      takePictureChannel.setMessageHandler(nil)
+      captureNaturalPictureChannel.setMessageHandler(nil)
+    }
+    /// Captures the next GPU post-processed frame and saves it to disk.
+    /// Format is inferred from [fileName] extension: .jpg/.jpeg → JPEG (quality 90),
+    /// .png or absent extension → PNG. [outputDirectory] null = app Pictures directory.
+    /// Returns the absolute file path of the saved image.
+    let captureImageChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.cambrian_camera.CameraHostApi.captureImage\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
+    if let api = api {
+      captureImageChannel.setMessageHandler { message, reply in
+        let args = message as! [Any?]
+        let handleArg = args[0] as! Int64
+        let outputDirectoryArg: String? = nilOrValue(args[1])
+        let fileNameArg: String? = nilOrValue(args[2])
+        api.captureImage(handle: handleArg, outputDirectory: outputDirectoryArg, fileName: fileNameArg) { result in
+          switch result {
+          case .success(let res):
+            reply(wrapResult(res))
+          case .failure(let error):
+            reply(wrapError(error))
+          }
+        }
+      }
+    } else {
+      captureImageChannel.setMessageHandler(nil)
     }
     let getNativePipelineHandleChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.cambrian_camera.CameraHostApi.getNativePipelineHandle\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
     if let api = api {

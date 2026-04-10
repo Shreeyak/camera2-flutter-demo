@@ -638,6 +638,41 @@ Java_com_cambrian_camera_GpuPipeline_nativeGpuClearRebindFlag(
 }
 
 // ---------------------------------------------------------------------------
+// nativeCaptureImage
+//
+// Requests the next full-res RGBA frame from the ImagePipeline, encodes it as
+// JPEG or PNG (inferred from the file extension in outputPath), and writes it
+// to disk.  Called from CameraController on the backgroundHandler thread —
+// blocks up to 500 ms waiting for the next camera frame.
+//
+// @param pipelinePtr  Handle returned by nativeInit (ImagePipeline pointer).
+// @param outputPath   Absolute file path; extension determines format:
+//                       .jpg / .jpeg → JPEG (jpegQuality applied)
+//                       anything else → PNG (lossless)
+// @param jpegQuality  JPEG encode quality [1-100]; ignored for PNG.
+// @return Empty jstring on success; non-empty human-readable error on failure.
+// ---------------------------------------------------------------------------
+JNIEXPORT jstring JNICALL
+Java_com_cambrian_camera_CameraController_nativeCaptureImage(
+        JNIEnv* env, jclass /*clazz*/,
+        jlong pipelinePtr, jstring outputPath, jint jpegQuality) {
+    if (!pipelinePtr) {
+        return env->NewStringUTF("nativeCaptureImage: null pipeline handle");
+    }
+    const char* pathChars = env->GetStringUTFChars(outputPath, nullptr);
+    if (!pathChars) {
+        return env->NewStringUTF("nativeCaptureImage: failed to decode output path");
+    }
+    std::string path(pathChars);
+    env->ReleaseStringUTFChars(outputPath, pathChars);
+
+    cam::ImagePipeline* pipeline = pipelineFromHandle(pipelinePtr);
+    const bool ok = pipeline->captureToFile(path, static_cast<int>(jpegQuality));
+    return ok ? env->NewStringUTF("")
+              : env->NewStringUTF("captureToFile failed — check logcat for details");
+}
+
+// ---------------------------------------------------------------------------
 // nativeGetDimensionMismatchCount
 //
 // Previously returned the InputRing dimension mismatch counter.

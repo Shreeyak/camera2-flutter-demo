@@ -362,6 +362,35 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
     }
   }
 
+  // ── Capture image
+
+  Future<void> _captureImage() async {
+    final camera = _camera;
+    if (camera == null) return;
+    try {
+      final path = await camera.captureImage();
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+          ..clearSnackBars()
+          ..showSnackBar(
+            SnackBar(
+              content: Text('Image saved: $path'),
+              behavior: SnackBarBehavior.floating,
+              margin: EdgeInsets.only(
+                left: 16,
+                right: 16,
+                bottom: MediaQuery.of(context).padding.bottom + 72,
+              ),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              duration: const Duration(seconds: 3),
+            ),
+          );
+      }
+    } catch (e) {
+      if (mounted) _showError('Capture error: $e');
+    }
+  }
+
   void _showError(String message) {
     if (!mounted) return;
     final cs = Theme.of(context).colorScheme;
@@ -570,6 +599,7 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
                       onToggleGpuControls: () => setState(() => _sidebarOpen = !_sidebarOpen),
                       isRecording: _isRecording,
                       onToggleRecording: _toggleRecording,
+                      onCapture: _captureImage,
                     ),
                   ),
                 ],

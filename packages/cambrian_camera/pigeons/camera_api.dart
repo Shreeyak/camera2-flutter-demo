@@ -247,8 +247,18 @@ abstract class CameraHostApi {
 
   void setProcessingParams(int handle, CamProcessingParams params);
 
+  /// Captures a still JPEG image using Camera2's hardware ISP.
+  /// Does NOT include GPU post-processing (LUT, saturation, contrast, brightness, gamma).
+  /// Returns the absolute file path of the saved image.
   @async
-  String takePicture(int handle);
+  String captureNaturalPicture(int handle);
+
+  /// Captures the next GPU post-processed frame and saves it to disk.
+  /// Format is inferred from [fileName] extension: .jpg/.jpeg → JPEG (quality 90),
+  /// .png or absent extension → PNG. [outputDirectory] null = app Pictures directory.
+  /// Returns the absolute file path of the saved image.
+  @async
+  String captureImage(int handle, String? outputDirectory, String? fileName);
 
   @async
   int? getNativePipelineHandle(int handle);

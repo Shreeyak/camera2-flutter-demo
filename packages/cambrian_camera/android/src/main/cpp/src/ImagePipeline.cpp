@@ -3,11 +3,17 @@
 // shared frames to registered consumer sinks via per-consumer mailbox dispatch.
 // See ImagePipeline.h for the class structure and lock ordering.
 
+// stb_image_write: single-header JPEG/PNG encoder (public domain).
+// Implementation is compiled once here; all other TUs just #include the header.
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+#include "../include/stb_image_write.h"
+
 #include "ImagePipeline.h"
 
 #include <android/log.h>
 #include <algorithm>  // std::find_if
 #include <cassert>
+#include <cctype>     // std::tolower
 #include <cstring>    // memcpy
 
 #define TAG  "CambrianCamera"
@@ -39,13 +45,18 @@ ImagePipeline::~ImagePipeline() {
 void ImagePipeline::deliverFullResRgba(const uint8_t* rgba, int w, int h,
                                         int stride, uint64_t frameId,
                                         const FrameMetadata& meta) {
-    // Fast-path: skip if no consumers AND no hook.
+    // Read capture flag before taking the consumer mutex so we can include it
+    // in the fast-path decision without a second lock acquisition.
+    const bool captureNeeded = captureRequested_.load(std::memory_order_acquire);
+
+    // Fast-path: skip if no consumers AND no hook AND no capture pending.
     // Use hookActive (atomic) instead of reading hook (std::function) to avoid
     // a data race with setFrameHook writing hook on another thread.
     {
         std::lock_guard<std::mutex> lk(fullResConsumersMu_);
         if (fullResConsumers_.empty() &&
-            !fullResStage_.hookActive.load(std::memory_order_acquire)) return;
+            !fullResStage_.hookActive.load(std::memory_order_acquire) &&
+            !captureNeeded) return;
     }
 
     auto frame    = std::make_shared<Frame>();
@@ -60,6 +71,16 @@ void ImagePipeline::deliverFullResRgba(const uint8_t* rgba, int w, int h,
     const size_t size = static_cast<size_t>(h) * stride;
     frame->data.resize(size);
     memcpy(frame->data.data(), rgba, size);
+
+    // Satisfy a pending captureToFile() request with this frame.
+    // exchange(false) atomically clears the flag and returns whether it was set,
+    // preventing a second frame from overwriting capturedFrame_ before captureToFile()
+    // has consumed the first one.
+    if (captureNeeded && captureRequested_.exchange(false, std::memory_order_acq_rel)) {
+        std::lock_guard<std::mutex> lk(captureResultMu_);
+        capturedFrame_ = frame;   // shared_ptr copy; no pixel data copy
+        captureCV_.notify_one();
+    }
 
     routeFrame(fullResStage_, std::move(frame),
                &ImagePipeline::publishToFullResConsumers);
@@ -372,6 +393,86 @@ void ImagePipeline::shutdownConsumers() {
     drainVector(trackerConsumersMu_, trackerConsumers_);
     drainVector(rawConsumersMu_, rawConsumers_);
     LOGD("shutdownConsumers: all consumers removed");
+}
+
+// ---------------------------------------------------------------------------
+// On-request still capture
+// ---------------------------------------------------------------------------
+
+bool ImagePipeline::captureToFile(const std::string& outputPath,
+                                   int jpegQuality, int timeoutMs) {
+    // Reset any leftover captured frame from a previous (possibly timed-out) call.
+    {
+        std::lock_guard<std::mutex> lk(captureResultMu_);
+        capturedFrame_ = nullptr;
+    }
+
+    // Signal deliverFullResRgba to store the next frame it receives.
+    captureRequested_.store(true, std::memory_order_release);
+
+    // Block until deliverFullResRgba delivers a frame or we time out.
+    SharedFrame frame;
+    {
+        std::unique_lock<std::mutex> lk(captureResultMu_);
+        const bool arrived = captureCV_.wait_for(
+            lk,
+            std::chrono::milliseconds(timeoutMs),
+            [this] { return capturedFrame_ != nullptr; });
+
+        if (!arrived) {
+            // Clear flag so a late-arriving frame doesn't corrupt the next call.
+            captureRequested_.store(false, std::memory_order_release);
+            LOGE("captureToFile: timed out waiting for frame after %d ms", timeoutMs);
+            return false;
+        }
+        frame = capturedFrame_;
+        capturedFrame_ = nullptr;
+    }
+
+    // Infer format from extension: .jpg / .jpeg → JPEG; anything else → PNG.
+    // Compare the last 4-5 characters lowercase to avoid a full string-lower pass.
+    const bool asJpeg = [&outputPath]() -> bool {
+        const size_t n = outputPath.size();
+        if (n >= 4) {
+            char e4[5]{};
+            for (size_t i = 0; i < 4; ++i)
+                e4[i] = static_cast<char>(std::tolower(
+                    static_cast<unsigned char>(outputPath[n - 4 + i])));
+            if (std::string(e4) == ".jpg") return true;
+        }
+        if (n >= 5) {
+            char e5[6]{};
+            for (size_t i = 0; i < 5; ++i)
+                e5[i] = static_cast<char>(std::tolower(
+                    static_cast<unsigned char>(outputPath[n - 5 + i])));
+            if (std::string(e5) == ".jpeg") return true;
+        }
+        return false;
+    }();
+
+    const int w      = frame->width;
+    const int h      = frame->height;
+    const int stride = frame->stride;
+    const uint8_t* data = frame->data.data();
+
+    int ok = 0;
+    if (asJpeg) {
+        // stbi_write_jpg: comp=4 (RGBA). The encoder ignores the alpha channel
+        // and encodes the RGB triplets; the result is a standard RGB JPEG.
+        ok = stbi_write_jpg(outputPath.c_str(), w, h, 4, data, jpegQuality);
+    } else {
+        // stbi_write_png: stride_in_bytes controls row pitch for non-contiguous data.
+        ok = stbi_write_png(outputPath.c_str(), w, h, 4, data, stride);
+    }
+
+    if (!ok) {
+        LOGE("captureToFile: stbi_write_%s failed for path '%s'",
+             asJpeg ? "jpg" : "png", outputPath.c_str());
+        return false;
+    }
+    LOGD("captureToFile: wrote %dx%d %s → '%s'",
+         w, h, asJpeg ? "JPEG" : "PNG", outputPath.c_str());
+    return true;
 }
 
 } // namespace cam
