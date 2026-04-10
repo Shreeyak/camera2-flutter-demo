@@ -13,8 +13,7 @@ const kCameraDialMaxWidth = 400.0;
 
 /// Floating camera-control overlay shown above the bottom settings strip.
 ///
-/// Renders either a [CameraRulerDial] for numeric parameters or a compact
-/// WB action panel for white-balance auto/lock.
+/// Renders a [CameraRulerDial] for the active numeric parameter.
 class CameraControlOverlay extends StatelessWidget {
   const CameraControlOverlay({
     super.key,
@@ -33,14 +32,8 @@ class CameraControlOverlay extends StatelessWidget {
   Widget build(BuildContext context) {
     final param = activeSetting;
     if (param == null) return const SizedBox.shrink();
-    if (param == CameraSettingType.wb) {
-      return _WbControlPanel(
-        wbLocked: values.wbLocked,
-        onWbLockChanged: callbacks.onWbLockChanged,
-      );
-    }
 
-    // WB is handled above; remaining params all map to a dial slider.
+    // All params map to a dial slider.
     final CameraDialModel model;
     switch (param) {
       case CameraSettingType.iso:
@@ -74,9 +67,6 @@ class CameraControlOverlay extends StatelessWidget {
           onFocusChanged: callbacks.onFocusChanged,
         ).toModel();
         break;
-      case CameraSettingType.wb:
-        // Unreachable — WB is handled by the guard at the top of build().
-        return const SizedBox.shrink();
     }
 
     final cs = Theme.of(context).colorScheme;
@@ -100,52 +90,6 @@ class CameraControlOverlay extends StatelessWidget {
             color: cs.onSurface.withValues(alpha: 0.5),
           ),
         ),
-      ),
-    );
-  }
-}
-
-class _WbControlPanel extends StatelessWidget {
-  const _WbControlPanel({
-    required this.wbLocked,
-    required this.onWbLockChanged,
-  });
-
-  final bool wbLocked;
-  final ValueChanged<bool> onWbLockChanged;
-
-  @override
-  Widget build(BuildContext context) {
-    // SegmentedButton provides its own M3 visual container — no extra
-    // wrapping decoration needed. Center it in the 80px overlay slot.
-    final cs = Theme.of(context).colorScheme;
-    return Center(
-      child: SegmentedButton<bool>(
-        style: ButtonStyle(
-          visualDensity: VisualDensity.compact,
-          backgroundColor: WidgetStateProperty.resolveWith((states) {
-            if (states.contains(WidgetState.selected)) {
-              return cs.secondaryContainer.withValues(alpha: 0.85);
-            }
-            return cs.surfaceContainerLow.withValues(alpha: 0.85);
-          }),
-        ),
-        segments: const [
-          ButtonSegment<bool>(
-            value: false,
-            label: Text('AWB'),
-            icon: Icon(Icons.wb_auto),
-          ),
-          ButtonSegment<bool>(
-            value: true,
-            label: Text('Lock WB'),
-            icon: Icon(Icons.lock),
-          ),
-        ],
-        selected: {wbLocked},
-        onSelectionChanged: (Set<bool> selection) {
-          onWbLockChanged(selection.first);
-        },
       ),
     );
   }

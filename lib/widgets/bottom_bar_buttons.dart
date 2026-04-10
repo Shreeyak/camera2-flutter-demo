@@ -158,16 +158,33 @@ class CameraSettingChip extends StatelessWidget {
   }
 }
 
-/// A small toggle button used to switch a specific parameter between Auto and Manual.
+/// A small toggle button used to switch a specific parameter between two states.
+///
+/// [isAuto] controls the highlighted state. When true, [selectedIcon] is shown
+/// (highlighted in primary color); when false, [unselectedIcon] is shown (dim).
+///
+/// For WB: [isAuto]=true = AWB running, [isAuto]=false = locked/manual.
+/// For BB: [isAuto]=true = offsets applied, [isAuto]=false = bypassed — pass
+/// custom icons so the button does not show the AWB auto icon.
 class CameraAutoToggleButton extends StatelessWidget {
   const CameraAutoToggleButton({
     super.key,
     required this.isAuto,
     required this.onTap,
+    this.unselectedIcon,
+    this.selectedIcon,
   });
 
   final bool isAuto;
   final VoidCallback onTap;
+
+  /// Icon shown when [isAuto] is false (unselected/dim state).
+  /// Defaults to the auto icon so existing WB usages are unchanged.
+  final IconData? unselectedIcon;
+
+  /// Icon shown when [isAuto] is true (selected/highlighted state).
+  /// Defaults to the auto icon so existing WB usages are unchanged.
+  final IconData? selectedIcon;
 
   @override
   Widget build(BuildContext context) {
@@ -176,8 +193,8 @@ class CameraAutoToggleButton extends StatelessWidget {
     return IconButton(
       onPressed: onTap,
       isSelected: isAuto,
-      icon: const Icon(Symbols.autofps_select_rounded),
-      selectedIcon: const Icon(Symbols.autofps_select_rounded),
+      icon: Icon(unselectedIcon ?? Symbols.autofps_select_rounded),
+      selectedIcon: Icon(selectedIcon ?? Symbols.autofps_select_rounded),
       style: ButtonStyle(
         fixedSize: WidgetStateProperty.all(const Size(44, 44)),
         backgroundColor: WidgetStateProperty.resolveWith((states) {

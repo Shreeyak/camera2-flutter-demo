@@ -3,6 +3,20 @@ import 'dart:async';
 import 'package:flutter/foundation.dart' show debugPrint, kDebugMode;
 import 'package:flutter/widgets.dart';
 
+import 'calibration.dart'
+    show
+        BbCalibrationResult,
+        RgbSample,
+        WbCalibrationResult,
+        bbError,
+        bbStep,
+        kBbMaxIterations,
+        kBbTolerance,
+        kCalibrationSettleMs,
+        kWbMaxIterations,
+        kWbTolerance,
+        wbError,
+        wbStep;
 import 'camera_settings.dart';
 import 'camera_settings_serializer.dart';
 import 'camera_state.dart';
@@ -57,7 +71,8 @@ class CambrianCamera {
        _stateController = StreamController<CameraState>.broadcast(),
        _errorController = StreamController<CameraError>.broadcast(),
        _frameResultController = StreamController<FrameResult>.broadcast(),
-       _recordingStateController = StreamController<RecordingState>.broadcast() {
+       _recordingStateController =
+           StreamController<RecordingState>.broadcast() {
     // Register in the global instance map so FlutterApi callbacks can be
     // routed to the correct camera by handle.
     _instances[handle] = this;
@@ -150,10 +165,7 @@ class CambrianCamera {
     final enableRawStream = settings?.enableRawStream ?? false;
 
     // The handle returned by the platform is also used as the texture ID.
-    final handle = await api.open(
-      cameraId,
-      settings?.toCam(),
-    );
+    final handle = await api.open(cameraId, settings?.toCam());
 
     // Register the instance immediately after open() so that any state/error
     // callbacks fired during the getCapabilities round-trip are not dropped.
@@ -169,7 +181,9 @@ class CambrianCamera {
       final caps = await api.getCapabilities(handle);
       camera._capabilities = CameraCapabilities.fromPigeon(caps);
       if (kDebugMode) {
-        debugPrint('CC/Dart: opened handle=$handle ${caps.streamWidth}×${caps.streamHeight}');
+        debugPrint(
+          'CC/Dart: opened handle=$handle ${caps.streamWidth}×${caps.streamHeight}',
+        );
       }
       return camera;
     } catch (e) {
@@ -201,11 +215,13 @@ class CambrianCamera {
     }
     yield* stateStream
         .where((s) => s == CameraState.streaming)
-        .map((_) => CameraTextureInfo(
-              textureId: _handle,
-              width: _capabilities.streamWidth,
-              height: _capabilities.streamHeight,
-            ));
+        .map(
+          (_) => CameraTextureInfo(
+            textureId: _handle,
+            width: _capabilities.streamWidth,
+            height: _capabilities.streamHeight,
+          ),
+        );
   }
 
   /// Emits a [CameraTextureInfo] each time the raw (unprocessed) stream
@@ -228,15 +244,19 @@ class CambrianCamera {
       );
     }
     yield* stateStream
-        .where((s) =>
-            s == CameraState.streaming &&
-            _enableRawStream &&
-            _capabilities.rawStreamTextureId != 0)
-        .map((_) => CameraTextureInfo(
-              textureId: _capabilities.rawStreamTextureId,
-              width: _capabilities.rawStreamWidth,
-              height: _capabilities.rawStreamHeight,
-            ));
+        .where(
+          (s) =>
+              s == CameraState.streaming &&
+              _enableRawStream &&
+              _capabilities.rawStreamTextureId != 0,
+        )
+        .map(
+          (_) => CameraTextureInfo(
+            textureId: _capabilities.rawStreamTextureId,
+            width: _capabilities.rawStreamWidth,
+            height: _capabilities.rawStreamHeight,
+          ),
+        );
   }
 
   /// Device capabilities (resolution list, ISO/exposure ranges, etc.).
@@ -287,7 +307,8 @@ class CambrianCamera {
   /// Uses latest-value-wins: rapid calls do not pile up stale requests.
   /// The change takes effect on the next Camera2 capture request.
   Future<void> updateSettings(CameraSettings settings) async {
-    if (kDebugMode) debugPrint('CC/Dart: updateSettings handle=$_handle $settings');
+    if (kDebugMode)
+      debugPrint('CC/Dart: updateSettings handle=$_handle $settings');
     _serializer.send(settings);
   }
 
@@ -320,7 +341,8 @@ class CambrianCamera {
   /// for fire-and-forget semantics. No queuing is applied; the new parameters
   /// are picked up on the next processed frame.
   Future<void> setProcessingParams(ProcessingParams params) {
-    if (kDebugMode) debugPrint('CC/Dart: setProcessingParams handle=$_handle $params');
+    if (kDebugMode)
+      debugPrint('CC/Dart: setProcessingParams handle=$_handle $params');
     return _hostApi.setProcessingParams(_handle, params.toCam());
   }
 
@@ -342,6 +364,158 @@ class CambrianCamera {
     );
   }
 
+  /// Samples the center 96×96 pixel patch of the most recent GPU-processed frame.
+  ///
+  /// Returns the trimmed-mean R, G, B as [RgbSample] with values in [0.0, 1.0].
+  /// The top and bottom 15% of pixel values per channel are discarded before
+  /// averaging to suppress hot pixels and specular outliers.
+  ///
+  /// Throws [PlatformException] with code `"patch_not_ready"` if the GPU
+  /// pipeline has not yet rendered a frame. Callers must not assume a fallback
+  /// value — treat this as a hard error and abort any calibration in progress.
+  ///
+  /// Most callers should use [calibrateWhiteBalance] or [calibrateBlackBalance]
+  /// instead of calling this directly.
+  Future<RgbSample> sampleCenterPatch() async {
+    final cam = await _hostApi.sampleCenterPatch(_handle);
+    return (r: cam.r, g: cam.g, b: cam.b);
+  }
+
+  /// Runs the iterative white balance calibration loop.
+  ///
+  /// Samples the trimmed-mean RGB of a 96×96 pixel patch at the center of the
+  /// processed frame. Takes a snapshot before any corrections ([patchBefore]) and
+  /// another after convergence ([patchAfter]) — useful for before/after display in
+  /// the UI. Between samples, applies proportional R/G/B gain corrections via
+  /// [updateSettings] until the patch error falls below [kWbTolerance] or
+  /// [kWbMaxIterations] is reached.
+  ///
+  /// The app does not need to call [sampleCenterPatch] directly — this method
+  /// owns both patch reads and returns them in [WbCalibrationResult].
+  ///
+  /// [initialGainR], [initialGainG], [initialGainB] seed the first loop
+  /// iteration. Pass the current AWB values from [FrameResult] when available;
+  /// defaults to 1.0.
+  Future<WbCalibrationResult> calibrateWhiteBalance({
+    double initialGainR = 1.0,
+    double initialGainG = 1.0,
+    double initialGainB = 1.0,
+  }) async {
+    var gainR = initialGainR;
+    final gainG = initialGainG;
+    var gainB = initialGainB;
+
+    // Snapshot the entry-point settings so they can be restored if the loop
+    // throws before reaching the final committed updateSettings call.
+    final originalSettings = CameraSettings(
+      whiteBalance: WhiteBalance.manual(
+        gainR: initialGainR,
+        gainG: initialGainG,
+        gainB: initialGainB,
+      ),
+    );
+
+    final patchBefore = await sampleCenterPatch();
+    var lastSample = patchBefore;
+
+    try {
+      for (var i = 0; i < kWbMaxIterations; i++) {
+        if (wbError(lastSample) < kWbTolerance) break;
+        final gains = wbStep((r: gainR, g: gainG, b: gainB), lastSample);
+        gainR = gains.r;
+        gainB = gains.b;
+        await updateSettings(
+          CameraSettings(
+            whiteBalance: WhiteBalance.manual(
+              gainR: gainR,
+              gainG: gainG,
+              gainB: gainB,
+            ),
+          ),
+        );
+        await Future<void>.delayed(
+          const Duration(milliseconds: kCalibrationSettleMs),
+        );
+        lastSample = await sampleCenterPatch();
+      }
+    } catch (_) {
+      await updateSettings(originalSettings);
+      rethrow;
+    }
+
+    // Always apply final gains — handles the already-neutral case where the
+    // loop exits on the first iteration without ever calling updateSettings.
+    await updateSettings(
+      CameraSettings(
+        whiteBalance: WhiteBalance.manual(
+          gainR: gainR,
+          gainG: gainG,
+          gainB: gainB,
+        ),
+      ),
+    );
+    final patchAfter = await sampleCenterPatch();
+    return (
+      gains: (r: gainR, g: gainG, b: gainB),
+      patchBefore: patchBefore,
+      patchAfter: patchAfter,
+    );
+  }
+
+  /// Runs the iterative black balance calibration loop.
+  ///
+  /// Samples the trimmed-mean RGB of a 96×96 pixel patch at the center of the
+  /// processed frame. Takes a snapshot before any corrections ([patchBefore]) and
+  /// another after convergence ([patchAfter]) — useful for before/after display in
+  /// the UI. Between samples, accumulates per-channel black-level offsets and applies
+  /// them via [setProcessingParams] until the patch error falls below
+  /// [kBbTolerance] or [kBbMaxIterations] is reached.
+  ///
+  /// The app does not need to call [sampleCenterPatch] directly — this method
+  /// owns both patch reads and returns them in [BbCalibrationResult].
+  ///
+  /// [params] is the current [ProcessingParams]; non-black fields are preserved
+  /// across each iteration's [setProcessingParams] call.
+  Future<BbCalibrationResult> calibrateBlackBalance({
+    required ProcessingParams params,
+  }) async {
+    var accR = 0.0, accG = 0.0, accB = 0.0;
+
+    // Snapshot the caller-supplied params so the original black offsets can be
+    // restored if the loop throws after partial mutations.
+    final originalParams = params;
+
+    final patchBefore = await sampleCenterPatch();
+    var lastSample = patchBefore;
+
+    try {
+      for (var i = 0; i < kBbMaxIterations; i++) {
+        if (bbError(lastSample) < kBbTolerance) break;
+        final offsets = bbStep((r: accR, g: accG, b: accB), lastSample);
+        accR = offsets.r;
+        accG = offsets.g;
+        accB = offsets.b;
+        await setProcessingParams(
+          params.copyWith(blackR: accR, blackG: accG, blackB: accB),
+        );
+        await Future<void>.delayed(
+          const Duration(milliseconds: kCalibrationSettleMs),
+        );
+        lastSample = await sampleCenterPatch();
+      }
+    } catch (_) {
+      await setProcessingParams(originalParams);
+      rethrow;
+    }
+
+    final patchAfter = await sampleCenterPatch();
+    return (
+      offsets: (r: accR, g: accG, b: accB),
+      patchBefore: patchBefore,
+      patchAfter: patchAfter,
+    );
+  }
+
   /// Captures a high-quality still image and returns its file path.
   ///
   /// Uses a dedicated JPEG ImageReader pre-allocated at session setup time.
@@ -352,7 +526,8 @@ class CambrianCamera {
   ///
   /// This is a device-level query, not a per-camera query. Used by preview widgets
   /// to select the correct [RotatedBox.quarterTurns] for all four device orientations.
-  static Future<int> getDisplayRotation() => CameraHostApi().getDisplayRotation();
+  static Future<int> getDisplayRotation() =>
+      CameraHostApi().getDisplayRotation();
 
   /// Starts recording to an MP4 file. Returns (contentUri, displayName).
   ///
@@ -362,12 +537,27 @@ class CambrianCamera {
   ///
   /// Recording state changes are delivered via [recordingStateStream].
   /// Throws [PlatformException] if recording cannot be started.
-  Future<(String, String)> startRecording({String? outputDirectory, String? fileName, int? bitrate, int? fps}) async {
-    final raw = await _hostApi.startRecording(_handle, outputDirectory, fileName, bitrate, fps);
+  Future<(String, String)> startRecording({
+    String? outputDirectory,
+    String? fileName,
+    int? bitrate,
+    int? fps,
+  }) async {
+    final raw = await _hostApi.startRecording(
+      _handle,
+      outputDirectory,
+      fileName,
+      bitrate,
+      fps,
+    );
     // Split on the first '|' only — the display name may itself contain '|'.
     final separatorIndex = raw.indexOf('|');
-    final uri = raw.substring(0, separatorIndex == -1 ? raw.length : separatorIndex);
-    if (kDebugMode) debugPrint('CC/Dart: startRecording handle=$_handle → $uri');
+    final uri = raw.substring(
+      0,
+      separatorIndex == -1 ? raw.length : separatorIndex,
+    );
+    if (kDebugMode)
+      debugPrint('CC/Dart: startRecording handle=$_handle → $uri');
     if (separatorIndex == -1) return (raw, '');
     return (uri, raw.substring(separatorIndex + 1));
   }
@@ -389,7 +579,6 @@ class CambrianCamera {
   /// via the `cambrian_camera_native.h` API.
   Future<int?> getNativePipelineHandle() =>
       _hostApi.getNativePipelineHandle(_handle);
-
 
   /// Pauses the camera: releases Camera2 resources but keeps the instance alive.
   ///
@@ -442,24 +631,29 @@ class CambrianCamera {
 
   void _onError(CamError error) {
     if (kDebugMode) {
-      debugPrint('CC/Dart: error=${error.code} fatal=${error.isFatal}: ${error.message}');
+      debugPrint(
+        'CC/Dart: error=${error.code} fatal=${error.isFatal}: ${error.message}',
+      );
     }
     _errorController.add(CameraError.fromPigeon(error));
   }
 
   void _onFrameResult(CamFrameResult result) {
-    _frameResultController.add(FrameResult(
-      iso: result.iso,
-      exposureTimeNs: result.exposureTimeNs,
-      focusDistanceDiopters: result.focusDistanceDiopters,
-      wbGainR: result.wbGainR,
-      wbGainG: result.wbGainG,
-      wbGainB: result.wbGainB,
-    ));
+    _frameResultController.add(
+      FrameResult(
+        iso: result.iso,
+        exposureTimeNs: result.exposureTimeNs,
+        focusDistanceDiopters: result.focusDistanceDiopters,
+        wbGainR: result.wbGainR,
+        wbGainG: result.wbGainG,
+        wbGainB: result.wbGainB,
+      ),
+    );
   }
 
   void _onRecordingStateChanged(String state) {
-    if (kDebugMode) debugPrint('CC/Dart: recordingState=$state handle=$_handle');
+    if (kDebugMode)
+      debugPrint('CC/Dart: recordingState=$state handle=$_handle');
     _recordingStateController.add(RecordingState.fromString(state));
   }
 }
@@ -492,4 +686,3 @@ class _FlutterApiDispatcher extends CameraFlutterApi {
     CambrianCamera._instances[handle]?._onRecordingStateChanged(state);
   }
 }
-

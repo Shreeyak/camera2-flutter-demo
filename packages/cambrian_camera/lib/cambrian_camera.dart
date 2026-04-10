@@ -13,6 +13,13 @@
 /// ```
 library;
 
+export 'src/calibration.dart'
+    show
+        RgbSample,
+        WbGains,
+        BbOffsets,
+        WbCalibrationResult,
+        BbCalibrationResult;
 export 'src/cambrian_camera_controller.dart' show CambrianCamera;
 export 'src/frame_result.dart' show FrameResult;
 export 'src/camera_settings.dart'

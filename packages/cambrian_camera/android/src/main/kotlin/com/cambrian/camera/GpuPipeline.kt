@@ -12,6 +12,7 @@ import android.util.Log
 import android.view.Surface
 import android.view.WindowManager
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.atomic.AtomicReference
 
 /**
  * Manages the OpenGL ES render thread for the GPU camera pipeline.
@@ -38,6 +39,10 @@ open class GpuPipeline(
     private val glHandler = Handler(glThread.looper)
 
     @Volatile private var gpuHandle: Long = 0L
+    @Volatile private var stopping = false
+    // Pending callback registered by sampleCenterPatch; drained with null by stop()
+    // if removeCallbacksAndMessages discards the posted lambda before it runs.
+    private val pendingSampleCallback = AtomicReference<((FloatArray?) -> Unit)?>(null)
     private var surfaceTexture: SurfaceTexture? = null
     private var oesTexName: Int = 0
     private val texMatrix      = FloatArray(16)
@@ -131,7 +136,11 @@ open class GpuPipeline(
      */
     open fun stop() {
         Log.i(TAG, "stop (frame #$frameCount)")
+        stopping = true  // reject new frames and sample requests immediately
         glHandler.removeCallbacksAndMessages(null)
+        // If removeCallbacksAndMessages discarded a pending sampleCenterPatch lambda,
+        // drain the registered callback so the caller is not left hanging.
+        pendingSampleCallback.getAndSet(null)?.invoke(null)
         glHandler.post {
             cameraSurface?.release()
             cameraSurface = null
@@ -250,6 +259,34 @@ open class GpuPipeline(
         }
     }
 
+    /**
+     * Samples the center 96×96 pixel patch from the most recent rendered frame.
+     *
+     * Posts the GL read to [glHandler] and invokes [callback] on the GL thread
+     * with a [FloatArray] of size 3: {trimmedMeanR, trimmedMeanG, trimmedMeanB}
+     * in [0.0, 1.0], or null if the GPU is not yet initialised or no frame has
+     * been rendered. Callers must treat null as an error.
+     */
+    fun sampleCenterPatch(callback: (FloatArray?) -> Unit) {
+        val handle = gpuHandle
+        if (handle == 0L || stopping) {
+            glHandler.post { callback(null) }
+            return
+        }
+        // Register before posting so stop() can always see the pending callback.
+        pendingSampleCallback.set(callback)
+        glHandler.post {
+            // Atomically claim ownership: if stop() already drained the callback it
+            // will be null here, meaning stop() already invoked it with null.
+            val cb = pendingSampleCallback.getAndSet(null) ?: return@post
+            if (stopping || gpuHandle == 0L) {
+                cb(null)
+                return@post
+            }
+            cb(nativeGpuSampleCenterPatch(handle))
+        }
+    }
+
     private fun scheduleStallCheck() {
         glHandler.postDelayed({
             if (gpuHandle == 0L) return@postDelayed
@@ -265,6 +302,7 @@ open class GpuPipeline(
 
     // Called on glHandler thread when SurfaceTexture has a new frame.
     private fun onFrameAvailable(st: SurfaceTexture) {
+        if (stopping) return
         val handle = gpuHandle
         if (handle == 0L) return
 
@@ -375,6 +413,9 @@ open class GpuPipeline(
 
         @JvmStatic
         external fun nativeGpuClearRebindFlag(gpuHandle: Long)
+
+        @JvmStatic
+        external fun nativeGpuSampleCenterPatch(gpuHandle: Long): FloatArray?
 
         @JvmStatic
         external fun nativeGetDimensionMismatchCount(pipelineHandle: Long): Int
