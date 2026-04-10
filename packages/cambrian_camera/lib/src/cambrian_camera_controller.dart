@@ -12,6 +12,7 @@ import 'calibration.dart'
         bbStep,
         kBbMaxIterations,
         kBbTolerance,
+        kCalibrationSettleMs,
         kWbMaxIterations,
         kWbTolerance,
         wbError,
@@ -399,7 +400,9 @@ class CambrianCamera {
           ),
         ),
       );
-      await Future<void>.delayed(const Duration(milliseconds: 200));
+      await Future<void>.delayed(
+        const Duration(milliseconds: kCalibrationSettleMs),
+      );
       lastSample = await sampleCenterPatch();
     }
 
@@ -454,7 +457,9 @@ class CambrianCamera {
       setProcessingParams(
         params.copyWith(blackR: accR, blackG: accG, blackB: accB),
       );
-      await Future<void>.delayed(const Duration(milliseconds: 200));
+      await Future<void>.delayed(
+        const Duration(milliseconds: kCalibrationSettleMs),
+      );
       lastSample = await sampleCenterPatch();
     }
 

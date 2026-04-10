@@ -1106,29 +1106,31 @@ bool GpuRenderer::sampleCenterPatch(float& outR, float& outG, float& outB) {
         return false;
     }
 
-    constexpr int kPatchW    = 96;
-    constexpr int kPatchH    = 96;
-    constexpr int kN         = kPatchW * kPatchH;        // 9 216 pixels
+    constexpr int   kPatchW       = 96;
+    constexpr int   kPatchH       = 96;
+    constexpr int   kN            = kPatchW * kPatchH;   // 9 216 pixels
+    constexpr int   kBytesPerPixel = 4;                  // GL_RGBA: 1 byte per channel (R=0, G=1, B=2, A=3)
     // Discard the lowest and highest 15% of values per channel before averaging.
     // This removes hot pixels, specular highlights, and dust artefacts without
     // requiring a full sort — the histogram approach is O(n) for 8-bit data.
-    constexpr int kTrimCount = static_cast<int>(kN * 0.15f);  // 1 382
+    constexpr float kTrimFraction = 0.15f;               // discard bottom/top 15% per channel
+    constexpr int   kTrimCount    = static_cast<int>(kN * kTrimFraction);  // 1 382
 
     const int cx = (width_  - kPatchW) / 2;
     const int cy = (height_ - kPatchH) / 2;
 
-    uint8_t pixels[kN * 4];  // 36 864 bytes — well within GL-thread stack
+    uint8_t pixels[kN * kBytesPerPixel];  // 36 864 bytes — well within GL-thread stack
 
     glBindFramebuffer(GL_FRAMEBUFFER, fbo_);
     glReadPixels(cx, cy, kPatchW, kPatchH, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
-    // Build per-channel histograms (256 bins).
+    // Build per-channel histograms (256 bins — full uint8_t range).
     int histR[256]{}, histG[256]{}, histB[256]{};
     for (int i = 0; i < kN; i++) {
-        histR[pixels[i * 4 + 0]]++;
-        histG[pixels[i * 4 + 1]]++;
-        histB[pixels[i * 4 + 2]]++;
+        histR[pixels[i * kBytesPerPixel + 0]]++;
+        histG[pixels[i * kBytesPerPixel + 1]]++;
+        histB[pixels[i * kBytesPerPixel + 2]]++;
     }
 
     // Trimmed mean from histogram: skip kTrimCount pixels from each end,
@@ -1151,6 +1153,7 @@ bool GpuRenderer::sampleCenterPatch(float& outR, float& outG, float& outB) {
             cumulative = end;
         }
         // count == 0 is impossible with 15% trim on 9 216 pixels, but guard anyway.
+        // 255.0f: uint8_t max — normalises the histogram bin index to [0.0, 1.0].
         return count > 0 ? static_cast<float>(sum) / (count * 255.0f) : -1.0f;
     };
 

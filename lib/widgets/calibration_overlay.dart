@@ -35,6 +35,11 @@ import 'gpu_controls_sidebar.dart' show CalibrationTarget;
 // GPU patch constants — must stay in sync with GpuRenderer.cpp (kPatchW/kPatchH).
 const int _kPatchPx = 96;
 
+/// Distance of the confirm button from the bottom of the overlay.
+///
+/// Clears the camera bottom bar (~56 dp) with comfortable tap-target padding.
+const double _kConfirmButtonBottom = 72.0;
+
 /// Fullscreen overlay shown while the user is selecting a calibration patch.
 ///
 /// Draws a square outline that precisely frames the 96×96-pixel center patch
@@ -108,7 +113,7 @@ class CalibrationOverlay extends StatelessWidget {
             ),
             // Confirm button anchored near the bottom of the overlay.
             Positioned(
-              bottom: 72,
+              bottom: _kConfirmButtonBottom,
               left: 0,
               right: 0,
               child: Center(
@@ -150,6 +155,13 @@ class _PatchBorderPainter extends CustomPainter {
   static const double _w = 10.0; // arm width
   static const double _r = _w / 2; // corner radius
 
+  // Square border stroke widths.
+  // Shadow is wider than the foreground stroke so it peeks out on both sides,
+  // creating a readable outline on any background color.
+  static const double _shadowInflate = 1.5; // expands shadow rect beyond the foreground stroke
+  static const double _shadowStrokeWidth = 4.0; // dark halo behind foreground for contrast
+  static const double _strokeWidth = 2.5; // gradient foreground stroke — thin but visible
+
   // Warm gradient colors per arm.
   static const _colorTop = Color(0xFFE53935); // red
   static const _colorSide = Color(0xFFFF7043); // deep orange
@@ -174,11 +186,11 @@ class _PatchBorderPainter extends CustomPainter {
 
     // Dark shadow behind for contrast on any background.
     canvas.drawRRect(
-      RRect.fromRectAndRadius(rect.inflate(1.5), borderRadius),
+      RRect.fromRectAndRadius(rect.inflate(_shadowInflate), borderRadius),
       Paint()
         ..color = const Color(0xBB000000)
         ..style = PaintingStyle.stroke
-        ..strokeWidth = 4.0,
+        ..strokeWidth = _shadowStrokeWidth,
     );
     // Gradient foreground stroke.
     canvas.drawRRect(
@@ -186,7 +198,7 @@ class _PatchBorderPainter extends CustomPainter {
       Paint()
         ..shader = gradientShader
         ..style = PaintingStyle.stroke
-        ..strokeWidth = 2.5,
+        ..strokeWidth = _strokeWidth,
     );
 
     // ── Crosshair arms ─────────────────────────────────────────────────────

@@ -304,7 +304,7 @@ class CambrianCameraPlugin : FlutterPlugin, ActivityAware, CameraHostApi {
     }
 
     /**
-     * Samples the center 16×16 pixel patch of the most recent GPU-rendered frame.
+     * Samples the center 96×96 pixel patch of the most recent GPU-rendered frame.
      *
      * @param handle   The camera handle.
      * @param callback Invoked with [Result.success] containing a [CamRgbSample],

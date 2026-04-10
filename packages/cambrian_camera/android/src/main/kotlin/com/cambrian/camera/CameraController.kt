@@ -940,7 +940,7 @@ class CameraController(
     }
 
     /**
-     * Samples the center 16×16 pixels of the most recent GPU-processed frame.
+     * Samples the center 96×96 pixels of the most recent GPU-processed frame.
      *
      * Delegates to [GpuPipeline.sampleCenterPatch] and wraps the result back
      * to [mainHandler] before invoking [callback].

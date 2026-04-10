@@ -35,6 +35,12 @@ import 'widgets/recording_hud.dart' show RecordingHud;
 /// Horizontal offset from the left edge of the dial to the auto-toggle button.
 const _kAutoToggleOffset = 60.0;
 
+/// Logical-pixel width of the GPU controls sidebar.
+///
+/// Wide enough to fit slider labels and numeric readouts at the default text
+/// scale without truncation or crowding.
+const double _kSidebarWidth = 270.0;
+
 /// Initial camera settings used for both [CambrianCamera.open] and the UI's
 /// initial [CameraSettingsValues]. Keeping them in one place ensures the two
 /// can never diverge at startup.
@@ -726,12 +732,12 @@ class _CameraScreenState extends State<CameraScreen>
                         AnimatedContainer(
                           duration: const Duration(milliseconds: 250),
                           curve: Curves.easeInOutCubic,
-                          width: _sidebarOpen ? 270 : 0,
+                          width: _sidebarOpen ? _kSidebarWidth : 0,
                           child: ClipRect(
                             child: OverflowBox(
                               alignment: Alignment.centerLeft,
-                              minWidth: 270,
-                              maxWidth: 270,
+                              minWidth: _kSidebarWidth,
+                              maxWidth: _kSidebarWidth,
                               child: GpuControlsSidebar(
                                 params: _processingParams,
                                 onChanged: _applyProcessingParams,

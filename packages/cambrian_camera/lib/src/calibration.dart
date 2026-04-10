@@ -46,12 +46,30 @@ typedef BbCalibrationResult = ({
   RgbSample patchAfter,
 });
 
+// ── Shared calibration timing ────────────────────────────────────────────────
+
+/// Milliseconds to wait between calibration loop iterations.
+///
+/// ≈6 frames at 30 fps — enough time for Camera2 to apply new gains/offsets
+/// and expose a fresh frame before the next patch sample is taken.
+const int kCalibrationSettleMs = 200;
+
 // ── White Balance ────────────────────────────────────────────────────────────
 
-/// Maximum 10 iterations; break when [wbError] drops below this.
+/// Channels below this value are treated as fully clipped — avoids
+/// divide-by-zero in gain and error calculations.
+const double _kClipGuard = 0.001;
+
+/// Per-channel error threshold at which WB is considered converged.
+///
+/// 0.01 ≈ 1% deviation — imperceptible to the human eye under typical
+/// viewing conditions.
 const double kWbTolerance = 0.01;
 
-/// Maximum number of WB calibration iterations.
+/// Hard cap on WB loop iterations.
+///
+/// At [kCalibrationSettleMs] per step, 10 iterations = up to 2 s total;
+/// neutral scenes typically converge in 3–5 steps.
 const int kWbMaxIterations = 10;
 
 /// Proportional error for WB: max per-channel deviation from green, normalized
@@ -61,7 +79,7 @@ const int kWbMaxIterations = 10;
 double wbError(RgbSample s) {
   final errR = (s.r - s.g).abs();
   final errB = (s.b - s.g).abs();
-  return (errR > errB ? errR : errB) / s.g.clamp(0.001, 1.0);
+  return (errR > errB ? errR : errB) / s.g.clamp(_kClipGuard, 1.0);
 }
 
 /// Applies one proportional-correction step to the WB gains.
@@ -70,19 +88,26 @@ double wbError(RgbSample s) {
 /// by the ratio `green / channel` so that subsequent frames push the sampled
 /// patch toward neutral.
 ///
-/// The 0.001 guard prevents divide-by-zero on a fully clipped channel.
+/// Channels below [_kClipGuard] are skipped to avoid divide-by-zero on a
+/// fully clipped channel.
 WbGains wbStep(WbGains gains, RgbSample s) {
-  final newR = s.r > 0.001 ? gains.r * (s.g / s.r) : gains.r;
-  final newB = s.b > 0.001 ? gains.b * (s.g / s.b) : gains.b;
+  final newR = s.r > _kClipGuard ? gains.r * (s.g / s.r) : gains.r;
+  final newB = s.b > _kClipGuard ? gains.b * (s.g / s.b) : gains.b;
   return (r: newR, g: gains.g, b: newB);
 }
 
 // ── Black Balance ────────────────────────────────────────────────────────────
 
-/// Maximum 10 iterations; break when [bbError] drops below this.
+/// Per-channel error threshold at which BB is considered converged.
+///
+/// 0.01 ≈ 1% residual brightness — below the eye's detection threshold for
+/// black-level lift under normal display conditions.
 const double kBbTolerance = 0.01;
 
-/// Maximum number of BB calibration iterations.
+/// Hard cap on BB loop iterations.
+///
+/// At [kCalibrationSettleMs] per step, 10 iterations = up to 2 s total;
+/// a dark scene typically converges in 2–4 steps.
 const int kBbMaxIterations = 10;
 
 /// Maximum channel value in [s]. When this is below [kBbTolerance] the black

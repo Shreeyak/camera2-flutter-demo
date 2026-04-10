@@ -310,10 +310,10 @@ abstract class CameraHostApi {
   /// distinguishes portrait from landscape.
   int getDisplayRotation();
 
-  /// Samples the center 16×16 pixel patch of the most recent GPU-processed
-  /// RGBA frame and returns the mean R, G, B as values in [0.0, 1.0].
+  /// Samples the center 96×96 pixel patch of the most recent GPU-processed
+  /// RGBA frame and returns the trimmed-mean R, G, B as values in [0.0, 1.0].
   ///
-  /// Returns (0.5, 0.5, 0.5) if no frame has been rendered yet.
+  /// Throws with error code "patch_not_ready" if no frame has been rendered yet.
   @async
   CamRgbSample sampleCenterPatch(int handle);
 }

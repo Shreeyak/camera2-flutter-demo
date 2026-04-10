@@ -173,6 +173,11 @@ class GpuControlsSidebar extends StatelessWidget {
 
 // ── White Balance section ──────────────────────────────────────────────────
 
+/// WB controls: auto/manual toggle, calibrate button, and a gain status line.
+///
+/// The status line (R×… G×… B×…) is shown only when [wbMode] is manual and
+/// [lastGains] is non-null. [onToggle] cycles between auto and manual mode;
+/// [onStartCalibration] opens the [CalibrationOverlay].
 class _WbSection extends StatelessWidget {
   const _WbSection({
     required this.wbMode,
@@ -235,6 +240,11 @@ class _WbSection extends StatelessWidget {
 
 // ── Black Balance section ──────────────────────────────────────────────────
 
+/// BB controls: lock toggle, calibrate button, and an offset status line.
+///
+/// The status line (R… G… B…) is shown only when [bbLocked] is true and
+/// [lastValues] is non-null. [onToggle] enables/disables the calibrated offsets;
+/// [onStartCalibration] opens the [CalibrationOverlay].
 class _BbSection extends StatelessWidget {
   const _BbSection({
     required this.bbLocked,
@@ -298,6 +308,10 @@ class _BbSection extends StatelessWidget {
 
 // ── Shared slider widget ───────────────────────────────────────────────────
 
+/// A labeled slider row for a single GPU shader parameter.
+///
+/// Displays [label] on the left and a tappable [valueLabel] on the right;
+/// tapping [valueLabel] resets the slider to [defaultValue].
 class _ShaderSlider extends StatelessWidget {
   const _ShaderSlider({
     required this.label,
