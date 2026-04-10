@@ -3,17 +3,15 @@
 // shared frames to registered consumer sinks via per-consumer mailbox dispatch.
 // See ImagePipeline.h for the class structure and lock ordering.
 
-// stb_image_write: single-header JPEG/PNG encoder (public domain).
-// Implementation is compiled once here; all other TUs just #include the header.
-#define STB_IMAGE_WRITE_IMPLEMENTATION
-#include "../include/stb_image_write.h"
-
 #include "ImagePipeline.h"
+#include "fpng.h"
+#include <turbojpeg.h>
 
 #include <android/log.h>
 #include <algorithm>  // std::find_if
 #include <cassert>
 #include <cctype>     // std::tolower
+#include <cstdio>     // fopen/fwrite/fclose
 #include <cstring>    // memcpy
 #include <unistd.h>   // write() for captureToFd
 
@@ -28,6 +26,8 @@ namespace cam {
 // ---------------------------------------------------------------------------
 
 ImagePipeline::ImagePipeline() {
+    // Detect CPU features (SSE4.1 on x86, CRC32 on ARM) for fpng's fast paths.
+    fpng::fpng_init();
     LOGD("ImagePipeline created (GPU dispatch mode)");
 }
 
@@ -430,47 +430,79 @@ bool ImagePipeline::captureToFile(const std::string& outputPath,
         capturedFrame_ = nullptr;
     }
 
-    // Infer format from extension: .jpg / .jpeg → JPEG; anything else → PNG.
+    // Infer format from extension: .jpg/.jpeg → JPEG, .png → PNG, anything else → error.
     // Compare the last 4-5 characters lowercase to avoid a full string-lower pass.
-    const bool asJpeg = [&outputPath]() -> bool {
+    enum class ImageFormat { JPEG, PNG, UNKNOWN };
+    const ImageFormat fmt = [&outputPath]() -> ImageFormat {
         const size_t n = outputPath.size();
+        auto lc = [](char c) {
+            return static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        };
         if (n >= 4) {
             char e4[5]{};
-            for (size_t i = 0; i < 4; ++i)
-                e4[i] = static_cast<char>(std::tolower(
-                    static_cast<unsigned char>(outputPath[n - 4 + i])));
-            if (std::string(e4) == ".jpg") return true;
+            for (size_t i = 0; i < 4; ++i) e4[i] = lc(outputPath[n - 4 + i]);
+            if (std::string(e4) == ".jpg") return ImageFormat::JPEG;
+            if (std::string(e4) == ".png") return ImageFormat::PNG;
         }
         if (n >= 5) {
             char e5[6]{};
-            for (size_t i = 0; i < 5; ++i)
-                e5[i] = static_cast<char>(std::tolower(
-                    static_cast<unsigned char>(outputPath[n - 5 + i])));
-            if (std::string(e5) == ".jpeg") return true;
+            for (size_t i = 0; i < 5; ++i) e5[i] = lc(outputPath[n - 5 + i]);
+            if (std::string(e5) == ".jpeg") return ImageFormat::JPEG;
         }
-        return false;
+        return ImageFormat::UNKNOWN;
     }();
+
+    if (fmt == ImageFormat::UNKNOWN) {
+        LOGE("captureToFile: unsupported extension in '%s' — use .jpg, .jpeg, or .png",
+             outputPath.c_str());
+        return false;
+    }
+    const bool asJpeg = (fmt == ImageFormat::JPEG);
 
     const int w      = frame->width;
     const int h      = frame->height;
     const int stride = frame->stride;
     const uint8_t* data = frame->data.data();
 
-    int ok = 0;
     if (asJpeg) {
-        // stbi_write_jpg: comp=4 (RGBA). The encoder ignores the alpha channel
-        // and encodes the RGB triplets; the result is a standard RGB JPEG.
-        ok = stbi_write_jpg(outputPath.c_str(), w, h, 4, data, jpegQuality);
+        // Encode RGBA → JPEG using libjpeg-turbo (NEON-accelerated on arm64).
+        // TJPF_RGBA: encoder converts to YCbCr internally, alpha is discarded.
+        // TJSAMP_420: 4:2:0 chroma subsampling — standard for photos.
+        tjhandle tjh = tjInitCompress();
+        if (!tjh) {
+            LOGE("captureToFile: tjInitCompress failed");
+            return false;
+        }
+        unsigned char* jpegBuf = nullptr;
+        unsigned long  jpegSize = 0;
+        const int ret = tjCompress2(tjh, data, w, stride, h, TJPF_RGBA,
+                                    &jpegBuf, &jpegSize,
+                                    TJSAMP_420, jpegQuality, TJFLAG_FASTDCT);
+        if (ret != 0) {
+            LOGE("captureToFile: tjCompress2 failed: %s", tjGetErrorStr2(tjh));
+            tjDestroy(tjh);
+            return false;
+        }
+        tjDestroy(tjh);
+
+        FILE* f = fopen(outputPath.c_str(), "wb");
+        const bool ok = f && fwrite(jpegBuf, jpegSize, 1, f) == 1;
+        if (f) fclose(f);
+        tjFree(jpegBuf);
+        if (!ok) {
+            LOGE("captureToFile: failed to write JPEG to '%s'", outputPath.c_str());
+            return false;
+        }
     } else {
-        // stbi_write_png: stride_in_bytes controls row pitch for non-contiguous data.
-        ok = stbi_write_png(outputPath.c_str(), w, h, 4, data, stride);
+        // Encode RGBA → PNG using fpng (fast, CRC32-hardware-accelerated on arm64).
+        // fpng requires contiguous rows; stride == w*4 is asserted in deliverFullResRgba.
+        if (!fpng::fpng_encode_image_to_file(outputPath.c_str(), data, w, h, 4)) {
+            LOGE("captureToFile: fpng_encode_image_to_file failed for '%s'",
+                 outputPath.c_str());
+            return false;
+        }
     }
 
-    if (!ok) {
-        LOGE("captureToFile: stbi_write_%s failed for path '%s'",
-             asJpeg ? "jpg" : "png", outputPath.c_str());
-        return false;
-    }
     LOGD("captureToFile: wrote %dx%d %s → '%s'",
          w, h, asJpeg ? "JPEG" : "PNG", outputPath.c_str());
     return true;
@@ -480,18 +512,18 @@ bool ImagePipeline::captureToFile(const std::string& outputPath,
 // captureToFd — encode and write to an open file descriptor
 // ---------------------------------------------------------------------------
 
-// stb_image_write callback: writes a chunk to the POSIX fd stored in context.
-// stb calls this one or more times per image; we loop to handle short writes.
-static void stbiWriteFdCallback(void* ctx, void* data, int size) {
-    int fd = *static_cast<int*>(ctx);
-    const uint8_t* p = static_cast<const uint8_t*>(data);
-    int rem = size;
+/// Writes all bytes in [buf, buf+size) to fd, retrying on short writes.
+/// @return true on success, false on I/O error.
+static bool writeFully(int fd, const void* buf, size_t size) {
+    const uint8_t* p = static_cast<const uint8_t*>(buf);
+    size_t rem = size;
     while (rem > 0) {
-        ssize_t n = ::write(fd, p, static_cast<size_t>(rem));
-        if (n <= 0) return;  // I/O error — stb will treat the output as failed
+        ssize_t n = ::write(fd, p, rem);
+        if (n <= 0) return false;
         p   += n;
-        rem -= static_cast<int>(n);
+        rem -= static_cast<size_t>(n);
     }
+    return true;
 }
 
 bool ImagePipeline::captureToFd(int fd, bool asJpeg, int jpegQuality,
@@ -526,19 +558,44 @@ bool ImagePipeline::captureToFd(int fd, bool asJpeg, int jpegQuality,
     const int stride = frame->stride;
     const uint8_t* data = frame->data.data();
 
-    int ok = 0;
     if (asJpeg) {
-        // comp=4 (RGBA); the encoder ignores alpha and produces a standard RGB JPEG.
-        ok = stbi_write_jpg_to_func(stbiWriteFdCallback, &fd, w, h, 4, data, jpegQuality);
+        // Encode RGBA → JPEG using libjpeg-turbo, then stream to fd.
+        tjhandle tjh = tjInitCompress();
+        if (!tjh) {
+            LOGE("captureToFd: tjInitCompress failed");
+            return false;
+        }
+        unsigned char* jpegBuf = nullptr;
+        unsigned long  jpegSize = 0;
+        const int ret = tjCompress2(tjh, data, w, stride, h, TJPF_RGBA,
+                                    &jpegBuf, &jpegSize,
+                                    TJSAMP_420, jpegQuality, TJFLAG_FASTDCT);
+        if (ret != 0) {
+            LOGE("captureToFd: tjCompress2 failed: %s", tjGetErrorStr2(tjh));
+            tjDestroy(tjh);
+            return false;
+        }
+        tjDestroy(tjh);
+
+        const bool ok = writeFully(fd, jpegBuf, jpegSize);
+        tjFree(jpegBuf);
+        if (!ok) {
+            LOGE("captureToFd: write failed (fd=%d)", fd);
+            return false;
+        }
     } else {
-        ok = stbi_write_png_to_func(stbiWriteFdCallback, &fd, w, h, 4, data, stride);
+        // Encode RGBA → PNG using fpng, then stream to fd.
+        std::vector<uint8_t> pngBuf;
+        if (!fpng::fpng_encode_image_to_memory(data, w, h, 4, pngBuf)) {
+            LOGE("captureToFd: fpng_encode_image_to_memory failed (fd=%d)", fd);
+            return false;
+        }
+        if (!writeFully(fd, pngBuf.data(), pngBuf.size())) {
+            LOGE("captureToFd: write failed (fd=%d)", fd);
+            return false;
+        }
     }
 
-    if (!ok) {
-        LOGE("captureToFd: stbi_write_%s_to_func failed (fd=%d)",
-             asJpeg ? "jpg" : "png", fd);
-        return false;
-    }
     LOGD("captureToFd: wrote %dx%d %s to fd=%d", w, h, asJpeg ? "JPEG" : "PNG", fd);
     return true;
 }

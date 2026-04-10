@@ -1090,10 +1090,19 @@ class CameraController(
             }
             val lowerName = resolvedName.lowercase(java.util.Locale.ROOT)
             val isJpeg = lowerName.endsWith(".jpg") || lowerName.endsWith(".jpeg")
+            val isPng  = lowerName.endsWith(".png")
+            if (!isJpeg && !isPng) {
+                mainHandler.post {
+                    callback(Result.failure(FlutterError("invalid_format",
+                        "Unsupported file extension in '$resolvedName' — use .jpg, .jpeg, or .png",
+                        null)))
+                }
+                return@post
+            }
             val mimeType = if (isJpeg) "image/jpeg" else "image/png"
             // JPEG quality 90: good perceptual quality with reasonable file size.
             val jpegQuality = 90
-            val writeExif = isJpeg || lowerName.endsWith(".png")
+            val writeExif = isJpeg || isPng
 
             if (outputDirectory != null) {
                 // Caller supplied an explicit directory: use the existing file-path flow.
