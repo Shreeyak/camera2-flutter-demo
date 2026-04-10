@@ -346,7 +346,10 @@ class CambrianCamera {
   /// Returns the trimmed-mean R, G, B as [RgbSample] with values in [0.0, 1.0].
   /// The top and bottom 15% of pixel values per channel are discarded before
   /// averaging to suppress hot pixels and specular outliers.
-  /// Returns (r: 0.5, g: 0.5, b: 0.5) if no frame has been rendered yet.
+  ///
+  /// Throws [PlatformException] with code `"patch_not_ready"` if the GPU
+  /// pipeline has not yet rendered a frame. Callers must not assume a fallback
+  /// value — treat this as a hard error and abort any calibration in progress.
   ///
   /// Most callers should use [calibrateWhiteBalance] or [calibrateBlackBalance]
   /// instead of calling this directly.

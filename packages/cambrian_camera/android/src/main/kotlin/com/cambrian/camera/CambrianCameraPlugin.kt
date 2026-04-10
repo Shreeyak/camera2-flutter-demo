@@ -307,7 +307,9 @@ class CambrianCameraPlugin : FlutterPlugin, ActivityAware, CameraHostApi {
      * Samples the center 16×16 pixel patch of the most recent GPU-rendered frame.
      *
      * @param handle   The camera handle.
-     * @param callback Invoked with [Result.success] containing a [CamRgbSample].
+     * @param callback Invoked with [Result.success] containing a [CamRgbSample],
+     *                 or [Result.failure] with error code "patch_not_ready" if the
+     *                 GPU pipeline has not yet rendered a frame.
      */
     override fun sampleCenterPatch(handle: Long, callback: (Result<CamRgbSample>) -> Unit) {
         val controller = sessions[handle]?.controller
@@ -316,7 +318,15 @@ class CambrianCameraPlugin : FlutterPlugin, ActivityAware, CameraHostApi {
             return
         }
         controller.sampleCenterPatch { rgb ->
-            callback(Result.success(CamRgbSample(r = rgb[0].toDouble(), g = rgb[1].toDouble(), b = rgb[2].toDouble())))
+            if (rgb == null) {
+                callback(Result.failure(FlutterError(
+                    "patch_not_ready",
+                    "GPU pipeline not ready — no frame has been rendered yet",
+                    null
+                )))
+            } else {
+                callback(Result.success(CamRgbSample(r = rgb[0].toDouble(), g = rgb[1].toDouble(), b = rgb[2].toDouble())))
+            }
         }
     }
 

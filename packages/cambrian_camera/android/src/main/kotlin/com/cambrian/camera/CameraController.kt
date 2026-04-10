@@ -944,12 +944,13 @@ class CameraController(
      *
      * Delegates to [GpuPipeline.sampleCenterPatch] and wraps the result back
      * to [mainHandler] before invoking [callback].
-     * Returns {0.5f, 0.5f, 0.5f} if no pipeline is available.
+     * Calls back with null if the GPU pipeline is unavailable or no frame has
+     * been rendered yet — callers must treat null as an error.
      */
-    fun sampleCenterPatch(callback: (FloatArray) -> Unit) {
+    fun sampleCenterPatch(callback: (FloatArray?) -> Unit) {
         val pipeline = gpuPipeline
         if (pipeline == null) {
-            mainHandler.post { callback(floatArrayOf(0.5f, 0.5f, 0.5f)) }
+            mainHandler.post { callback(null) }
             return
         }
         pipeline.sampleCenterPatch { rgb ->

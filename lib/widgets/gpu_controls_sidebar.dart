@@ -162,7 +162,7 @@ class GpuControlsSidebar extends StatelessWidget {
               // Resets all sliders, WB, and BB to factory defaults.
               onPressed: onResetAll,
               icon: const Icon(Icons.refresh, size: 16),
-              label: const Text('Reset all'),
+              label: const Text('Reset sliders'),
             ),
           ],
         ),

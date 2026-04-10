@@ -127,9 +127,12 @@ public:
     /// Sample the center 16×16 pixels of the full-res FBO and return the mean
     /// R, G, B as normalized [0, 1] floats.
     ///
-    /// Must be called on the GL thread. Returns 0.5 for all channels if the FBO
-    /// is not yet initialized (no frame rendered).
-    void sampleCenterPatch(float& outR, float& outG, float& outB);
+    /// Must be called on the GL thread.
+    /// Returns true and fills outR/outG/outB on success.
+    /// Returns false (without touching the out-params) if the FBO is not yet
+    /// initialised or no frame has been rendered yet — callers must treat this
+    /// as an error rather than using the unset output values.
+    bool sampleCenterPatch(float& outR, float& outG, float& outB);
 
 private:
     int consecutiveSwapFailures_ = 0;

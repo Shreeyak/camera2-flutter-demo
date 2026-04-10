@@ -1099,12 +1099,11 @@ GLuint GpuRenderer::linkProgram(GLuint vert, GLuint frag) {
 // Public: center-patch sampling
 // ---------------------------------------------------------------------------
 
-void GpuRenderer::sampleCenterPatch(float& outR, float& outG, float& outB) {
+bool GpuRenderer::sampleCenterPatch(float& outR, float& outG, float& outB) {
     // fbo_ == 0: pipeline not yet initialised.
     // firstFrame_: GPU has not rendered any frame yet — readback would return garbage.
     if (fbo_ == 0 || firstFrame_) {
-        outR = outG = outB = 0.5f;
-        return;
+        return false;
     }
 
     constexpr int kPatchW    = 96;
@@ -1151,12 +1150,18 @@ void GpuRenderer::sampleCenterPatch(float& outR, float& outG, float& outB) {
             }
             cumulative = end;
         }
-        return count > 0 ? static_cast<float>(sum) / (count * 255.0f) : 0.5f;
+        // count == 0 is impossible with 15% trim on 9 216 pixels, but guard anyway.
+        return count > 0 ? static_cast<float>(sum) / (count * 255.0f) : -1.0f;
     };
 
     outR = histTrimmedMean(histR, kTrimCount);
     outG = histTrimmedMean(histG, kTrimCount);
     outB = histTrimmedMean(histB, kTrimCount);
+
+    // A negative result from histTrimmedMean means the degenerate case fired.
+    if (outR < 0.0f || outG < 0.0f || outB < 0.0f) return false;
+
+    return true;
 }
 
 } // namespace cam

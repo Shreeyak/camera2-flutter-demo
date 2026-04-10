@@ -640,25 +640,25 @@ Java_com_cambrian_camera_GpuPipeline_nativeGpuClearRebindFlag(
 // ---------------------------------------------------------------------------
 // nativeGpuSampleCenterPatch
 //
-// Samples the center 16×16 pixels of the most recent rendered FBO.
+// Samples the center 96×96 pixel patch of the most recent rendered FBO.
 // Must be called on the GL thread.
 //
 // @param gpuHandle  Handle returned by nativeGpuInit.
-// @return  float[3] = {meanR, meanG, meanB} in [0, 1]. {0.5,0.5,0.5} on error.
+// @return  float[3] = {trimmedMeanR, trimmedMeanG, trimmedMeanB} in [0, 1],
+//          or null if the GPU is not yet initialised / no frame rendered yet.
+//          Callers must check for null and surface it as an error.
 // ---------------------------------------------------------------------------
 JNIEXPORT jfloatArray JNICALL
 Java_com_cambrian_camera_GpuPipeline_nativeGpuSampleCenterPatch(
         JNIEnv* env, jclass /*clazz*/, jlong gpuHandle) {
-    jfloatArray result = env->NewFloatArray(3);
-    if (result == nullptr) return nullptr; // OOM — JVM will throw OutOfMemoryError
-    if (!gpuHandle) {
-        float defaults[] = {0.5f, 0.5f, 0.5f};
-        env->SetFloatArrayRegion(result, 0, 3, defaults);
-        return result;
-    }
+    if (!gpuHandle) return nullptr; // GPU not initialised — signal error to Kotlin
     cam::GpuRenderer* renderer = rendererFromHandle(gpuHandle);
     float r, g, b;
-    renderer->sampleCenterPatch(r, g, b);
+    if (!renderer->sampleCenterPatch(r, g, b)) {
+        return nullptr; // Not ready: FBO uninitialised or no frame rendered yet
+    }
+    jfloatArray result = env->NewFloatArray(3);
+    if (result == nullptr) return nullptr; // OOM — JVM will throw OutOfMemoryError
     float vals[] = {r, g, b};
     env->SetFloatArrayRegion(result, 0, 3, vals);
     return result;

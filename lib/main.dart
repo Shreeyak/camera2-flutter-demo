@@ -404,40 +404,66 @@ class _CameraScreenState extends State<CameraScreen>
   Future<void> _runWbCalibration() async {
     final camera = _camera;
     if (camera == null || !mounted) return;
-    final result = await camera.calibrateWhiteBalance(
-      initialGainR: _latestFrameResult?.wbGainR ?? 1.0,
-      initialGainG: _latestFrameResult?.wbGainG ?? 1.0,
-      initialGainB: _latestFrameResult?.wbGainB ?? 1.0,
-    );
-    if (mounted) {
-      setState(() {
-        _wbMode = WhiteBalance.manual(
-          gainR: result.gains.r,
-          gainG: result.gains.g,
-          gainB: result.gains.b,
+    try {
+      final result = await camera.calibrateWhiteBalance(
+        initialGainR: _latestFrameResult?.wbGainR ?? 1.0,
+        initialGainG: _latestFrameResult?.wbGainG ?? 1.0,
+        initialGainB: _latestFrameResult?.wbGainB ?? 1.0,
+      );
+      if (mounted) {
+        setState(() {
+          _wbMode = WhiteBalance.manual(
+            gainR: result.gains.r,
+            gainG: result.gains.g,
+            gainB: result.gains.b,
+          );
+          _lastWbGains = result.gains;
+          _lastWbPatchBefore = result.patchBefore;
+          _lastWbPatchAfter = result.patchAfter;
+        });
+        // Forward calibrated gains to Camera2 ISP immediately.
+        _applySettings(CameraSettings(whiteBalance: _wbMode));
+      }
+    } catch (e) {
+      if (mounted) {
+        _showError(
+          'White balance calibration failed — point at a neutral surface and try again',
         );
-        _lastWbGains = result.gains;
-        _lastWbPatchBefore = result.patchBefore;
-        _lastWbPatchAfter = result.patchAfter;
-      });
+      }
     }
   }
 
   Future<void> _runBbCalibration() async {
     final camera = _camera;
     if (camera == null || !mounted) return;
-    final result = await camera.calibrateBlackBalance(
-      params: _processingParams,
-    );
-    if (mounted) {
-      setState(() {
-        _lastBbR = result.offsets.r;
-        _lastBbG = result.offsets.g;
-        _lastBbB = result.offsets.b;
-        _lastBbPatchBefore = result.patchBefore;
-        _lastBbPatchAfter = result.patchAfter;
-        _bbLocked = true;
-      });
+    try {
+      final result = await camera.calibrateBlackBalance(
+        params: _processingParams,
+      );
+      if (mounted) {
+        setState(() {
+          _lastBbR = result.offsets.r;
+          _lastBbG = result.offsets.g;
+          _lastBbB = result.offsets.b;
+          _lastBbPatchBefore = result.patchBefore;
+          _lastBbPatchAfter = result.patchAfter;
+          _bbLocked = true;
+        });
+        // Forward calibrated offsets to GPU shader immediately.
+        _applyProcessingParams(
+          _processingParams.copyWith(
+            blackR: result.offsets.r,
+            blackG: result.offsets.g,
+            blackB: result.offsets.b,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        _showError(
+          'Black balance calibration failed — cover the lens fully and try again',
+        );
+      }
     }
   }
 

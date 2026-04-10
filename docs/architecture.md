@@ -779,7 +779,7 @@ accR += sample.r,  accG += sample.g,  accB += sample.b
 ```
 Convergence: `max(r, g, b) < 0.01`. Max 10 iterations.
 
-Pure math primitives (`wbError`, `wbStep`, `bbError`, `bbStep`) live in `packages/cambrian_camera/lib/src/calibration.dart`. The high-level loops, patch sampling, and settings updates are in `CambrianCamera.calibrateWhiteBalance()` / `calibrateBlackBalance()` in `cambrian_camera_controller.dart`. Both methods return a result struct with `patchBefore` and `patchAfter` fields (the 16×16 mean RGB sampled before and after convergence) so callers can display a before/after comparison without calling `sampleCenterPatch()` themselves.
+Pure math primitives (`wbError`, `wbStep`, `bbError`, `bbStep`) live in `packages/cambrian_camera/lib/src/calibration.dart`. The high-level loops, patch sampling, and settings updates are in `CambrianCamera.calibrateWhiteBalance()` / `calibrateBlackBalance()` in `cambrian_camera_controller.dart`. Both methods return a result struct with `patchBefore` and `patchAfter` fields (the 96×96 trimmed-mean RGB sampled before and after convergence) so callers can display a before/after comparison without calling `sampleCenterPatch()` themselves.
 
 ### Consumer fan-out
 

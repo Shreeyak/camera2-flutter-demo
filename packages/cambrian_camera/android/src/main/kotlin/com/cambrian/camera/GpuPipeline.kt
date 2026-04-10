@@ -38,6 +38,7 @@ open class GpuPipeline(
     private val glHandler = Handler(glThread.looper)
 
     @Volatile private var gpuHandle: Long = 0L
+    @Volatile private var stopping = false
     private var surfaceTexture: SurfaceTexture? = null
     private var oesTexName: Int = 0
     private val texMatrix      = FloatArray(16)
@@ -131,6 +132,7 @@ open class GpuPipeline(
      */
     open fun stop() {
         Log.i(TAG, "stop (frame #$frameCount)")
+        stopping = true  // reject new frames and sample requests immediately
         glHandler.removeCallbacksAndMessages(null)
         glHandler.post {
             cameraSurface?.release()
@@ -209,16 +211,18 @@ open class GpuPipeline(
     }
 
     /**
-     * Samples the center 16×16 pixel patch from the most recent rendered frame.
+     * Samples the center 96×96 pixel patch from the most recent rendered frame.
      *
      * Posts the GL read to [glHandler] and invokes [callback] on the GL thread
-     * with a [FloatArray] of size 3: {meanR, meanG, meanB} in [0.0, 1.0].
-     * Calls back immediately with {0.5f, 0.5f, 0.5f} if [gpuHandle] is 0.
+     * with a [FloatArray] of size 3: {trimmedMeanR, trimmedMeanG, trimmedMeanB}
+     * in [0.0, 1.0], or null if the GPU is not yet initialised or no frame has
+     * been rendered. Callers must treat null as an error.
      */
-    fun sampleCenterPatch(callback: (FloatArray) -> Unit) {
+    fun sampleCenterPatch(callback: (FloatArray?) -> Unit) {
         val handle = gpuHandle
-        if (handle == 0L) {
-            callback(floatArrayOf(0.5f, 0.5f, 0.5f))
+        if (handle == 0L || stopping) {
+            // Post to glHandler for consistent callback thread (both paths on GL thread).
+            glHandler.post { callback(null) }
             return
         }
         glHandler.post {
@@ -241,6 +245,7 @@ open class GpuPipeline(
 
     // Called on glHandler thread when SurfaceTexture has a new frame.
     private fun onFrameAvailable(st: SurfaceTexture) {
+        if (stopping) return
         val handle = gpuHandle
         if (handle == 0L) return
 
@@ -350,7 +355,7 @@ open class GpuPipeline(
         external fun nativeGpuClearRebindFlag(gpuHandle: Long)
 
         @JvmStatic
-        external fun nativeGpuSampleCenterPatch(gpuHandle: Long): FloatArray
+        external fun nativeGpuSampleCenterPatch(gpuHandle: Long): FloatArray?
 
         @JvmStatic
         external fun nativeGetDimensionMismatchCount(pipelineHandle: Long): Int
