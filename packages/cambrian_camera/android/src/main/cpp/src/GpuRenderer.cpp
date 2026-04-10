@@ -261,6 +261,19 @@ void GpuRenderer::release() {
     releaseEgl();
 }
 
+bool GpuRenderer::resize(int newW, int newH, int newRawW, int newRawH) {
+    if (debugLevel_ >= 1) LOGI("resize: %dx%d raw=%dx%d", newW, newH, newRawW, newRawH);
+    releaseGl();
+    width_         = newW;
+    height_        = (newH > 0) ? newH : 1;
+    trackerHeight_ = 480;
+    trackerWidth_  = ((width_ * 480 / height_) + 1) & ~1;
+    // releaseGl() zeros rawW_/rawH_ — restore before initGl() or the raw path stays disabled.
+    rawW_ = newRawW;
+    rawH_ = newRawH;
+    return initGl();
+}
+
 // ---------------------------------------------------------------------------
 // Public: per-frame render + readback
 // ---------------------------------------------------------------------------

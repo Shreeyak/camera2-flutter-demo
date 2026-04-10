@@ -51,6 +51,16 @@ public:
     /// Must be called on the GL thread.
     void release();
 
+    /// Resize GL resources (FBOs, PBOs, textures) to new dimensions without touching
+    /// the EGL display or context. Recompiles shaders and VBO.
+    /// Must be called on the GL thread with the EGL context current.
+    /// @param newW     New stream width.
+    /// @param newH     New stream height.
+    /// @param newRawW  New raw stream width; 0 to disable raw path.
+    /// @param newRawH  New raw stream height; 0 to disable raw path.
+    /// @return true on success; false if GL re-init fails.
+    bool resize(int newW, int newH, int newRawW, int newRawH);
+
     /// Per-frame render + readback.
     ///
     /// Sequence:

@@ -726,70 +726,109 @@ class CameraController(
             requestedHeight = height
             setState(State.RECOVERING)
             emitState("recovering")
-            // Full teardown (closes device + native pipeline) rather than teardownSession().
-            // teardownSession() calls nativeRelease() which terminates the EGL display; a
-            // subsequent nativeInit() on the same device cannot re-initialise EGL on the
-            // already-terminated display on some devices. A fresh openCamera() call always
-            // gets a clean EGL initialisation, matching the existing recovery path.
-            teardown()
-            val id = resolvedCameraId ?: run {
-                mainHandler.post { callback(Result.failure(FlutterError("no_camera", "No camera available", null))) }
+
+            val device = cameraDevice
+            val pipeline = gpuPipeline
+            if (backgroundSuspended || released || device == null || pipeline == null) {
+                // Camera went away mid-flight — let auto-recovery handle it.
+                handleNonFatalError(CamErrorCode.CONFIGURATION_FAILED, "setResolution: camera not ready")
+                mainHandler.post { callback(Result.failure(FlutterError("invalid_state", "Camera not ready for resize", null))) }
                 return@post
             }
-            try {
-                openLock.acquire()
-                cameraManager.openCamera(
-                    id,
+
+            // Session-only teardown: close Camera2 session and image readers, but keep the
+            // CameraDevice open and the GpuPipeline's EGL context alive.
+            backgroundHandler.removeCallbacks(stallWatchdog)
+            try { captureSession?.close() } catch (_: Exception) {}
+            captureSession = null
+            try { imageReader?.close() } catch (_: Exception) {}
+            imageReader = null
+            try { jpegImageReader?.close() } catch (_: Exception) {}
+            jpegImageReader = null
+            repeatingTargetSurface = null
+            lastCaptureResultMs = 0L
+            captureResultCount = 0L
+
+            // Resolve new stream format (uses requestedWidth/requestedHeight set above).
+            val (_, streamWidth, streamHeight) = resolveStreamFormat(device)
+            previewWidth = streamWidth
+            previewHeight = streamHeight
+            surfaceProducer.setSize(streamWidth, streamHeight)
+            val newRawW: Int
+            val newRawH: Int
+            if (enableRawStream && rawSurfaceProducer != null) {
+                newRawW = (streamWidth.toFloat() / streamHeight * rawStreamHeight + 0.5f).toInt() and 1.inv()
+                newRawH = rawStreamHeight
+                rawW = newRawW
+                rawH = newRawH
+                rawSurfaceProducer.setSize(newRawW, newRawH)
+            } else {
+                newRawW = 0; newRawH = 0
+                rawW = 0; rawH = 0
+            }
+
+            // Resize GL resources in-place: releaseGl() + initGl() at new dims, EGL untouched.
+            // If it fails, delegate to auto-recovery which will do a full device close+reopen.
+            if (!pipeline.resize(streamWidth, streamHeight, newRawW, newRawH)) {
+                Log.e("CC/Cam", "[$handle] setResolution: GPU resize failed — delegating to auto-recovery")
+                handleNonFatalError(CamErrorCode.CONFIGURATION_FAILED, "GPU resize failed")
+                mainHandler.post { callback(Result.failure(FlutterError("reconfigure_failed", "GPU resize failed", null))) }
+                return@post
+            }
+
+            // Replay processing params so shader uniforms survive the resize.
+            lastProcessingParams?.let { setProcessingParams(it) }
+
+            // Rebuild Camera2 session with the existing cameraSurface (still valid after resize)
+            // and a fresh JPEG reader at the new dimensions.
+            val jpegReader = ImageReader.newInstance(streamWidth, streamHeight, android.graphics.ImageFormat.JPEG, 1)
+            jpegImageReader = jpegReader
+
+            val gpuSurface = pipeline.cameraSurface
+            if (gpuSurface == null) {
+                Log.e("CC/Cam", "[$handle] setResolution: cameraSurface null after resize")
+                jpegImageReader = null
+                jpegReader.close()
+                handleNonFatalError(CamErrorCode.CONFIGURATION_FAILED, "cameraSurface null after resize")
+                mainHandler.post { callback(Result.failure(FlutterError("reconfigure_failed", "Camera surface unavailable", null))) }
+                return@post
+            }
+            repeatingTargetSurface = gpuSurface
+            val surfaces = listOf(gpuSurface, jpegReader.surface)
+            val outputs = surfaces.map { android.hardware.camera2.params.OutputConfiguration(it) }
+            device.createCaptureSession(
+                android.hardware.camera2.params.SessionConfiguration(
+                    android.hardware.camera2.params.SessionConfiguration.SESSION_REGULAR,
+                    outputs,
                     { command -> backgroundHandler.post(command) },
-                    object : CameraDevice.StateCallback() {
-                        override fun onOpened(camera: CameraDevice) {
-                            openLock.release()
-                            cameraDevice = camera
-                            retryCount = 0
-                            startCaptureSession { result ->
-                                result.fold(
-                                    onSuccess = { mainHandler.post { callback(Result.success(Unit)) } },
-                                    onFailure = { e ->
-                                        mainHandler.post {
-                                            callback(Result.failure(
-                                                FlutterError("reconfigure_failed", "Resolution change failed: ${e.message}", null)
-                                            ))
-                                        }
-                                    },
-                                )
+                    object : android.hardware.camera2.CameraCaptureSession.StateCallback() {
+                        override fun onConfigured(session: android.hardware.camera2.CameraCaptureSession) {
+                            Log.i("CC/Cam", "[$handle] setResolution: session configured ${previewWidth}×${previewHeight}")
+                            captureSession = session
+                            try {
+                                val settings = pendingSettings
+                                val request = if (settings != null) buildCaptureRequest(device, settings)
+                                              else buildDefaultCaptureRequest(device)
+                                repeatingRequest = request
+                                session.setRepeatingRequest(request, repeatingCaptureCallback, backgroundHandler)
+                                setState(State.STREAMING)
+                                emitState("streaming")
+                                lastCaptureResultMs = android.os.SystemClock.elapsedRealtime()
+                                backgroundHandler.postDelayed(stallWatchdog, stallCheckIntervalMs)
+                                mainHandler.post { callback(Result.success(Unit)) }
+                            } catch (e: android.hardware.camera2.CameraAccessException) {
+                                handleNonFatalError(CamErrorCode.CAMERA_ACCESS_ERROR, e.message ?: "CameraAccessException")
+                                mainHandler.post { callback(Result.failure(FlutterError(CamErrorCode.CAMERA_ACCESS_ERROR.name, e.message, null))) }
                             }
                         }
-                        override fun onDisconnected(camera: CameraDevice) {
-                            openLock.release()
-                            camera.close()
-                            cameraDevice = null
-                            handleNonFatalError(CamErrorCode.CAMERA_DISCONNECTED, "Camera disconnected during resolution change")
-                            mainHandler.post { callback(Result.failure(FlutterError(CamErrorCode.CAMERA_DISCONNECTED.name, "Camera disconnected", null))) }
-                        }
-                        override fun onError(camera: CameraDevice, error: Int) {
-                            openLock.release()
-                            camera.close()
-                            cameraDevice = null
-                            val (errCode, errMsg) = errorCodeToMessage(error)
-                            if (isFatalDeviceError(error)) handleFatalError(errCode, errMsg)
-                            else handleNonFatalError(errCode, errMsg)
-                            mainHandler.post { callback(Result.failure(FlutterError(errCode.name, errMsg, null))) }
+                        override fun onConfigureFailed(session: android.hardware.camera2.CameraCaptureSession) {
+                            Log.e("CC/Cam", "[$handle] setResolution: session configure failed")
+                            handleNonFatalError(CamErrorCode.CONFIGURATION_FAILED, "Session configuration failed during resize")
+                            mainHandler.post { callback(Result.failure(FlutterError(CamErrorCode.CONFIGURATION_FAILED.name, "Session configuration failed", null))) }
                         }
                     },
-                )
-            } catch (e: InterruptedException) {
-                mainHandler.post { callback(Result.failure(FlutterError("interrupted", "Resolution change interrupted", null))) }
-            } catch (e: CameraAccessException) {
-                openLock.release()
-                val message = e.message ?: "CameraAccessException"
-                if (isFatalAccessException(e)) handleFatalError(CamErrorCode.CAMERA_ACCESS_ERROR, message)
-                else handleNonFatalError(CamErrorCode.CAMERA_ACCESS_ERROR, message)
-                mainHandler.post { callback(Result.failure(FlutterError(CamErrorCode.CAMERA_ACCESS_ERROR.name, message, null))) }
-            } catch (e: SecurityException) {
-                openLock.release()
-                handleNonFatalError(CamErrorCode.CAMERA_ACCESS_ERROR, "SecurityException: ${e.message}")
-                mainHandler.post { callback(Result.failure(FlutterError(CamErrorCode.CAMERA_ACCESS_ERROR.name, "SecurityException", null))) }
-            }
+                ),
+            )
         }
     }
 

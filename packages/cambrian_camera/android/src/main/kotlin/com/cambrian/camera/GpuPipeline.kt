@@ -151,6 +151,35 @@ open class GpuPipeline(
     }
 
     /**
+     * Resize GL resources (FBOs, PBOs, textures) to new dimensions while keeping
+     * the EGL context, SurfaceTexture, and cameraSurface alive.
+     *
+     * Posts to the GL thread and blocks until complete.
+     * Must NOT be called while the pipeline is stopped.
+     *
+     * @return true if the native resize succeeded; false if GL re-init failed.
+     */
+    fun resize(newW: Int, newH: Int, newRawW: Int, newRawH: Int): Boolean {
+        val handle = gpuHandle
+        if (handle == 0L) {
+            Log.e(TAG, "resize: no active gpuHandle")
+            return false
+        }
+        var ok = false
+        val latch = CountDownLatch(1)
+        glHandler.post {
+            // Update SurfaceTexture buffer dimensions before GL resources so the buffer
+            // queue starts allocating new-sized buffers immediately.
+            surfaceTexture?.setDefaultBufferSize(newW, newH)
+            ok = nativeGpuResize(handle, newW, newH, newRawW, newRawH)
+            if (!ok) Log.e(TAG, "nativeGpuResize failed for ${newW}x${newH}")
+            latch.countDown()
+        }
+        latch.await()
+        return ok
+    }
+
+    /**
      * Attach or detach the MediaCodec encoder surface.
      * Posts to the GL thread so EGL surface creation is serialised with drawAndReadback().
      * Pass null to detach (called when recording stops or the pipeline is torn down).
@@ -315,6 +344,9 @@ open class GpuPipeline(
 
         @JvmStatic
         external fun nativeGpuRelease(gpuHandle: Long)
+
+        @JvmStatic
+        external fun nativeGpuResize(gpuHandle: Long, newW: Int, newH: Int, newRawW: Int, newRawH: Int): Boolean
 
         @JvmStatic
         external fun nativeGpuSetEncoderSurface(gpuHandle: Long, encoderSurface: Surface?)
