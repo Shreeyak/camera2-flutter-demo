@@ -575,7 +575,11 @@ class _CameraScreenState extends State<CameraScreen>
   /// Handles user selection of a new stream resolution from the popup menu.
   Future<void> _onResolutionSelected(CameraSize size) async {
     final camera = _camera;
-    if (camera == null || _isRecording || _recordingActionInProgress) return;
+    if (camera == null) return;
+    if (_isRecording || _recordingActionInProgress) {
+      _showError('Cannot change resolution while recording.');
+      return;
+    }
     setState(() => _recordingActionInProgress = true);
     try {
       await camera.setResolution(size.width, size.height);

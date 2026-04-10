@@ -188,7 +188,7 @@ open class GpuPipeline(
             }
         }
         // Timeout guards against indefinite hang if stop() clears the GL handler mid-resize.
-        if (!latch.await(5, java.util.concurrent.TimeUnit.SECONDS)) {
+        if (!latch.await(RESIZE_TIMEOUT_SECONDS, java.util.concurrent.TimeUnit.SECONDS)) {
             Log.e(TAG, "resize: timed out waiting for GL thread")
             return false
         }
@@ -360,6 +360,10 @@ open class GpuPipeline(
         private const val TAG = "CC/Gpu"
         private const val STALL_THRESHOLD_MS = 3000L
         private const val STALL_CHECK_INTERVAL_MS = 1000L
+        // Upper bound for the GL thread to complete a resize. 5 s is generous for GL
+        // buffer reallocation; any real hang (e.g. stop() clearing the handler) should
+        // surface well before device ANR (5 s foreground, 10 s background on Android).
+        private const val RESIZE_TIMEOUT_SECONDS = 5L
 
         init {
             try {
