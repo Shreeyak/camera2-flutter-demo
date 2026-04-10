@@ -4,6 +4,7 @@ import '../camera/camera_settings_values.dart';
 import '../camera/camera_callbacks.dart';
 import 'bottom_bar_buttons.dart';
 import 'camera_settings_bar.dart';
+import 'resolution_picker.dart';
 
 class BottomBar extends StatelessWidget {
   final bool isSettingsOpen;
@@ -150,28 +151,15 @@ class _MainActionBar extends StatelessWidget {
                 onTap: onToggleRecording,
               ),
               const SizedBox(width: 16),
-              PopupMenuButton<CameraSize>(
-                onSelected: onResolutionSelected,
-                itemBuilder: (context) => availableResolutions.reversed.map((size) {
-                  final label = '${size.width}x${size.height}';
-                  final isCurrent = label == currentResolutionLabel;
-                  return PopupMenuItem<CameraSize>(
-                    value: size,
-                    child: Text(
-                      label,
-                      style: TextStyle(
-                        fontWeight: isCurrent ? FontWeight.bold : FontWeight.normal,
-                        fontFamily: 'monospace',
-                        color: isCurrent ? cs.primary : null,
-                      ),
-                    ),
-                  );
-                }).toList(),
-                child: BottomBarActionButton(
-                  icon: Icons.photo_size_select_large,
-                  label: 'RESOLUTION',
-                  isDisabled: availableResolutions.isEmpty,
-                  onTap: null,
+              BottomBarActionButton(
+                icon: Icons.photo_size_select_large,
+                label: 'RESOLUTION',
+                isDisabled: availableResolutions.isEmpty,
+                onTap: () => showResolutionPicker(
+                  context,
+                  resolutions: availableResolutions.reversed.toList(),
+                  currentLabel: currentResolutionLabel,
+                  onSelected: onResolutionSelected,
                 ),
               ),
             ],
