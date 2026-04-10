@@ -397,6 +397,40 @@ void ImagePipeline::shutdownConsumers() {
 }
 
 // ---------------------------------------------------------------------------
+// Capture helpers
+// ---------------------------------------------------------------------------
+
+/// Rotates an RGBA pixel buffer 90° CW, producing a new buffer with swapped dimensions.
+///
+/// The GPU pipeline renders into a portrait-dimensioned FBO (src_w × src_h) using a
+/// 90° CW UV rotation to normalise output to landscape-right. The pixel data therefore
+/// needs a 90° CW rotation before saving to disk to produce a landscape image.
+///
+/// 90° CW formula: dst(nr, nc) = src(src_h - 1 - nc, nr)
+///   dst dimensions: new_width = src_h, new_height = src_w.
+///
+/// @return RGBA buffer of size (src_h * src_w * 4), width = src_h, height = src_w.
+static std::vector<uint8_t> rotateRgba90CW(
+        const uint8_t* src, int src_w, int src_h) {
+    const int dst_w = src_h;
+    const int dst_h = src_w;
+    std::vector<uint8_t> dst(static_cast<size_t>(dst_w) * dst_h * 4);
+    for (int nr = 0; nr < dst_h; ++nr) {
+        for (int nc = 0; nc < dst_w; ++nc) {
+            const int old_r = src_h - 1 - nc;
+            const int old_c = nr;
+            const uint8_t* sp = src + (old_r * src_w + old_c) * 4;
+            uint8_t* dp = dst.data() + (nr * dst_w + nc) * 4;
+            dp[0] = sp[0];
+            dp[1] = sp[1];
+            dp[2] = sp[2];
+            dp[3] = sp[3];
+        }
+    }
+    return dst;
+}
+
+// ---------------------------------------------------------------------------
 // On-request still capture
 // ---------------------------------------------------------------------------
 
@@ -461,12 +495,20 @@ bool ImagePipeline::captureToFile(const std::string& outputPath,
 
     const int w      = frame->width;
     const int h      = frame->height;
-    const int stride = frame->stride;
     const uint8_t* data = frame->data.data();
+
+    // Rotate 90° CW to convert the portrait-dimensioned GPU readback buffer
+    // into a landscape image. The GPU pipeline uses a 90° CW UV rotation so
+    // output is always landscape-right; the pixel data must be rotated the
+    // same way before encoding. Output dimensions are h × w (landscape).
+    const std::vector<uint8_t> rotated = rotateRgba90CW(data, w, h);
+    const int out_w = h;    // landscape width
+    const int out_h = w;    // landscape height
+    const uint8_t* enc_data = rotated.data();
 
     if (asJpeg) {
         // Encode RGBA → JPEG using libjpeg-turbo (NEON-accelerated on arm64).
-        // TJPF_RGBA: encoder converts to YCbCr internally, alpha is discarded.
+        // GL_RGBA readback delivers RGBA byte order; TJPF_RGBA matches that.
         // TJSAMP_420: 4:2:0 chroma subsampling — standard for photos.
         tjhandle tjh = tjInitCompress();
         if (!tjh) {
@@ -475,7 +517,7 @@ bool ImagePipeline::captureToFile(const std::string& outputPath,
         }
         unsigned char* jpegBuf = nullptr;
         unsigned long  jpegSize = 0;
-        const int ret = tjCompress2(tjh, data, w, stride, h, TJPF_RGBA,
+        const int ret = tjCompress2(tjh, enc_data, out_w, out_w * 4, out_h, TJPF_RGBA,
                                     &jpegBuf, &jpegSize,
                                     TJSAMP_420, jpegQuality, TJFLAG_FASTDCT);
         if (ret != 0) {
@@ -494,9 +536,18 @@ bool ImagePipeline::captureToFile(const std::string& outputPath,
             return false;
         }
     } else {
-        // Encode RGBA → PNG using fpng (fast, CRC32-hardware-accelerated on arm64).
-        // fpng requires contiguous rows; stride == w*4 is asserted in deliverFullResRgba.
-        if (!fpng::fpng_encode_image_to_file(outputPath.c_str(), data, w, h, 4)) {
+        // Encode RGBA → PNG (RGB, no alpha) using fpng (CRC32-hw-accelerated on arm64).
+        // GL_RGBA readback delivers RGBA; drop alpha, keep R G B order as-is.
+        // Alpha is always opaque from the GPU pipeline and carries no information.
+        const int nPixels = out_w * out_h;
+        std::vector<uint8_t> rgb(static_cast<size_t>(nPixels * 3));
+        for (int i = 0; i < nPixels; ++i) {
+            rgb[i*3 + 0] = enc_data[i*4 + 0]; // R
+            rgb[i*3 + 1] = enc_data[i*4 + 1]; // G
+            rgb[i*3 + 2] = enc_data[i*4 + 2]; // B
+            // alpha dropped
+        }
+        if (!fpng::fpng_encode_image_to_file(outputPath.c_str(), rgb.data(), out_w, out_h, 3)) {
             LOGE("captureToFile: fpng_encode_image_to_file failed for '%s'",
                  outputPath.c_str());
             return false;
@@ -504,7 +555,7 @@ bool ImagePipeline::captureToFile(const std::string& outputPath,
     }
 
     LOGD("captureToFile: wrote %dx%d %s → '%s'",
-         w, h, asJpeg ? "JPEG" : "PNG", outputPath.c_str());
+         out_w, out_h, asJpeg ? "JPEG" : "PNG", outputPath.c_str());
     return true;
 }
 
@@ -555,8 +606,13 @@ bool ImagePipeline::captureToFd(int fd, bool asJpeg, int jpegQuality,
 
     const int w      = frame->width;
     const int h      = frame->height;
-    const int stride = frame->stride;
     const uint8_t* data = frame->data.data();
+
+    // Rotate 90° CW — same reason as captureToFile.
+    const std::vector<uint8_t> rotated = rotateRgba90CW(data, w, h);
+    const int out_w = h;
+    const int out_h = w;
+    const uint8_t* enc_data = rotated.data();
 
     if (asJpeg) {
         // Encode RGBA → JPEG using libjpeg-turbo, then stream to fd.
@@ -567,7 +623,7 @@ bool ImagePipeline::captureToFd(int fd, bool asJpeg, int jpegQuality,
         }
         unsigned char* jpegBuf = nullptr;
         unsigned long  jpegSize = 0;
-        const int ret = tjCompress2(tjh, data, w, stride, h, TJPF_RGBA,
+        const int ret = tjCompress2(tjh, enc_data, out_w, out_w * 4, out_h, TJPF_RGBA,
                                     &jpegBuf, &jpegSize,
                                     TJSAMP_420, jpegQuality, TJFLAG_FASTDCT);
         if (ret != 0) {
@@ -584,9 +640,17 @@ bool ImagePipeline::captureToFd(int fd, bool asJpeg, int jpegQuality,
             return false;
         }
     } else {
-        // Encode RGBA → PNG using fpng, then stream to fd.
+        // Encode RGBA → PNG (RGB, no alpha) using fpng, then stream to fd.
+        const int nPixels = out_w * out_h;
+        std::vector<uint8_t> rgb(static_cast<size_t>(nPixels * 3));
+        for (int i = 0; i < nPixels; ++i) {
+            rgb[i*3 + 0] = enc_data[i*4 + 0]; // R
+            rgb[i*3 + 1] = enc_data[i*4 + 1]; // G
+            rgb[i*3 + 2] = enc_data[i*4 + 2]; // B
+            // alpha dropped
+        }
         std::vector<uint8_t> pngBuf;
-        if (!fpng::fpng_encode_image_to_memory(data, w, h, 4, pngBuf)) {
+        if (!fpng::fpng_encode_image_to_memory(rgb.data(), out_w, out_h, 3, pngBuf)) {
             LOGE("captureToFd: fpng_encode_image_to_memory failed (fd=%d)", fd);
             return false;
         }
@@ -596,7 +660,7 @@ bool ImagePipeline::captureToFd(int fd, bool asJpeg, int jpegQuality,
         }
     }
 
-    LOGD("captureToFd: wrote %dx%d %s to fd=%d", w, h, asJpeg ? "JPEG" : "PNG", fd);
+    LOGD("captureToFd: wrote %dx%d %s to fd=%d", out_w, out_h, asJpeg ? "JPEG" : "PNG", fd);
     return true;
 }
 
