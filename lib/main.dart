@@ -303,15 +303,17 @@ class _CameraScreenState extends State<CameraScreen>
   void _onWbToggle() {
     if (_isCalibrating) return;
     if (_wbMode is WbAuto) {
-      // Lock: freeze current AWB gains from the latest frame result.
+      // Lock: freeze AWB at its current state via CONTROL_AWB_LOCK.
+      // Using WbLocked (not WbManual) preserves the ISP's color correction matrix
+      // alongside the gains, so the image does not shift when the lock is applied.
       final gainR = _latestFrameResult?.wbGainR ?? 1.0;
       final gainG = _latestFrameResult?.wbGainG ?? 1.0;
       final gainB = _latestFrameResult?.wbGainB ?? 1.0;
       setState(() {
-        _wbMode = WhiteBalance.manual(gainR: gainR, gainG: gainG, gainB: gainB);
+        _wbMode = const WhiteBalance.locked();
         _lastWbGains = (r: gainR, g: gainG, b: gainB);
       });
-      _applySettings(CameraSettings(whiteBalance: _wbMode));
+      _applySettings(const CameraSettings(whiteBalance: WhiteBalance.locked()));
     } else {
       // Unlock: return to auto AWB.
       setState(() => _wbMode = const WhiteBalance.auto());
