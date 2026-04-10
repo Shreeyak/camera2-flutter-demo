@@ -764,7 +764,7 @@ Applied per-fragment in `GpuRenderer.cpp` (`kFragSrc`), in this order:
 
 ### White Balance and Black Balance calibration
 
-Both algorithms are iterative and fully encapsulated inside the `cambrian_camera` package. Callers invoke `camera.calibrateWhiteBalance()` or `camera.calibrateBlackBalance()` — the package owns all patch sampling and returns before/after results. The GPU shader applies the corrections; the Dart layer reads back a **16×16-pixel center patch** via `sampleCenterPatch()` (JNI → GL thread → `glReadPixels` on `fbo_`) between iterations.
+Both algorithms are iterative and fully encapsulated inside the `cambrian_camera` package. Callers invoke `camera.calibrateWhiteBalance()` or `camera.calibrateBlackBalance()` — the package owns all patch sampling and returns before/after results. The GPU shader applies the corrections; the Dart layer reads back a **96×96-pixel center patch** via `sampleCenterPatch()` (JNI → GL thread → `glReadPixels` on `fbo_`) between iterations. The average discards the top and bottom 15% of pixel values per channel (histogram-based trimmed mean) to eliminate hot pixels and specular outliers.
 
 **White Balance** — uses Camera2 ISP hardware (`COLOR_CORRECTION_GAINS`, `RggbChannelVector`). Green is the fixed reference channel. Each iteration:
 ```text

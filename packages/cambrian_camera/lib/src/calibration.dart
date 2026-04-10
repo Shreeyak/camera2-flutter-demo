@@ -9,8 +9,8 @@
 /// directly.
 library;
 
-/// The mean R, G, B of the 16×16 center patch sampled from the GPU framebuffer.
-/// All values are normalized to [0.0, 1.0].
+/// The trimmed-mean R, G, B of the 96×96 center patch sampled from the GPU
+/// framebuffer. All values are normalized to [0.0, 1.0].
 typedef RgbSample = ({double r, double g, double b});
 
 /// WB gain triple: (gainR, gainG, gainB).
@@ -22,9 +22,9 @@ typedef BbOffsets = ({double r, double g, double b});
 /// Result returned by [CambrianCamera.calibrateWhiteBalance].
 ///
 /// [gains] — converged R/G/B gain multipliers; pass to [WhiteBalance.manual].
-/// [patchBefore] — mean RGB of the 16×16 center patch sampled before any
+/// [patchBefore] — mean RGB of the 96×96 center patch sampled before any
 ///   corrections were applied. Each channel in [0.0, 1.0].
-/// [patchAfter] — mean RGB of the 16×16 center patch sampled after the final
+/// [patchAfter] — mean RGB of the 96×96 center patch sampled after the final
 ///   gains settled. Useful for before/after display in the UI.
 typedef WbCalibrationResult = ({
   WbGains gains,
@@ -36,9 +36,9 @@ typedef WbCalibrationResult = ({
 ///
 /// [offsets] — converged R/G/B black-level offsets; store and toggle via
 ///   [ProcessingParams.copyWith].
-/// [patchBefore] — mean RGB of the 16×16 center patch sampled before any
+/// [patchBefore] — mean RGB of the 96×96 center patch sampled before any
 ///   offsets were applied. Each channel in [0.0, 1.0].
-/// [patchAfter] — mean RGB of the 16×16 center patch sampled after the final
+/// [patchAfter] — mean RGB of the 96×96 center patch sampled after the final
 ///   offsets settled.
 typedef BbCalibrationResult = ({
   BbOffsets offsets,

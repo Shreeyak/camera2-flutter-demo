@@ -431,7 +431,7 @@ See [Settings Persistence](#settings-persistence) for full details.
 Future<RgbSample> sampleCenterPatch()
 ```
 
-Reads the average RGB values from a **16×16 pixel patch** at the center of the current GPU frame. The patch is sampled from the processed pipeline output — after WB and black balance are applied.
+Reads the trimmed-mean RGB from a **96×96 pixel patch** at the center of the current GPU frame. The top and bottom 15% of pixel values per channel are discarded before averaging to suppress hot pixels and specular outliers. The patch is sampled from the processed pipeline output — after WB and black balance are applied.
 
 Returns an `RgbSample` with `r`, `g`, `b` fields in `[0.0, 1.0]`.
 
@@ -458,15 +458,15 @@ Future<WbCalibrationResult> calibrateWhiteBalance({
 
 Runs the iterative white balance calibration loop. Point the camera at a neutral grey or white surface before calling.
 
-The package samples a **16×16 pixel center patch** before any corrections are applied (`patchBefore`), then iteratively adjusts the R/G/B gains until the patch error falls below 1% or 10 iterations are exhausted. The final gains are applied and a second patch sample is taken (`patchAfter`). The app never needs to call `sampleCenterPatch()` directly.
+The package samples a **96×96 pixel center patch** before any corrections are applied (`patchBefore`), then iteratively adjusts the R/G/B gains until the patch error falls below 1% or 10 iterations are exhausted. The final gains are applied and a second patch sample is taken (`patchAfter`). The app never needs to call `sampleCenterPatch()` directly.
 
 Returns a `WbCalibrationResult`:
 
 | Field | Type | Description |
 |-------|------|-------------|
 | `gains` | `WbGains` | Converged `(r, g, b)` gain multipliers |
-| `patchBefore` | `RgbSample` | Mean 16×16 patch RGB before any corrections |
-| `patchAfter` | `RgbSample` | Mean 16×16 patch RGB after convergence |
+| `patchBefore` | `RgbSample` | Mean 96×96 patch RGB before any corrections |
+| `patchAfter` | `RgbSample` | Mean 96×96 patch RGB after convergence |
 
 Pass `gains` to `WhiteBalance.manual()` to lock the result:
 
@@ -500,15 +500,15 @@ Future<BbCalibrationResult> calibrateBlackBalance({
 
 Runs the iterative black balance calibration loop. Cover the lens (or point at a fully dark scene) before calling.
 
-The package samples a **16×16 pixel center patch** before any offsets are applied (`patchBefore`), then iteratively accumulates per-channel black-level offsets until the patch maximum falls below 1% or 10 iterations are exhausted. A second patch sample is taken after convergence (`patchAfter`). The non-black fields in `params` are preserved throughout.
+The package samples a **96×96 pixel center patch** before any offsets are applied (`patchBefore`), then iteratively accumulates per-channel black-level offsets until the patch maximum falls below 1% or 10 iterations are exhausted. A second patch sample is taken after convergence (`patchAfter`). The non-black fields in `params` are preserved throughout.
 
 Returns a `BbCalibrationResult`:
 
 | Field | Type | Description |
 |-------|------|-------------|
 | `offsets` | `BbOffsets` | Converged `(r, g, b)` black-level offsets |
-| `patchBefore` | `RgbSample` | Mean 16×16 patch RGB before any offsets |
-| `patchAfter` | `RgbSample` | Mean 16×16 patch RGB after convergence |
+| `patchBefore` | `RgbSample` | Mean 96×96 patch RGB before any offsets |
+| `patchAfter` | `RgbSample` | Mean 96×96 patch RGB after convergence |
 
 Apply the result via `setProcessingParams()`:
 

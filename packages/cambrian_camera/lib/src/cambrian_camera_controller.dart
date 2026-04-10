@@ -341,9 +341,11 @@ class CambrianCamera {
     );
   }
 
-  /// Samples the center 16×16 pixel patch of the most recent GPU-processed frame.
+  /// Samples the center 96×96 pixel patch of the most recent GPU-processed frame.
   ///
-  /// Returns the mean R, G, B as [RgbSample] with values in [0.0, 1.0].
+  /// Returns the trimmed-mean R, G, B as [RgbSample] with values in [0.0, 1.0].
+  /// The top and bottom 15% of pixel values per channel are discarded before
+  /// averaging to suppress hot pixels and specular outliers.
   /// Returns (r: 0.5, g: 0.5, b: 0.5) if no frame has been rendered yet.
   ///
   /// Most callers should use [calibrateWhiteBalance] or [calibrateBlackBalance]
@@ -355,10 +357,10 @@ class CambrianCamera {
 
   /// Runs the iterative white balance calibration loop.
   ///
-  /// Samples the mean RGB of a 16×16 pixel patch at the center of the processed
-  /// frame. Takes a snapshot before any corrections ([patchBefore]) and another
-  /// after convergence ([patchAfter]) — useful for before/after display in the UI.
-  /// Between samples, applies proportional R/G/B gain corrections via
+  /// Samples the trimmed-mean RGB of a 96×96 pixel patch at the center of the
+  /// processed frame. Takes a snapshot before any corrections ([patchBefore]) and
+  /// another after convergence ([patchAfter]) — useful for before/after display in
+  /// the UI. Between samples, applies proportional R/G/B gain corrections via
   /// [updateSettings] until the patch error falls below [kWbTolerance] or
   /// [kWbMaxIterations] is reached.
   ///
@@ -419,10 +421,10 @@ class CambrianCamera {
 
   /// Runs the iterative black balance calibration loop.
   ///
-  /// Samples the mean RGB of a 16×16 pixel patch at the center of the processed
-  /// frame. Takes a snapshot before any corrections ([patchBefore]) and another
-  /// after convergence ([patchAfter]) — useful for before/after display in the UI.
-  /// Between samples, accumulates per-channel black-level offsets and applies
+  /// Samples the trimmed-mean RGB of a 96×96 pixel patch at the center of the
+  /// processed frame. Takes a snapshot before any corrections ([patchBefore]) and
+  /// another after convergence ([patchAfter]) — useful for before/after display in
+  /// the UI. Between samples, accumulates per-channel black-level offsets and applies
   /// them via [setProcessingParams] until the patch error falls below
   /// [kBbTolerance] or [kBbMaxIterations] is reached.
   ///

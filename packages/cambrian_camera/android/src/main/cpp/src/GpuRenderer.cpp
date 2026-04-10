@@ -1107,28 +1107,56 @@ void GpuRenderer::sampleCenterPatch(float& outR, float& outG, float& outB) {
         return;
     }
 
-    constexpr int kPatchW = 16;
-    constexpr int kPatchH = 16;
+    constexpr int kPatchW    = 96;
+    constexpr int kPatchH    = 96;
+    constexpr int kN         = kPatchW * kPatchH;        // 9 216 pixels
+    // Discard the lowest and highest 15% of values per channel before averaging.
+    // This removes hot pixels, specular highlights, and dust artefacts without
+    // requiring a full sort — the histogram approach is O(n) for 8-bit data.
+    constexpr int kTrimCount = static_cast<int>(kN * 0.15f);  // 1 382
+
     const int cx = (width_  - kPatchW) / 2;
     const int cy = (height_ - kPatchH) / 2;
 
-    uint8_t pixels[kPatchW * kPatchH * 4];
+    uint8_t pixels[kN * 4];  // 36 864 bytes — well within GL-thread stack
 
     glBindFramebuffer(GL_FRAMEBUFFER, fbo_);
     glReadPixels(cx, cy, kPatchW, kPatchH, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
-    uint64_t sumR = 0, sumG = 0, sumB = 0;
-    constexpr int kN = kPatchW * kPatchH;
+    // Build per-channel histograms (256 bins).
+    int histR[256]{}, histG[256]{}, histB[256]{};
     for (int i = 0; i < kN; i++) {
-        sumR += pixels[i * 4 + 0];
-        sumG += pixels[i * 4 + 1];
-        sumB += pixels[i * 4 + 2];
+        histR[pixels[i * 4 + 0]]++;
+        histG[pixels[i * 4 + 1]]++;
+        histB[pixels[i * 4 + 2]]++;
     }
 
-    outR = static_cast<float>(sumR) / (kN * 255.0f);
-    outG = static_cast<float>(sumG) / (kN * 255.0f);
-    outB = static_cast<float>(sumB) / (kN * 255.0f);
+    // Trimmed mean from histogram: skip kTrimCount pixels from each end,
+    // accumulate the remainder, normalise to [0, 1].
+    auto histTrimmedMean = [kN](const int hist[256], int trimCount) -> float {
+        const int lo = trimCount;
+        const int hi = kN - trimCount;
+        uint64_t sum  = 0;
+        int      count = 0;
+        int      cumulative = 0;
+        for (int v = 0; v < 256; v++) {
+            const int n         = hist[v];
+            const int end       = cumulative + n;
+            const int inc_start = cumulative < lo ? lo : cumulative;
+            const int inc_end   = end > hi ? hi : end;
+            if (inc_end > inc_start) {
+                sum   += static_cast<uint64_t>(v) * (inc_end - inc_start);
+                count += (inc_end - inc_start);
+            }
+            cumulative = end;
+        }
+        return count > 0 ? static_cast<float>(sum) / (count * 255.0f) : 0.5f;
+    };
+
+    outR = histTrimmedMean(histR, kTrimCount);
+    outG = histTrimmedMean(histG, kTrimCount);
+    outB = histTrimmedMean(histB, kTrimCount);
 }
 
 } // namespace cam
