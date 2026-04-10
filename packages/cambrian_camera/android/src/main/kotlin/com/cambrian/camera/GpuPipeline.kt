@@ -12,6 +12,7 @@ import android.util.Log
 import android.view.Surface
 import android.view.WindowManager
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.atomic.AtomicReference
 
 /**
  * Manages the OpenGL ES render thread for the GPU camera pipeline.
@@ -39,6 +40,9 @@ open class GpuPipeline(
 
     @Volatile private var gpuHandle: Long = 0L
     @Volatile private var stopping = false
+    // Pending callback registered by sampleCenterPatch; drained with null by stop()
+    // if removeCallbacksAndMessages discards the posted lambda before it runs.
+    private val pendingSampleCallback = AtomicReference<((FloatArray?) -> Unit)?>(null)
     private var surfaceTexture: SurfaceTexture? = null
     private var oesTexName: Int = 0
     private val texMatrix      = FloatArray(16)
@@ -134,6 +138,9 @@ open class GpuPipeline(
         Log.i(TAG, "stop (frame #$frameCount)")
         stopping = true  // reject new frames and sample requests immediately
         glHandler.removeCallbacksAndMessages(null)
+        // If removeCallbacksAndMessages discarded a pending sampleCenterPatch lambda,
+        // drain the registered callback so the caller is not left hanging.
+        pendingSampleCallback.getAndSet(null)?.invoke(null)
         glHandler.post {
             cameraSurface?.release()
             cameraSurface = null
@@ -224,14 +231,17 @@ open class GpuPipeline(
             glHandler.post { callback(null) }
             return
         }
+        // Register before posting so stop() can always see the pending callback.
+        pendingSampleCallback.set(callback)
         glHandler.post {
-            // Re-check stopping: stop() may have run between the outer check and
-            // this lambda executing, releasing the native handle.
+            // Atomically claim ownership: if stop() already drained the callback it
+            // will be null here, meaning stop() already invoked it with null.
+            val cb = pendingSampleCallback.getAndSet(null) ?: return@post
             if (stopping || gpuHandle == 0L) {
-                callback(null)
+                cb(null)
                 return@post
             }
-            callback(nativeGpuSampleCenterPatch(handle))
+            cb(nativeGpuSampleCenterPatch(handle))
         }
     }
 
