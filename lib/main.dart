@@ -521,8 +521,8 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
                     Expanded(
                       child: Row(
                         children: [
-                          Expanded(child: Center(child: _buildRawPreview())),
-                          Expanded(child: Center(child: _buildCameraPreview())),
+                          Expanded(child: _buildRawPreview()),
+                          Expanded(child: _buildCameraPreview()),
                         ],
                       ),
                     ),
@@ -620,7 +620,7 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
         if (!snap.hasData) return const ColoredBox(color: Colors.black);
         final t = snap.data!;
         return FittedBox(
-          fit: BoxFit.cover,
+          fit: BoxFit.contain,
           child: RotatedBox(
             quarterTurns: _quarterTurns,
             child: SizedBox(
@@ -646,7 +646,7 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
         if (!snap.hasData) return const ColoredBox(color: Colors.black);
         final t = snap.data!;
         return FittedBox(
-          fit: BoxFit.cover,
+          fit: BoxFit.contain,
           child: RotatedBox(
             quarterTurns: _quarterTurns,
             child: SizedBox(

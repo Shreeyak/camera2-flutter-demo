@@ -779,6 +779,17 @@ class CameraController(
                 return@post
             }
 
+            // Tear and rebind the preview EGL surfaces using the *current* Surface references
+            // from the SurfaceProducers. surfaceProducer.setSize() may invalidate or replace
+            // the Surface object that GpuPipeline stored at construction, causing the internal
+            // rebind inside resize() to silently create an EGL surface at the old dimensions
+            // (content only fills the top-left corner of the old-sized buffer). Fetching a
+            // fresh reference here guarantees the GPU renders into a correctly-sized buffer.
+            pipeline.rebindPreviewSurface(surfaceProducer.getSurface())
+            if (enableRawStream && rawSurfaceProducer != null) {
+                pipeline.rebindRawSurface(rawSurfaceProducer.getSurface())
+            }
+
             // Replay processing params so shader uniforms survive the resize.
             lastProcessingParams?.let { setProcessingParams(it) }
 

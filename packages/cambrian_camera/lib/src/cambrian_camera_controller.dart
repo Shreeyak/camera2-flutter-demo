@@ -305,6 +305,12 @@ class CambrianCamera {
     // Re-fetch capabilities so streamWidth/streamHeight reflect the new resolution.
     final caps = await _hostApi.getCapabilities(_handle);
     _capabilities = CameraCapabilities.fromPigeon(caps);
+    // The Kotlin "streaming" state event fires before setResolution() returns its
+    // Pigeon reply, so toneMappedTexture emits with stale capabilities. Re-emit
+    // the streaming state now that _capabilities has been updated.
+    if (_currentState == CameraState.streaming) {
+      _stateController.add(CameraState.streaming);
+    }
   }
 
   /// Updates C++ pipeline processing parameters immediately.

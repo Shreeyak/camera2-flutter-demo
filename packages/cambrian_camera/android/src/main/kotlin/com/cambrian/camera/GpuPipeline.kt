@@ -173,7 +173,15 @@ open class GpuPipeline(
                 // queue starts allocating new-sized buffers immediately.
                 surfaceTexture?.setDefaultBufferSize(newW, newH)
                 ok = nativeGpuResize(handle, newW, newH, newRawW, newRawH)
-                if (!ok) Log.e(TAG, "nativeGpuResize failed for ${newW}x${newH}")
+                if (!ok) {
+                    Log.e(TAG, "nativeGpuResize failed for ${newW}x${newH}")
+                } else {
+                    // Recreate the EGL window surface so its backing buffer geometry matches
+                    // the new dimensions. Without this, the old EGL surface is still sized at
+                    // the previous resolution; the blit only fills its top-left corner and the
+                    // rest of the frame shows the stale previous image.
+                    nativeGpuRebindPreviewSurface(handle, previewSurface)
+                }
             } finally {
                 latch.countDown()
             }
