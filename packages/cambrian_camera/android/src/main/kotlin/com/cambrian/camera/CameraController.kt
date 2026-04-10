@@ -757,6 +757,9 @@ class CameraController(
             val newRawW: Int
             val newRawH: Int
             if (enableRawStream && rawSurfaceProducer != null) {
+                // Scale raw stream width to match the new aspect ratio, then clear the LSB
+                // (`and 1.inv()`) to guarantee an even width — YUV chroma planes require
+                // width divisible by 2, or the MediaCodec/GL buffer layout is undefined.
                 newRawW = (streamWidth.toFloat() / streamHeight * rawStreamHeight + 0.5f).toInt() and 1.inv()
                 newRawH = rawStreamHeight
                 rawW = newRawW

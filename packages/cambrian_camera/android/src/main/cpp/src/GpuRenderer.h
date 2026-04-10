@@ -137,6 +137,10 @@ public:
 private:
     int consecutiveSwapFailures_ = 0;
     static constexpr int kSwapFailureThreshold = 3;
+    /// Fixed vertical resolution for the tracker downscale FBO. 480 p is chosen as the
+    /// smallest height that preserves enough spatial detail for object/person detection
+    /// while keeping GPU readback bandwidth well under 1 MB/frame.
+    static constexpr int kTrackerHeight = 480;
     int debugLevel_ = 0;  ///< 0=errors only, 1=lifecycle, 2=periodic/perf
     int width_;
     int height_;

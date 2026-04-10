@@ -206,9 +206,10 @@ GpuRenderer::GpuRenderer(int width, int height, int debugLevel)
         LOGE("GpuRenderer: invalid height %d — clamping to 1 to avoid division by zero", height_);
         height_ = 1;
     }
-    // Compute 480p tracker size, rounded to nearest even width to keep chroma alignment.
-    trackerHeight_ = 480;
-    trackerWidth_  = ((width_ * 480 / height_) + 1) & ~1;
+    // Compute tracker FBO size: fixed kTrackerHeight rows, width scaled to preserve aspect,
+    // rounded to nearest even width to keep YUV chroma-plane alignment.
+    trackerHeight_ = kTrackerHeight;
+    trackerWidth_  = ((width_ * kTrackerHeight / height_) + 1) & ~1;
     if (debugLevel_ >= 1) {
         LOGI("GpuRenderer: stream %dx%d, tracker %dx%d",
              width_, height_, trackerWidth_, trackerHeight_);
@@ -266,8 +267,10 @@ bool GpuRenderer::resize(int newW, int newH, int newRawW, int newRawH) {
     releaseGl();
     width_         = newW;
     height_        = (newH > 0) ? newH : 1;
-    trackerHeight_ = 480;
-    trackerWidth_  = ((width_ * 480 / height_) + 1) & ~1;
+    // Compute tracker FBO size: fixed kTrackerHeight rows, width scaled to preserve aspect,
+    // rounded to nearest even width to keep YUV chroma-plane alignment.
+    trackerHeight_ = kTrackerHeight;
+    trackerWidth_  = ((width_ * kTrackerHeight / height_) + 1) & ~1;
     // releaseGl() zeros rawW_/rawH_ — restore before initGl() or the raw path stays disabled.
     rawW_ = newRawW;
     rawH_ = newRawH;

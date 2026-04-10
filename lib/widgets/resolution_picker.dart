@@ -22,6 +22,10 @@ void showResolutionPicker(
   );
 }
 
+/// Internal dialog body for [showResolutionPicker].
+///
+/// Renders a fixed-height, scrollable [ListView] of resolution options,
+/// auto-scrolling to the currently active resolution on open.
 class _ResolutionPickerDialog extends StatefulWidget {
   final List<CameraSize> resolutions;
   final String currentLabel;
