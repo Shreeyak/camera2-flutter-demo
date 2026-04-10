@@ -78,11 +78,11 @@ vec3 applyContrast(vec3 color, float c) {
     vec3 e = color - 0.5;
     if (c >= 0.0) {
         float k = 1.0 - c;
-        float denom = max(k + abs(2.0 * e) * (1.0 - k), 1e-3);
+        vec3 denom = max(k + abs(2.0 * e) * (1.0 - k), vec3(1e-3));
         return 0.5 + e / denom;
     } else {
         float k = 1.0 + c;
-        float denom = max(1.0 - abs(2.0 * e) * (1.0 - k), 1e-3);
+        vec3 denom = max(vec3(1.0) - abs(2.0 * e) * (1.0 - k), vec3(1e-3));
         return 0.5 + e * k / denom;
     }
 }

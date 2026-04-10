@@ -128,12 +128,6 @@ class _MainActionBar extends StatelessWidget {
           padding: const EdgeInsets.fromLTRB(48.0, 8.0, 48.0, 0.0),
           child: Row(
             children: [
-              _ResolutionMenuButton(
-                currentLabel: currentResolutionLabel,
-                resolutions: availableResolutions,
-                onSelected: onResolutionSelected,
-              ),
-              const SizedBox(width: 16),
               BottomBarActionButton(
                 icon: Icons.tune,
                 label: 'SETTINGS',
@@ -155,66 +149,33 @@ class _MainActionBar extends StatelessWidget {
                 isDisabled: false,
                 onTap: onToggleRecording,
               ),
+              const SizedBox(width: 16),
+              PopupMenuButton<CameraSize>(
+                onSelected: onResolutionSelected,
+                itemBuilder: (context) => availableResolutions.reversed.map((size) {
+                  final label = '${size.width}x${size.height}';
+                  final isCurrent = label == currentResolutionLabel;
+                  return PopupMenuItem<CameraSize>(
+                    value: size,
+                    child: Text(
+                      label,
+                      style: TextStyle(
+                        fontWeight: isCurrent ? FontWeight.bold : FontWeight.normal,
+                        fontFamily: 'monospace',
+                        color: isCurrent ? cs.primary : null,
+                      ),
+                    ),
+                  );
+                }).toList(),
+                child: BottomBarActionButton(
+                  icon: Icons.photo_size_select_large,
+                  label: 'RESOLUTION',
+                  isDisabled: availableResolutions.isEmpty,
+                  onTap: null,
+                ),
+              ),
             ],
           ),
-        ),
-      ),
-    );
-  }
-}
-
-/// Popup menu button that displays available stream resolutions and lets the
-/// user switch between them. The current resolution is highlighted in bold.
-class _ResolutionMenuButton extends StatelessWidget {
-  final String currentLabel;
-  final List<CameraSize> resolutions;
-  final ValueChanged<CameraSize> onSelected;
-
-  const _ResolutionMenuButton({
-    required this.currentLabel,
-    required this.resolutions,
-    required this.onSelected,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    final color = cs.onPrimaryContainer.withValues(alpha: 0.7);
-    return PopupMenuButton<CameraSize>(
-      onSelected: onSelected,
-      itemBuilder: (context) => resolutions.map((size) {
-        final label = '${size.width}x${size.height}';
-        final isCurrent = label == currentLabel;
-        return PopupMenuItem<CameraSize>(
-          value: size,
-          child: Text(
-            label,
-            style: TextStyle(
-              fontWeight: isCurrent ? FontWeight.bold : FontWeight.normal,
-              fontFamily: 'monospace',
-              color: isCurrent ? cs.primary : null,
-            ),
-          ),
-        );
-      }).toList(),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 4.0, vertical: 4.0),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(Icons.photo_size_select_large, color: color, size: 28),
-            const SizedBox(height: 2),
-            Text(
-              currentLabel,
-              style: TextStyle(
-                fontSize: 9,
-                fontWeight: FontWeight.w500,
-                color: color,
-                letterSpacing: 0.5,
-              ),
-            ),
-          ],
         ),
       ),
     );

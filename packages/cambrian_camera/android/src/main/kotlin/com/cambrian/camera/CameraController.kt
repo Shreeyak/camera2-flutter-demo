@@ -709,7 +709,7 @@ class CameraController(
      */
     fun setResolution(width: Int, height: Int, callback: (Result<Unit>) -> Unit) {
         backgroundHandler.post {
-            if (released || state == State.CLOSED) {
+            if (released || state == State.CLOSED || state == State.ERROR) {
                 mainHandler.post { callback(Result.failure(FlutterError("invalid_state", "Camera not open", null))) }
                 return@post
             }
@@ -726,20 +726,69 @@ class CameraController(
             requestedHeight = height
             setState(State.RECOVERING)
             emitState("recovering")
-            teardownSession()
-            startCaptureSession { result ->
-                result.fold(
-                    onSuccess = {
-                        mainHandler.post { callback(Result.success(Unit)) }
-                    },
-                    onFailure = { e ->
-                        mainHandler.post {
-                            callback(Result.failure(
-                                FlutterError("reconfigure_failed", "Resolution change failed: ${e.message}", null)
-                            ))
+            // Full teardown (closes device + native pipeline) rather than teardownSession().
+            // teardownSession() calls nativeRelease() which terminates the EGL display; a
+            // subsequent nativeInit() on the same device cannot re-initialise EGL on the
+            // already-terminated display on some devices. A fresh openCamera() call always
+            // gets a clean EGL initialisation, matching the existing recovery path.
+            teardown()
+            val id = resolvedCameraId ?: run {
+                mainHandler.post { callback(Result.failure(FlutterError("no_camera", "No camera available", null))) }
+                return@post
+            }
+            try {
+                openLock.acquire()
+                cameraManager.openCamera(
+                    id,
+                    { command -> backgroundHandler.post(command) },
+                    object : CameraDevice.StateCallback() {
+                        override fun onOpened(camera: CameraDevice) {
+                            openLock.release()
+                            cameraDevice = camera
+                            retryCount = 0
+                            startCaptureSession { result ->
+                                result.fold(
+                                    onSuccess = { mainHandler.post { callback(Result.success(Unit)) } },
+                                    onFailure = { e ->
+                                        mainHandler.post {
+                                            callback(Result.failure(
+                                                FlutterError("reconfigure_failed", "Resolution change failed: ${e.message}", null)
+                                            ))
+                                        }
+                                    },
+                                )
+                            }
+                        }
+                        override fun onDisconnected(camera: CameraDevice) {
+                            openLock.release()
+                            camera.close()
+                            cameraDevice = null
+                            handleNonFatalError(CamErrorCode.CAMERA_DISCONNECTED, "Camera disconnected during resolution change")
+                            mainHandler.post { callback(Result.failure(FlutterError(CamErrorCode.CAMERA_DISCONNECTED.name, "Camera disconnected", null))) }
+                        }
+                        override fun onError(camera: CameraDevice, error: Int) {
+                            openLock.release()
+                            camera.close()
+                            cameraDevice = null
+                            val (errCode, errMsg) = errorCodeToMessage(error)
+                            if (isFatalDeviceError(error)) handleFatalError(errCode, errMsg)
+                            else handleNonFatalError(errCode, errMsg)
+                            mainHandler.post { callback(Result.failure(FlutterError(errCode.name, errMsg, null))) }
                         }
                     },
                 )
+            } catch (e: InterruptedException) {
+                mainHandler.post { callback(Result.failure(FlutterError("interrupted", "Resolution change interrupted", null))) }
+            } catch (e: CameraAccessException) {
+                openLock.release()
+                val message = e.message ?: "CameraAccessException"
+                if (isFatalAccessException(e)) handleFatalError(CamErrorCode.CAMERA_ACCESS_ERROR, message)
+                else handleNonFatalError(CamErrorCode.CAMERA_ACCESS_ERROR, message)
+                mainHandler.post { callback(Result.failure(FlutterError(CamErrorCode.CAMERA_ACCESS_ERROR.name, message, null))) }
+            } catch (e: SecurityException) {
+                openLock.release()
+                handleNonFatalError(CamErrorCode.CAMERA_ACCESS_ERROR, "SecurityException: ${e.message}")
+                mainHandler.post { callback(Result.failure(FlutterError(CamErrorCode.CAMERA_ACCESS_ERROR.name, "SecurityException", null))) }
             }
         }
     }
