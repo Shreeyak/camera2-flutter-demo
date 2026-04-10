@@ -126,6 +126,10 @@ class _CameraScreenState extends State<CameraScreen>
   /// Most recent FrameResult — used by WB lock to read current sensor gains.
   FrameResult? _latestFrameResult;
 
+  /// Most recent processed-preview texture info — used by [CalibrationOverlay]
+  /// to scale the patch square to the correct on-screen size.
+  CameraTextureInfo? _latestTextureInfo;
+
   /// Display rotation in degrees CW from portrait: 0, 90, 180, or 270.
   int _displayRotationDeg = 0;
 
@@ -832,6 +836,9 @@ class _CameraScreenState extends State<CameraScreen>
           builder: (context, snap) {
             if (!snap.hasData) return const ColoredBox(color: Colors.black);
             final t = snap.data!;
+            // Cache for calibration overlay coordinate mapping (no setState
+            // needed — the overlay rebuilds whenever calibration state changes).
+            _latestTextureInfo = t;
             return FittedBox(
               fit: BoxFit.cover,
               child: RotatedBox(
@@ -850,6 +857,8 @@ class _CameraScreenState extends State<CameraScreen>
             child: CalibrationOverlay(
               target: _calibrationTarget!,
               onConfirm: () => unawaited(_onCapture()),
+              textureInfo: _latestTextureInfo,
+              quarterTurns: _quarterTurns,
             ),
           ),
       ],
