@@ -2,8 +2,11 @@
 package com.cambrian.camera
 
 import android.Manifest
+import android.content.ContentValues
 import android.content.Context
 import android.content.pm.PackageManager
+import android.os.Environment
+import android.provider.MediaStore
 import android.graphics.ImageFormat
 import android.hardware.camera2.CameraAccessException
 import android.hardware.camera2.CameraCaptureSession
@@ -1034,9 +1037,9 @@ class CameraController(
      * - `.jpg` / `.jpeg` → JPEG (quality 90)
      * - `.png` or absent / unrecognised extension → PNG (lossless)
      *
-     * The default output directory is the app-specific Pictures folder
-     * ([Context.getExternalFilesDir] with [android.os.Environment.DIRECTORY_PICTURES]).
-     * No additional storage permissions are required on API 33+.
+     * The default output directory is the shared [MediaStore.Images] collection under
+     * `Pictures/CambrianCamera`, so images appear in the system gallery without
+     * requiring any additional storage permissions on API 33+.
      *
      * EXIF metadata (ISO, exposure time, focal length, aperture, WB gains, orientation,
      * and capture timestamp) is written using [androidx.exifinterface.media.ExifInterface]
@@ -1059,14 +1062,6 @@ class CameraController(
         }
 
         backgroundHandler.post {
-            // Resolve output directory: use caller-supplied path or default to app Pictures folder.
-            val dir = if (outputDirectory != null) {
-                File(outputDirectory).also { it.mkdirs() }
-            } else {
-                context.getExternalFilesDir(android.os.Environment.DIRECTORY_PICTURES)
-                    ?: context.cacheDir
-            }
-
             // Resolve filename; default to PNG with a timestamp if omitted or extension-less.
             val ts = System.currentTimeMillis()
             val resolvedName = when {
@@ -1075,31 +1070,98 @@ class CameraController(
                 else                       -> fileName
             }
             val lowerName = resolvedName.lowercase(java.util.Locale.ROOT)
+            val isJpeg = lowerName.endsWith(".jpg") || lowerName.endsWith(".jpeg")
+            val mimeType = if (isJpeg) "image/jpeg" else "image/png"
             // JPEG quality 90: good perceptual quality with reasonable file size.
             val jpegQuality = 90
+            val writeExif = isJpeg || lowerName.endsWith(".png")
 
-            val file = File(dir, resolvedName)
-            val errorMsg = nativeCaptureImage(pipelinePtr, file.absolutePath, jpegQuality)
+            if (outputDirectory != null) {
+                // Caller supplied an explicit directory: use the existing file-path flow.
+                val dir = File(outputDirectory).also { it.mkdirs() }
+                val file = File(dir, resolvedName)
+                val errorMsg = nativeCaptureImage(pipelinePtr, file.absolutePath, jpegQuality)
+                if (errorMsg.isNotEmpty()) {
+                    mainHandler.post {
+                        callback(Result.failure(FlutterError("capture_failed", errorMsg, null)))
+                    }
+                    return@post
+                }
+                if (writeExif) {
+                    try { writeExifMetadata(file) } catch (e: Exception) {
+                        Log.w("CC/Cam", "[$handle] captureImage: failed to write EXIF — ${e.message}")
+                    }
+                }
+                mainHandler.post { callback(Result.success(file.absolutePath)) }
+                return@post
+            }
 
-            if (errorMsg.isNotEmpty()) {
+            // Default path: insert via MediaStore so the image appears in the system gallery
+            // under Pictures/CambrianCamera.  minSdk is 33 so no version guarding is needed.
+            val cv = ContentValues().apply {
+                put(MediaStore.Images.Media.DISPLAY_NAME, resolvedName)
+                put(MediaStore.Images.Media.MIME_TYPE, mimeType)
+                // RELATIVE_PATH places the file in the shared Pictures/CambrianCamera directory.
+                put(MediaStore.Images.Media.RELATIVE_PATH,
+                    "${Environment.DIRECTORY_PICTURES}/CambrianCamera")
+                // IS_PENDING=1 reserves the MediaStore slot while C++ writes bytes.
+                // The flag is cleared after writing so the gallery can index the file.
+                put(MediaStore.Images.Media.IS_PENDING, 1)
+            }
+            val collection = MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+            val uri = context.contentResolver.insert(collection, cv)
+            if (uri == null) {
                 mainHandler.post {
-                    callback(Result.failure(FlutterError("capture_failed", errorMsg, null)))
+                    callback(Result.failure(FlutterError("capture_failed",
+                        "MediaStore insert failed — check storage permissions", null)))
                 }
                 return@post
             }
 
-            // Write EXIF metadata. ExifInterface supports JPEG and PNG on API 31+;
-            // minSdk is 33 so this is always safe.
-            if (lowerName.endsWith(".jpg") || lowerName.endsWith(".jpeg") || lowerName.endsWith(".png")) {
-                try {
-                    writeExifMetadata(file)
-                } catch (e: Exception) {
-                    // Non-fatal: the image file is already saved. Log and continue.
-                    Log.w("CC/Cam", "[$handle] captureImage: failed to write EXIF — ${e.message}")
+            try {
+                // Open a writable fd from the content URI and pass it to C++.
+                context.contentResolver.openFileDescriptor(uri, "w")!!.use { pfd ->
+                    val errorMsg = nativeCaptureImageToFd(pipelinePtr, pfd.fd, isJpeg, jpegQuality)
+                    if (errorMsg.isNotEmpty()) {
+                        context.contentResolver.delete(uri, null, null)
+                        mainHandler.post {
+                            callback(Result.failure(FlutterError("capture_failed", errorMsg, null)))
+                        }
+                        return@post
+                    }
+                }
+
+                // Write EXIF via a separate rw fd; ExifInterface supports JPEG and PNG on API 31+.
+                if (writeExif) {
+                    try {
+                        context.contentResolver.openFileDescriptor(uri, "rw")!!.use { pfd ->
+                            writeExifMetadata(android.media.ExifInterface(pfd.fileDescriptor))
+                        }
+                    } catch (e: Exception) {
+                        Log.w("CC/Cam", "[$handle] captureImage: failed to write EXIF — ${e.message}")
+                    }
+                }
+
+                // Clear IS_PENDING so the gallery can index the new image.
+                val done = ContentValues().apply { put(MediaStore.Images.Media.IS_PENDING, 0) }
+                context.contentResolver.update(uri, done, null, null)
+
+                // Resolve the actual file path from the DATA column for the return value.
+                // The DATA column is available for files the app itself created (API 33).
+                val filePath = context.contentResolver.query(
+                    uri, arrayOf(MediaStore.Images.Media.DATA), null, null, null
+                )?.use { c ->
+                    if (c.moveToFirst()) c.getString(0) else null
+                } ?: uri.toString()
+
+                mainHandler.post { callback(Result.success(filePath)) }
+            } catch (e: Exception) {
+                context.contentResolver.delete(uri, null, null)
+                mainHandler.post {
+                    callback(Result.failure(FlutterError("capture_failed",
+                        e.message ?: "unknown error", null)))
                 }
             }
-
-            mainHandler.post { callback(Result.success(file.absolutePath)) }
         }
     }
 
@@ -1111,8 +1173,14 @@ class CameraController(
      */
     private fun writeExifMetadata(file: File) {
         // android.media.ExifInterface supports JPEG and PNG on API 31+; minSdk is 33.
-        val exif = android.media.ExifInterface(file.absolutePath)
+        writeExifMetadata(android.media.ExifInterface(file.absolutePath))
+    }
 
+    /**
+     * Overload for the MediaStore path: accepts an already-opened [ExifInterface]
+     * (e.g. constructed from a ParcelFileDescriptor) and writes all available tags.
+     */
+    private fun writeExifMetadata(exif: android.media.ExifInterface) {
         // Exposure time in seconds (stored as decimal string per ExifInterface spec).
         lastKnownExposureTimeNs?.let { ns ->
             val secs = ns / 1_000_000_000.0
@@ -1172,6 +1240,11 @@ class CameraController(
 
     /** JNI: request the next full-res RGBA frame from the C++ pipeline, encode, and save. */
     private external fun nativeCaptureImage(pipelinePtr: Long, outputPath: String, jpegQuality: Int): String
+
+    /** JNI: like nativeCaptureImage but writes encoded bytes to an open file descriptor.
+     *  Used by the MediaStore path: Kotlin opens the fd from the content URI and passes it here.
+     *  Caller retains ownership of [fd] and must close it after this returns. */
+    private external fun nativeCaptureImageToFd(pipelinePtr: Long, fd: Int, isJpeg: Boolean, jpegQuality: Int): String
 
     /**
      * Returns the opaque native pipeline pointer for direct JNI interop, or null if

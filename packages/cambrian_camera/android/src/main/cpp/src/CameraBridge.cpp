@@ -673,6 +673,37 @@ Java_com_cambrian_camera_CameraController_nativeCaptureImage(
 }
 
 // ---------------------------------------------------------------------------
+// nativeCaptureImageToFd
+//
+// Like nativeCaptureImage but writes encoded bytes to an already-open writable
+// file descriptor.  Used by the Kotlin layer when saving via MediaStore: Kotlin
+// inserts a MediaStore entry, opens a ParcelFileDescriptor from the resulting
+// content URI, and passes its raw fd here.  Kotlin retains ownership and closes
+// the fd after this call returns.
+//
+// @param pipelinePtr  Handle returned by nativeInit (ImagePipeline pointer).
+// @param fd           Writable POSIX file descriptor.
+// @param isJpeg       JNI_TRUE → JPEG encode; JNI_FALSE → PNG encode.
+// @param jpegQuality  JPEG encode quality [1-100]; ignored for PNG.
+// @return Empty jstring on success; non-empty human-readable error on failure.
+// ---------------------------------------------------------------------------
+JNIEXPORT jstring JNICALL
+Java_com_cambrian_camera_CameraController_nativeCaptureImageToFd(
+        JNIEnv* env, jclass /*clazz*/,
+        jlong pipelinePtr, jint fd, jboolean isJpeg, jint jpegQuality) {
+    if (!pipelinePtr) {
+        return env->NewStringUTF("nativeCaptureImageToFd: null pipeline handle");
+    }
+    cam::ImagePipeline* pipeline = pipelineFromHandle(pipelinePtr);
+    const bool ok = pipeline->captureToFd(
+        static_cast<int>(fd),
+        static_cast<bool>(isJpeg),
+        static_cast<int>(jpegQuality));
+    return ok ? env->NewStringUTF("")
+              : env->NewStringUTF("captureToFd failed — check logcat for details");
+}
+
+// ---------------------------------------------------------------------------
 // nativeGetDimensionMismatchCount
 //
 // Previously returned the InputRing dimension mismatch counter.

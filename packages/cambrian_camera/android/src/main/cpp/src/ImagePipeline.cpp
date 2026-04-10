@@ -15,6 +15,7 @@
 #include <cassert>
 #include <cctype>     // std::tolower
 #include <cstring>    // memcpy
+#include <unistd.h>   // write() for captureToFd
 
 #define TAG  "CambrianCamera"
 #define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, TAG, __VA_ARGS__)
@@ -472,6 +473,73 @@ bool ImagePipeline::captureToFile(const std::string& outputPath,
     }
     LOGD("captureToFile: wrote %dx%d %s → '%s'",
          w, h, asJpeg ? "JPEG" : "PNG", outputPath.c_str());
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// captureToFd — encode and write to an open file descriptor
+// ---------------------------------------------------------------------------
+
+// stb_image_write callback: writes a chunk to the POSIX fd stored in context.
+// stb calls this one or more times per image; we loop to handle short writes.
+static void stbiWriteFdCallback(void* ctx, void* data, int size) {
+    int fd = *static_cast<int*>(ctx);
+    const uint8_t* p = static_cast<const uint8_t*>(data);
+    int rem = size;
+    while (rem > 0) {
+        ssize_t n = ::write(fd, p, static_cast<size_t>(rem));
+        if (n <= 0) return;  // I/O error — stb will treat the output as failed
+        p   += n;
+        rem -= static_cast<int>(n);
+    }
+}
+
+bool ImagePipeline::captureToFd(int fd, bool asJpeg, int jpegQuality,
+                                 int timeoutMs) {
+    // Reset any leftover captured frame from a previous (possibly timed-out) call.
+    {
+        std::lock_guard<std::mutex> lk(captureResultMu_);
+        capturedFrame_ = nullptr;
+    }
+
+    captureRequested_.store(true, std::memory_order_release);
+
+    SharedFrame frame;
+    {
+        std::unique_lock<std::mutex> lk(captureResultMu_);
+        const bool arrived = captureCV_.wait_for(
+            lk,
+            std::chrono::milliseconds(timeoutMs),
+            [this] { return capturedFrame_ != nullptr; });
+
+        if (!arrived) {
+            captureRequested_.store(false, std::memory_order_release);
+            LOGE("captureToFd: timed out waiting for frame after %d ms", timeoutMs);
+            return false;
+        }
+        frame = capturedFrame_;
+        capturedFrame_ = nullptr;
+    }
+
+    const int w      = frame->width;
+    const int h      = frame->height;
+    const int stride = frame->stride;
+    const uint8_t* data = frame->data.data();
+
+    int ok = 0;
+    if (asJpeg) {
+        // comp=4 (RGBA); the encoder ignores alpha and produces a standard RGB JPEG.
+        ok = stbi_write_jpg_to_func(stbiWriteFdCallback, &fd, w, h, 4, data, jpegQuality);
+    } else {
+        ok = stbi_write_png_to_func(stbiWriteFdCallback, &fd, w, h, 4, data, stride);
+    }
+
+    if (!ok) {
+        LOGE("captureToFd: stbi_write_%s_to_func failed (fd=%d)",
+             asJpeg ? "jpg" : "png", fd);
+        return false;
+    }
+    LOGD("captureToFd: wrote %dx%d %s to fd=%d", w, h, asJpeg ? "JPEG" : "PNG", fd);
     return true;
 }
 

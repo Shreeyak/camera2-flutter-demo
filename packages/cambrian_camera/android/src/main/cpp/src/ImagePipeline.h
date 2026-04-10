@@ -92,6 +92,21 @@ public:
     bool captureToFile(const std::string& outputPath, int jpegQuality = 90,
                        int timeoutMs = 500);
 
+    /// Like captureToFile but writes encoded bytes to an open file descriptor.
+    ///
+    /// Used by the Kotlin layer when saving via MediaStore (Android 10+ scoped
+    /// storage): Kotlin inserts the MediaStore entry, opens a writable fd from
+    /// the resulting content URI, and passes it here.  The caller retains
+    /// ownership of fd and must close it after this call returns.
+    ///
+    /// @param fd          Writable POSIX file descriptor.
+    /// @param asJpeg      true → JPEG encode; false → PNG encode.
+    /// @param jpegQuality JPEG encode quality [1-100]; ignored for PNG.
+    /// @param timeoutMs   Maximum wait for next frame in milliseconds.
+    /// @return true on success; false on timeout or encode failure.
+    bool captureToFd(int fd, bool asJpeg, int jpegQuality = 90,
+                     int timeoutMs = 500);
+
     // -- IImagePipeline ----------------------------------------------------------
     void setFrameHook(SinkRole role, FrameHookFn fn) override;
     void addSink(const SinkConfig& config, SinkCallback callback) override;
