@@ -51,6 +51,16 @@ public:
     /// Must be called on the GL thread.
     void release();
 
+    /// Resize GL resources (FBOs, PBOs, textures) to new dimensions without touching
+    /// the EGL display or context. Recompiles shaders and VBO.
+    /// Must be called on the GL thread with the EGL context current.
+    /// @param newW     New stream width.
+    /// @param newH     New stream height.
+    /// @param newRawW  New raw stream width; 0 to disable raw path.
+    /// @param newRawH  New raw stream height; 0 to disable raw path.
+    /// @return true on success; false if GL re-init fails.
+    bool resize(int newW, int newH, int newRawW, int newRawH);
+
     /// Per-frame render + readback.
     ///
     /// Sequence:
@@ -137,6 +147,10 @@ public:
 private:
     int consecutiveSwapFailures_ = 0;
     static constexpr int kSwapFailureThreshold = 3;
+    /// Fixed vertical resolution for the tracker downscale FBO. 480 p is chosen as the
+    /// smallest height that preserves enough spatial detail for object/person detection
+    /// while keeping GPU readback bandwidth well under 1 MB/frame.
+    static constexpr int kTrackerHeight = 480;
     int debugLevel_ = 0;  ///< 0=errors only, 1=lifecycle, 2=periodic/perf
     int width_;
     int height_;

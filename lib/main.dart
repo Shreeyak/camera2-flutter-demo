@@ -8,6 +8,7 @@ import 'package:cambrian_camera/cambrian_camera.dart'
         CameraError,
         CameraErrorCode,
         CameraSettings,
+        CameraSize,
         CameraTextureInfo,
         FrameResult,
         ProcessingParams,
@@ -148,6 +149,12 @@ class _CameraScreenState extends State<CameraScreen>
   /// Display rotation in degrees CW from portrait: 0, 90, 180, or 270.
   int _displayRotationDeg = 0;
 
+  /// Current stream resolution label (e.g. "4032x3024").
+  String _currentResolutionLabel = '';
+
+  /// Available YUV stream resolutions from capabilities.
+  List<CameraSize> _availableResolutions = [];
+
   @override
   void initState() {
     super.initState();
@@ -248,8 +255,9 @@ class _CameraScreenState extends State<CameraScreen>
         _camera = camera;
         _ranges = ranges;
         _values = CameraSettingsValues.fromSettings(_kInitialSettings, ranges);
-        _processingParams =
-            initialParams; // sidebar sliders reflect persisted or default values
+        _processingParams = initialParams; // sidebar sliders reflect persisted or default values
+        _availableResolutions = caps.supportedSizes;
+        _currentResolutionLabel = '${caps.streamWidth}x${caps.streamHeight}';
       });
       _frameResultSub = camera.frameResultStream.listen(_onFrameResult);
       _errorSub = camera.errorStream.listen(_onCameraError);
@@ -564,6 +572,30 @@ class _CameraScreenState extends State<CameraScreen>
     _applySettings(CameraSettings(zoomRatio: ratio));
   }
 
+  /// Handles user selection of a new stream resolution from the popup menu.
+  Future<void> _onResolutionSelected(CameraSize size) async {
+    final camera = _camera;
+    if (camera == null) return;
+    if (_isRecording || _recordingActionInProgress) {
+      _showError('Cannot change resolution while recording.');
+      return;
+    }
+    setState(() => _recordingActionInProgress = true);
+    try {
+      await camera.setResolution(size.width, size.height);
+      if (!mounted) return;
+      final caps = camera.capabilities;
+      setState(() {
+        _currentResolutionLabel = '${caps.streamWidth}x${caps.streamHeight}';
+        _availableResolutions = caps.supportedSizes;
+      });
+    } catch (e) {
+      if (mounted) _showError('Resolution change failed: $e');
+    } finally {
+      if (mounted) setState(() => _recordingActionInProgress = false);
+    }
+  }
+
   /// Updates slider positions from live hardware sensor values.
   ///
   /// Only writes fields whose auto mode is currently active — manual values set
@@ -803,12 +835,8 @@ class _CameraScreenState extends State<CameraScreen>
                         Expanded(
                           child: Row(
                             children: [
-                              Expanded(
-                                child: Center(child: _buildRawPreview()),
-                              ),
-                              Expanded(
-                                child: Center(child: _buildCameraPreview()),
-                              ),
+                              Expanded(child: _buildRawPreview()),
+                              Expanded(child: _buildCameraPreview()),
                             ],
                           ),
                         ),
@@ -880,8 +908,10 @@ class _CameraScreenState extends State<CameraScreen>
                       callbacks: _callbacks,
                       onToggleSettings: _toggleSettingsDrawer,
                       onSettingChipTap: _onSettingChipTap,
-                      onToggleGpuControls: () =>
-                          setState(() => _sidebarOpen = !_sidebarOpen),
+                      onToggleGpuControls: () => setState(() => _sidebarOpen = !_sidebarOpen),
+                      currentResolutionLabel: _currentResolutionLabel,
+                      availableResolutions: _availableResolutions,
+                      onResolutionSelected: _onResolutionSelected,
                       isRecording: _isRecording,
                       onToggleRecording: _toggleRecording,
                     ),
@@ -911,7 +941,7 @@ class _CameraScreenState extends State<CameraScreen>
             // needed — the overlay rebuilds whenever calibration state changes).
             _latestTextureInfo = t;
             return FittedBox(
-              fit: BoxFit.cover,
+              fit: BoxFit.contain,
               child: RotatedBox(
                 quarterTurns: _quarterTurns,
                 child: SizedBox(
@@ -948,7 +978,7 @@ class _CameraScreenState extends State<CameraScreen>
         if (!snap.hasData) return const ColoredBox(color: Colors.black);
         final t = snap.data!;
         return FittedBox(
-          fit: BoxFit.cover,
+          fit: BoxFit.contain,
           child: RotatedBox(
             quarterTurns: _quarterTurns,
             child: SizedBox(

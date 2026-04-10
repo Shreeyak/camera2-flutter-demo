@@ -235,6 +235,35 @@ Java_com_cambrian_camera_GpuPipeline_nativeGpuRelease(
 }
 
 // ---------------------------------------------------------------------------
+// nativeGpuResize
+//
+// Resizes GL resources (FBOs, PBOs, textures) to new dimensions while keeping
+// the EGL display, context, and surfaces alive. Must be called on the GL thread.
+//
+// @param gpuHandle  Handle returned by nativeGpuInit.
+// @param newW / newH     New stream dimensions.
+// @param newRawW / newRawH  New raw stream dimensions; 0 to disable.
+// @return JNI_TRUE on success; JNI_FALSE if GL re-init fails.
+// ---------------------------------------------------------------------------
+JNIEXPORT jboolean JNICALL
+Java_com_cambrian_camera_GpuPipeline_nativeGpuResize(
+        JNIEnv* /*env*/, jclass /*clazz*/,
+        jlong gpuHandle,
+        jint newW, jint newH,
+        jint newRawW, jint newRawH) {
+    if (!gpuHandle) {
+        LOGE("nativeGpuResize: null renderer handle");
+        return JNI_FALSE;
+    }
+    cam::GpuRenderer* renderer = rendererFromHandle(gpuHandle);
+    const bool ok = renderer->resize(
+        static_cast<int>(newW), static_cast<int>(newH),
+        static_cast<int>(newRawW), static_cast<int>(newRawH));
+    if (!ok) LOGE("nativeGpuResize: resize failed for %dx%d", (int)newW, (int)newH);
+    return ok ? JNI_TRUE : JNI_FALSE;
+}
+
+// ---------------------------------------------------------------------------
 // nativeGpuRebindRawSurface
 //
 // Replaces the raw preview EGL window surface with one created from newRawSurface.

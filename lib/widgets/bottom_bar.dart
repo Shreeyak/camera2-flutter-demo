@@ -1,8 +1,10 @@
+import 'package:cambrian_camera/cambrian_camera.dart' show CameraSize;
 import 'package:flutter/material.dart';
 import '../camera/camera_settings_values.dart';
 import '../camera/camera_callbacks.dart';
 import 'bottom_bar_buttons.dart';
 import 'camera_settings_bar.dart';
+import 'resolution_picker.dart';
 
 class BottomBar extends StatelessWidget {
   final bool isSettingsOpen;
@@ -13,6 +15,9 @@ class BottomBar extends StatelessWidget {
   final VoidCallback onToggleSettings;
   final ValueChanged<CameraSettingType?> onSettingChipTap;
   final VoidCallback onToggleGpuControls;
+  final String currentResolutionLabel;
+  final List<CameraSize> availableResolutions;
+  final ValueChanged<CameraSize> onResolutionSelected;
   final bool isRecording;
   final VoidCallback onToggleRecording;
 
@@ -26,6 +31,9 @@ class BottomBar extends StatelessWidget {
     required this.onToggleSettings,
     required this.onSettingChipTap,
     required this.onToggleGpuControls,
+    required this.currentResolutionLabel,
+    required this.availableResolutions,
+    required this.onResolutionSelected,
     required this.isRecording,
     required this.onToggleRecording,
   });
@@ -51,6 +59,9 @@ class BottomBar extends StatelessWidget {
                     isSettingsEnabled: isSettingsEnabled,
                     onToggleSettings: onToggleSettings,
                     onToggleGpuControls: onToggleGpuControls,
+                    currentResolutionLabel: currentResolutionLabel,
+                    availableResolutions: availableResolutions,
+                    onResolutionSelected: onResolutionSelected,
                     isRecording: isRecording,
                     onToggleRecording: onToggleRecording,
                   ),
@@ -87,6 +98,9 @@ class _MainActionBar extends StatelessWidget {
   final bool isSettingsEnabled;
   final VoidCallback onToggleSettings;
   final VoidCallback onToggleGpuControls;
+  final String currentResolutionLabel;
+  final List<CameraSize> availableResolutions;
+  final ValueChanged<CameraSize> onResolutionSelected;
   final bool isRecording;
   final VoidCallback onToggleRecording;
 
@@ -94,6 +108,9 @@ class _MainActionBar extends StatelessWidget {
     required this.isSettingsEnabled,
     required this.onToggleSettings,
     required this.onToggleGpuControls,
+    required this.currentResolutionLabel,
+    required this.availableResolutions,
+    required this.onResolutionSelected,
     required this.isRecording,
     required this.onToggleRecording,
   });
@@ -132,6 +149,20 @@ class _MainActionBar extends StatelessWidget {
                 isActive: isRecording,
                 isDisabled: false,
                 onTap: onToggleRecording,
+              ),
+              const SizedBox(width: 16),
+              BottomBarActionButton(
+                icon: Icons.photo_size_select_large,
+                label: currentResolutionLabel.isNotEmpty
+                    ? currentResolutionLabel
+                    : 'RESOLUTION',
+                isDisabled: availableResolutions.isEmpty,
+                onTap: () => showResolutionPicker(
+                  context,
+                  resolutions: availableResolutions.reversed.toList(),
+                  currentLabel: currentResolutionLabel,
+                  onSelected: onResolutionSelected,
+                ),
               ),
             ],
           ),
