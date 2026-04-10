@@ -451,6 +451,36 @@ struct CamFrameResult {
   }
 }
 
+/// Mean R, G, B from a sampled image patch. All values in [0.0, 1.0].
+///
+/// Generated class from Pigeon that represents data sent in messages.
+struct CamRgbSample {
+  var r: Double
+  var g: Double
+  var b: Double
+
+
+  // swift-format-ignore: AlwaysUseLowerCamelCase
+  static func fromList(_ pigeonVar_list: [Any?]) -> CamRgbSample? {
+    let r = pigeonVar_list[0] as! Double
+    let g = pigeonVar_list[1] as! Double
+    let b = pigeonVar_list[2] as! Double
+
+    return CamRgbSample(
+      r: r,
+      g: g,
+      b: b
+    )
+  }
+  func toList() -> [Any?] {
+    return [
+      r,
+      g,
+      b,
+    ]
+  }
+}
+
 private class MessagesPigeonCodecReader: FlutterStandardReader {
   override func readValue(ofType type: UInt8) -> Any? {
     switch type {
@@ -474,6 +504,8 @@ private class MessagesPigeonCodecReader: FlutterStandardReader {
       return CamError.fromList(self.readValue() as! [Any?])
     case 136:
       return CamFrameResult.fromList(self.readValue() as! [Any?])
+    case 137:
+      return CamRgbSample.fromList(self.readValue() as! [Any?])
     default:
       return super.readValue(ofType: type)
     }
@@ -505,6 +537,9 @@ private class MessagesPigeonCodecWriter: FlutterStandardWriter {
       super.writeValue(value.toList())
     } else if let value = value as? CamFrameResult {
       super.writeByte(136)
+      super.writeValue(value.toList())
+    } else if let value = value as? CamRgbSample {
+      super.writeByte(137)
       super.writeValue(value.toList())
     } else {
       super.writeValue(value)
@@ -551,6 +586,11 @@ protocol CameraHostApi {
   /// for all four device orientations, since [MediaQuery.orientation] only
   /// distinguishes portrait from landscape.
   func getDisplayRotation() throws -> Int64
+  /// Samples the center 16×16 pixel patch of the most recent GPU-processed
+  /// RGBA frame and returns the mean R, G, B as values in [0.0, 1.0].
+  ///
+  /// Returns (0.5, 0.5, 0.5) if no frame has been rendered yet.
+  func sampleCenterPatch(handle: Int64, completion: @escaping (Result<CamRgbSample, Error>) -> Void)
 }
 
 /// Generated setup class from Pigeon to handle messages through the `binaryMessenger`.
@@ -785,6 +825,27 @@ class CameraHostApiSetup {
       }
     } else {
       getDisplayRotationChannel.setMessageHandler(nil)
+    }
+    /// Samples the center 16×16 pixel patch of the most recent GPU-processed
+    /// RGBA frame and returns the mean R, G, B as values in [0.0, 1.0].
+    ///
+    /// Returns (0.5, 0.5, 0.5) if no frame has been rendered yet.
+    let sampleCenterPatchChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.cambrian_camera.CameraHostApi.sampleCenterPatch\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
+    if let api = api {
+      sampleCenterPatchChannel.setMessageHandler { message, reply in
+        let args = message as! [Any?]
+        let handleArg = args[0] as! Int64
+        api.sampleCenterPatch(handle: handleArg) { result in
+          switch result {
+          case .success(let res):
+            reply(wrapResult(res))
+          case .failure(let error):
+            reply(wrapError(error))
+          }
+        }
+      }
+    } else {
+      sampleCenterPatchChannel.setMessageHandler(nil)
     }
   }
 }

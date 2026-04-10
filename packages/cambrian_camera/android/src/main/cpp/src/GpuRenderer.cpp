@@ -1095,4 +1095,105 @@ GLuint GpuRenderer::linkProgram(GLuint vert, GLuint frag) {
     return prog;
 }
 
+// ---------------------------------------------------------------------------
+// Public: center-patch sampling
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief Samples the center 96×96 pixel patch of the rendered frame and writes
+ *        trimmed-mean RGB values to the output references.
+ *
+ * Binds the full-resolution FBO, calls glReadPixels to fetch RGBA pixel data,
+ * then computes a 15% trimmed mean per channel using an O(n) histogram approach
+ * to suppress hot pixels, specular highlights, and dust artefacts.
+ *
+ * @param[out] outR  Trimmed-mean red channel value, normalised to [0.0, 1.0].
+ * @param[out] outG  Trimmed-mean green channel value, normalised to [0.0, 1.0].
+ * @param[out] outB  Trimmed-mean blue channel value, normalised to [0.0, 1.0].
+ * @return true on success; false if fbo_ is uninitialised, no frame has been
+ *         rendered yet, the framebuffer is smaller than the patch, or a GL
+ *         error occurs during readback.
+ *
+ * @note Must be called on the GL thread. glReadPixels blocks until the GPU
+ *       completes the readback.
+ */
+bool GpuRenderer::sampleCenterPatch(float& outR, float& outG, float& outB) {
+    // fbo_ == 0: pipeline not yet initialised.
+    // firstFrame_: GPU has not rendered any frame yet — readback would return garbage.
+    if (fbo_ == 0 || firstFrame_) {
+        return false;
+    }
+
+    constexpr int   kPatchW       = 96;
+    constexpr int   kPatchH       = 96;
+    constexpr int   kN            = kPatchW * kPatchH;   // 9 216 pixels
+    constexpr int   kBytesPerPixel = 4;                  // GL_RGBA: 1 byte per channel (R=0, G=1, B=2, A=3)
+    // Discard the lowest and highest 15% of values per channel before averaging.
+    // This removes hot pixels, specular highlights, and dust artefacts without
+    // requiring a full sort — the histogram approach is O(n) for 8-bit data.
+    constexpr float kTrimFraction = 0.15f;               // discard bottom/top 15% per channel
+    constexpr int   kTrimCount    = static_cast<int>(kN * kTrimFraction);  // 1 382
+
+    // Guard against framebuffers smaller than the patch — glReadPixels with a
+    // negative origin or a patch that exceeds the surface is undefined behaviour.
+    if (width_ < kPatchW || height_ < kPatchH) {
+        return false;
+    }
+
+    const int cx = (width_  - kPatchW) / 2;
+    const int cy = (height_ - kPatchH) / 2;
+
+    uint8_t pixels[kN * kBytesPerPixel];  // 36 864 bytes — well within GL-thread stack
+
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo_);
+    glReadPixels(cx, cy, kPatchW, kPatchH, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+    const GLenum readError = glGetError();
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+    if (readError != GL_NO_ERROR) {
+        return false;
+    }
+
+    // Build per-channel histograms (256 bins — full uint8_t range).
+    int histR[256]{}, histG[256]{}, histB[256]{};
+    for (int i = 0; i < kN; i++) {
+        histR[pixels[i * kBytesPerPixel + 0]]++;
+        histG[pixels[i * kBytesPerPixel + 1]]++;
+        histB[pixels[i * kBytesPerPixel + 2]]++;
+    }
+
+    // Trimmed mean from histogram: skip kTrimCount pixels from each end,
+    // accumulate the remainder, normalise to [0, 1].
+    auto histTrimmedMean = [kN](const int hist[256], int trimCount) -> float {
+        const int lo = trimCount;
+        const int hi = kN - trimCount;
+        uint64_t sum  = 0;
+        int      count = 0;
+        int      cumulative = 0;
+        for (int v = 0; v < 256; v++) {
+            const int n         = hist[v];
+            const int end       = cumulative + n;
+            const int inc_start = cumulative < lo ? lo : cumulative;
+            const int inc_end   = end > hi ? hi : end;
+            if (inc_end > inc_start) {
+                sum   += static_cast<uint64_t>(v) * (inc_end - inc_start);
+                count += (inc_end - inc_start);
+            }
+            cumulative = end;
+        }
+        // count == 0 is impossible with 15% trim on 9 216 pixels, but guard anyway.
+        // 255.0f: uint8_t max — normalises the histogram bin index to [0.0, 1.0].
+        return count > 0 ? static_cast<float>(sum) / (count * 255.0f) : -1.0f;
+    };
+
+    outR = histTrimmedMean(histR, kTrimCount);
+    outG = histTrimmedMean(histG, kTrimCount);
+    outB = histTrimmedMean(histB, kTrimCount);
+
+    // A negative result from histTrimmedMean means the degenerate case fired.
+    if (outR < 0.0f || outG < 0.0f || outB < 0.0f) return false;
+
+    return true;
+}
+
 } // namespace cam
