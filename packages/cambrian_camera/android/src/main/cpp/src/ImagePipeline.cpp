@@ -4,15 +4,19 @@
 // See ImagePipeline.h for the class structure and lock ordering.
 
 #include "ImagePipeline.h"
+
+#ifdef __ANDROID__
 #include "fpng.h"
 #include <turbojpeg.h>
+#endif
 
 #include <android/log.h>
 #include <algorithm>  // std::find_if
 #include <cassert>
 #include <cctype>     // std::tolower
+#include <cerrno>     // errno
 #include <cstdio>     // fopen/fwrite/fclose
-#include <cstring>    // memcpy
+#include <cstring>    // memcpy, strerror
 #include <unistd.h>   // write() for captureToFd
 
 #define TAG  "CambrianCamera"
@@ -27,7 +31,9 @@ namespace cam {
 
 ImagePipeline::ImagePipeline() {
     // Detect CPU features (SSE4.1 on x86, CRC32 on ARM) for fpng's fast paths.
+#ifdef __ANDROID__
     fpng::fpng_init();
+#endif
     LOGD("ImagePipeline created (GPU dispatch mode)");
 }
 
@@ -506,6 +512,10 @@ bool ImagePipeline::captureToFile(const std::string& outputPath,
     const int out_h = w;    // landscape height
     const uint8_t* enc_data = rotated.data();
 
+#ifndef __ANDROID__
+    LOGE("captureToFile: image encoding not supported in non-Android builds");
+    return false;
+#else
     if (asJpeg) {
         // Encode RGBA → JPEG using libjpeg-turbo (NEON-accelerated on arm64).
         // GL_RGBA readback delivers RGBA byte order; TJPF_RGBA matches that.
@@ -528,8 +538,12 @@ bool ImagePipeline::captureToFile(const std::string& outputPath,
         tjDestroy(tjh);
 
         FILE* f = fopen(outputPath.c_str(), "wb");
-        const bool ok = f && fwrite(jpegBuf, jpegSize, 1, f) == 1;
-        if (f) fclose(f);
+        bool ok = f && fwrite(jpegBuf, jpegSize, 1, f) == 1;
+        if (f && fclose(f) != 0) {
+            LOGE("captureToFile: fclose failed for '%s': %s",
+                 outputPath.c_str(), strerror(errno));
+            ok = false;
+        }
         tjFree(jpegBuf);
         if (!ok) {
             LOGE("captureToFile: failed to write JPEG to '%s'", outputPath.c_str());
@@ -557,6 +571,7 @@ bool ImagePipeline::captureToFile(const std::string& outputPath,
     LOGD("captureToFile: wrote %dx%d %s → '%s'",
          out_w, out_h, asJpeg ? "JPEG" : "PNG", outputPath.c_str());
     return true;
+#endif  // __ANDROID__
 }
 
 // ---------------------------------------------------------------------------
@@ -614,6 +629,10 @@ bool ImagePipeline::captureToFd(int fd, bool asJpeg, int jpegQuality,
     const int out_h = w;
     const uint8_t* enc_data = rotated.data();
 
+#ifndef __ANDROID__
+    LOGE("captureToFd: image encoding not supported in non-Android builds");
+    return false;
+#else
     if (asJpeg) {
         // Encode RGBA → JPEG using libjpeg-turbo, then stream to fd.
         tjhandle tjh = tjInitCompress();
@@ -662,6 +681,7 @@ bool ImagePipeline::captureToFd(int fd, bool asJpeg, int jpegQuality,
 
     LOGD("captureToFd: wrote %dx%d %s to fd=%d", out_w, out_h, asJpeg ? "JPEG" : "PNG", fd);
     return true;
+#endif  // __ANDROID__
 }
 
 } // namespace cam
