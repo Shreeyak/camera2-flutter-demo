@@ -510,7 +510,8 @@ class CambrianCamera {
   /// Captures the GPU post-processed frame (what the user sees on screen) and saves to disk.
   ///
   /// Reads the next full-resolution RGBA frame from the C++ pipeline after the call
-  /// (~one frame interval delay, ≤33 ms at 30 fps), then encodes and saves it.
+  /// (typically about one frame interval; may wait up to the native timeout),
+  /// then encodes and saves it.
   ///
   /// **Format** is inferred from [fileName]'s extension:
   /// - `.jpg` / `.jpeg` → JPEG (quality 90)

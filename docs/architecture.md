@@ -21,7 +21,7 @@ All paths are relative to `packages/cambrian_camera/android/src/main/`.
 
 - **Preview = consumer output.** The tone-mapped preview is pixel-identical to what `FULL_RES` sinks receive.
 - **1 memcpy per frame.** PBO → `std::vector` in `SharedFrame`. All downstream dispatch is `shared_ptr` copy only.
-- **No per-frame allocation.** Each `SharedFrame` buffer is allocated once on delivery and ref-counted through the pipeline; no per-consumer copies.
+- **No per-consumer copies.** Each `SharedFrame` buffer is allocated once on delivery and ref-counted through the pipeline; downstream dispatch is `shared_ptr` copy only.
 - **`null` = don't change.** `CameraSettings` fields that are `null` retain their previous Kotlin-side values.
 - **ISO ↔ exposure are coupled.** Setting either to `auto` propagates to the other via Camera2's single AE flag.
 - **LUT rebuilt atomically.** When `ProcessingParams` change, the 256-entry LUT is rebuilt and swapped; no partial updates visible to the frame loop.
@@ -812,7 +812,7 @@ Approximate per-frame buffer sizes:
 | TRACKER | ~853×480 | RGBA | ~1.6 MB |
 | RAW | configurable `rawStreamHeight` (e.g. 1280×720) | RGBA | ~3.7 MB |
 
-With N consumers on a role, peak memory is `(N + 1) × frame_size` (one in the mailbox per consumer, plus the one being dispatched). Slow consumers hold their ref longer, increasing peak resident memory.
+With N consumers on a role, the approximate lower bound is `(N + 1) × frame_size` (one in the mailbox per consumer, plus the one being dispatched). The actual worst case is closer to `(2N + 1) × frame_size` — a slow consumer can simultaneously hold a frame in its 1-slot mailbox **and** a second frame as a local reference inside its callback. Slow consumers hold their refs longer, increasing peak resident memory.
 
 Raw stream adds: `rawFBO` (~8 MB at 1080p), `rawPBOs[2]` (~16 MB), `rawEGLSurface` (~8 MB).
 

@@ -278,7 +278,7 @@ abstract class CameraHostApi {
 
   /// Captures the next GPU post-processed frame and saves it to disk.
   /// Format is inferred from [fileName] extension: .jpg/.jpeg → JPEG (quality 90),
-  /// .png or absent extension → PNG. [outputDirectory] null = app Pictures directory.
+  /// .png or absent extension → PNG. [outputDirectory] null = system gallery under Pictures/CambrianCamera (via MediaStore).
   /// Returns the absolute file path of the saved image.
   @async
   String captureImage(int handle, String? outputDirectory, String? fileName);

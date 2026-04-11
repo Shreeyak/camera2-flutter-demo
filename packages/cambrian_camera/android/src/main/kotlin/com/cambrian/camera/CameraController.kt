@@ -103,6 +103,8 @@ class CameraController(
         const val LOW_FPS_STREAK_LIMIT = 3
         /** Milliseconds AE may stay in SEARCHING before emitting [CamErrorCode.AE_CONVERGENCE_TIMEOUT]. */
         const val AE_CONVERGENCE_TIMEOUT_MS = 5000L
+        /** JPEG encode quality (0–100). 90 gives good perceptual quality with ~3× size reduction vs. lossless. */
+        const val JPEG_QUALITY = 90
     }
 
     // -------------------------------------------------------------------------
@@ -1077,122 +1079,142 @@ class CameraController(
         fileName: String?,
         callback: (Result<String>) -> Unit,
     ) {
-        val pipelinePtr = nativePipelinePtr
-        if (pipelinePtr == 0L) {
-            callback(Result.failure(FlutterError("not_streaming", "Pipeline not initialized", null)))
+        if (!isCaptureInFlight.compareAndSet(false, true)) {
+            callback(Result.failure(FlutterError("capture_in_progress", "A capture is already in progress", null)))
             return
         }
 
         backgroundHandler.post {
-            // Resolve filename; default to PNG with a timestamp if omitted or extension-less.
-            val ts = System.currentTimeMillis()
-            val resolvedName = when {
-                fileName.isNullOrBlank()   -> "capture_$ts.png"
-                !fileName.contains('.')    -> "$fileName.png"
-                else                       -> fileName
-            }
-            val lowerName = resolvedName.lowercase(java.util.Locale.ROOT)
-            val isJpeg = lowerName.endsWith(".jpg") || lowerName.endsWith(".jpeg")
-            val isPng  = lowerName.endsWith(".png")
-            if (!isJpeg && !isPng) {
-                mainHandler.post {
-                    callback(Result.failure(FlutterError("invalid_format",
-                        "Unsupported file extension in '$resolvedName' — use .jpg, .jpeg, or .png",
-                        null)))
-                }
-                return@post
-            }
-            val mimeType = if (isJpeg) "image/jpeg" else "image/png"
-            // JPEG quality 90: good perceptual quality with reasonable file size.
-            val jpegQuality = 90
-            val writeExif = isJpeg || isPng
-
-            if (outputDirectory != null) {
-                // Caller supplied an explicit directory: use the existing file-path flow.
-                val dir = File(outputDirectory).also { it.mkdirs() }
-                val file = File(dir, resolvedName)
-                val errorMsg = nativeCaptureImage(pipelinePtr, file.absolutePath, jpegQuality)
-                if (errorMsg.isNotEmpty()) {
+            try {
+                // Re-read nativePipelinePtr under pipelineLock to avoid a TOCTOU race with teardown():
+                // teardown() zeroes the pointer and frees the pipeline, so capturing the pointer
+                // before the post risks using a freed handle if teardown runs in the window.
+                val pipelinePtr = synchronized(pipelineLock) { nativePipelinePtr }
+                if (pipelinePtr == 0L) {
                     mainHandler.post {
-                        callback(Result.failure(FlutterError("capture_failed", errorMsg, null)))
+                        callback(Result.failure(FlutterError("not_streaming", "Pipeline not initialized", null)))
                     }
                     return@post
                 }
-                if (writeExif) {
-                    try { writeExifMetadata(file, lastCaptureSnapshot) } catch (e: Exception) {
-                        Log.w("CC/Cam", "[$handle] captureImage: failed to write EXIF — ${e.message}")
+                // Resolve filename; default to PNG with a timestamp if omitted or extension-less.
+                val ts = System.currentTimeMillis()
+                val resolvedName = when {
+                    fileName.isNullOrBlank()   -> "capture_$ts.png"
+                    !fileName.contains('.')    -> "$fileName.png"
+                    else                       -> fileName
+                }
+                val lowerName = resolvedName.lowercase(java.util.Locale.ROOT)
+                val isJpeg = lowerName.endsWith(".jpg") || lowerName.endsWith(".jpeg")
+                val isPng  = lowerName.endsWith(".png")
+                if (!isJpeg && !isPng) {
+                    mainHandler.post {
+                        callback(Result.failure(FlutterError("invalid_format",
+                            "Unsupported file extension in '$resolvedName' — use .jpg, .jpeg, or .png",
+                            null)))
                     }
+                    return@post
                 }
-                mainHandler.post { callback(Result.success(file.absolutePath)) }
-                return@post
-            }
+                val mimeType = if (isJpeg) "image/jpeg" else "image/png"
+                val jpegQuality = JPEG_QUALITY
+                val writeExif = isJpeg || isPng
 
-            // Default path: insert via MediaStore so the image appears in the system gallery
-            // under Pictures/CambrianCamera.  minSdk is 33 so no version guarding is needed.
-            val cv = ContentValues().apply {
-                put(MediaStore.Images.Media.DISPLAY_NAME, resolvedName)
-                put(MediaStore.Images.Media.MIME_TYPE, mimeType)
-                // RELATIVE_PATH places the file in the shared Pictures/CambrianCamera directory.
-                put(MediaStore.Images.Media.RELATIVE_PATH,
-                    "${Environment.DIRECTORY_PICTURES}/CambrianCamera")
-                // IS_PENDING=1 reserves the MediaStore slot while C++ writes bytes.
-                // The flag is cleared after writing so the gallery can index the file.
-                put(MediaStore.Images.Media.IS_PENDING, 1)
-            }
-            val collection = MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
-            val uri = context.contentResolver.insert(collection, cv)
-            if (uri == null) {
-                mainHandler.post {
-                    callback(Result.failure(FlutterError("capture_failed",
-                        "MediaStore insert failed — check storage permissions", null)))
-                }
-                return@post
-            }
-
-            try {
-                // Open a writable fd from the content URI and pass it to C++.
-                context.contentResolver.openFileDescriptor(uri, "w")!!.use { pfd ->
-                    val errorMsg = nativeCaptureImageToFd(pipelinePtr, pfd.fd, isJpeg, jpegQuality)
+                if (outputDirectory != null) {
+                    // Caller supplied an explicit directory: use the existing file-path flow.
+                    val dir = File(outputDirectory).also { it.mkdirs() }
+                    val file = File(dir, resolvedName)
+                    val errorMsg = nativeCaptureImage(pipelinePtr, file.absolutePath, jpegQuality)
                     if (errorMsg.isNotEmpty()) {
-                        context.contentResolver.delete(uri, null, null)
                         mainHandler.post {
                             callback(Result.failure(FlutterError("capture_failed", errorMsg, null)))
                         }
                         return@post
                     }
+                    if (writeExif) {
+                        try { writeExifMetadata(file, lastCaptureSnapshot) } catch (e: Exception) {
+                            Log.w("CC/Cam", "[$handle] captureImage: failed to write EXIF — ${e.message}")
+                        }
+                    }
+                    mainHandler.post { callback(Result.success(file.absolutePath)) }
+                    return@post
                 }
 
-                // Write EXIF via a separate rw fd; ExifInterface supports JPEG and PNG on API 31+.
-                if (writeExif) {
-                    try {
-                        context.contentResolver.openFileDescriptor(uri, "rw")!!.use { pfd ->
-                            writeExifMetadata(android.media.ExifInterface(pfd.fileDescriptor),
-                                lastCaptureSnapshot)
+                // Default path: insert via MediaStore so the image appears in the system gallery
+                // under Pictures/CambrianCamera.  minSdk is 33 so no version guarding is needed.
+                val cv = ContentValues().apply {
+                    put(MediaStore.Images.Media.DISPLAY_NAME, resolvedName)
+                    put(MediaStore.Images.Media.MIME_TYPE, mimeType)
+                    // RELATIVE_PATH places the file in the shared Pictures/CambrianCamera directory.
+                    put(MediaStore.Images.Media.RELATIVE_PATH,
+                        "${Environment.DIRECTORY_PICTURES}/CambrianCamera")
+                    // IS_PENDING=1 reserves the MediaStore slot while C++ writes bytes.
+                    // The flag is cleared after writing so the gallery can index the file.
+                    put(MediaStore.Images.Media.IS_PENDING, 1)
+                }
+                val collection = MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+                val uri = context.contentResolver.insert(collection, cv)
+                if (uri == null) {
+                    mainHandler.post {
+                        callback(Result.failure(FlutterError("capture_failed",
+                            "MediaStore insert failed — check that external storage is available", null)))
+                    }
+                    return@post
+                }
+
+                try {
+                    // Open a writable fd from the content URI and pass it to C++.
+                    context.contentResolver.openFileDescriptor(uri, "w")!!.use { pfd ->
+                        val errorMsg = nativeCaptureImageToFd(pipelinePtr, pfd.fd, isJpeg, jpegQuality)
+                        if (errorMsg.isNotEmpty()) {
+                            context.contentResolver.delete(uri, null, null)
+                            mainHandler.post {
+                                callback(Result.failure(FlutterError("capture_failed", errorMsg, null)))
+                            }
+                            return@post
                         }
-                    } catch (e: Exception) {
-                        Log.w("CC/Cam", "[$handle] captureImage: failed to write EXIF — ${e.message}")
+                    }
+
+                    // Write EXIF via a separate rw fd; ExifInterface supports JPEG and PNG on API 31+.
+                    if (writeExif) {
+                        try {
+                            context.contentResolver.openFileDescriptor(uri, "rw")!!.use { pfd ->
+                                writeExifMetadata(android.media.ExifInterface(pfd.fileDescriptor),
+                                    lastCaptureSnapshot)
+                            }
+                        } catch (e: Exception) {
+                            Log.w("CC/Cam", "[$handle] captureImage: failed to write EXIF — ${e.message}")
+                        }
+                    }
+
+                    // Clear IS_PENDING so the gallery can index the new image.
+                    val done = ContentValues().apply { put(MediaStore.Images.Media.IS_PENDING, 0) }
+                    context.contentResolver.update(uri, done, null, null)
+
+                    // Resolve the absolute file path from the DATA column.
+                    // The DATA column is populated for files the app itself created on API 33.
+                    val filePath = context.contentResolver.query(
+                        uri, arrayOf(MediaStore.Images.Media.DATA), null, null, null
+                    )?.use { c ->
+                        if (c.moveToFirst()) c.getString(0) else null
+                    }
+                    if (filePath == null) {
+                        context.contentResolver.delete(uri, null, null)
+                        mainHandler.post {
+                            callback(Result.failure(FlutterError("capture_failed",
+                                "MediaStore did not return a file path for the saved image", null)))
+                        }
+                        return@post
+                    }
+
+                    mainHandler.post { callback(Result.success(filePath)) }
+                } catch (e: Exception) {
+                    context.contentResolver.delete(uri, null, null)
+                    mainHandler.post {
+                        callback(Result.failure(FlutterError("capture_failed",
+                            e.message ?: "unknown error", null)))
                     }
                 }
-
-                // Clear IS_PENDING so the gallery can index the new image.
-                val done = ContentValues().apply { put(MediaStore.Images.Media.IS_PENDING, 0) }
-                context.contentResolver.update(uri, done, null, null)
-
-                // Resolve the actual file path from the DATA column for the return value.
-                // The DATA column is available for files the app itself created (API 33).
-                val filePath = context.contentResolver.query(
-                    uri, arrayOf(MediaStore.Images.Media.DATA), null, null, null
-                )?.use { c ->
-                    if (c.moveToFirst()) c.getString(0) else null
-                } ?: uri.toString()
-
-                mainHandler.post { callback(Result.success(filePath)) }
-            } catch (e: Exception) {
-                context.contentResolver.delete(uri, null, null)
-                mainHandler.post {
-                    callback(Result.failure(FlutterError("capture_failed",
-                        e.message ?: "unknown error", null)))
-                }
+            } finally {
+                isCaptureInFlight.set(false)
             }
         }
     }
@@ -1281,9 +1303,10 @@ class CameraController(
         if (imgWidth  > 0) exif.setAttribute(android.media.ExifInterface.TAG_PIXEL_X_DIMENSION, imgWidth.toString())
         if (imgHeight > 0) exif.setAttribute(android.media.ExifInterface.TAG_PIXEL_Y_DIMENSION, imgHeight.toString())
 
-        // Orientation derived from the current display rotation.
+        // Orientation: combine display rotation with the camera sensor's fixed mounting angle
+        // and reverse for front-facing cameras per the Camera2 spec.
         @Suppress("DEPRECATION")
-        val displayRot = when (
+        val displayDeg = when (
             (context.getSystemService(Context.WINDOW_SERVICE) as android.view.WindowManager)
                 .defaultDisplay.rotation
         ) {
@@ -1292,7 +1315,21 @@ class CameraController(
             android.view.Surface.ROTATION_270 -> 270
             else                              ->   0
         }
-        val orientationTag = when (displayRot) {
+        val cameraId = resolvedCameraId
+        val adjustedDeg = if (cameraId != null) {
+            val characteristics = cameraManager.getCameraCharacteristics(cameraId)
+            // SENSOR_ORIENTATION: the clockwise angle the sensor image must be rotated to appear
+            // upright when the device is held in its natural orientation.
+            val sensorOrientation = characteristics.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
+            val isFront = characteristics.get(CameraCharacteristics.LENS_FACING) ==
+                CameraCharacteristics.LENS_FACING_FRONT
+            // Front cameras are mirrored — negate device rotation before combining.
+            if (isFront) (sensorOrientation - displayDeg + 360) % 360
+            else         (sensorOrientation + displayDeg) % 360
+        } else {
+            displayDeg
+        }
+        val orientationTag = when (adjustedDeg) {
             90  -> android.media.ExifInterface.ORIENTATION_ROTATE_90
             180 -> android.media.ExifInterface.ORIENTATION_ROTATE_180
             270 -> android.media.ExifInterface.ORIENTATION_ROTATE_270

@@ -569,9 +569,11 @@ final path = await camera.captureImage();
 // Save as JPEG with a specific name
 final path = await camera.captureImage(fileName: 'my_photo.jpg');
 
-// Save to a custom directory as PNG
+// Save to an app-specific external directory as PNG
+// Use context.getExternalFilesDir(null)?.absolutePath on the Android side;
+// arbitrary shared-storage paths (e.g. /sdcard/) require MANAGE_EXTERNAL_STORAGE on API 33+.
 final path = await camera.captureImage(
-  outputDirectory: '/sdcard/MyApp/captures',
+  outputDirectory: '/storage/emulated/0/Android/data/com.example.app/files',
   fileName: 'frame_001.png',
 );
 ```

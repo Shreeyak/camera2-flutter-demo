@@ -157,12 +157,15 @@ Two capture methods are available:
 
 ```dart
 // Hardware ISP JPEG (no GPU post-processing — highest quality):
-final path = await camera.captureNaturalPicture();
+final naturalPath = await camera.captureNaturalPicture();
+print('Natural image saved to: $naturalPath');
 
 // GPU post-processed frame (what the user sees on screen):
-final path = await camera.captureImage();                      // PNG (default)
-final path = await camera.captureImage(fileName: 'shot.jpg'); // JPEG
-print('Image saved to: $path');
+final processedPngPath = await camera.captureImage(); // PNG (default)
+print('Processed PNG saved to: $processedPngPath');
+
+final processedJpegPath = await camera.captureImage(fileName: 'shot.jpg'); // JPEG
+print('Processed JPEG saved to: $processedJpegPath');
 ```
 
 ## Error Recovery

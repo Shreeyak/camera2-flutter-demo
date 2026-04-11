@@ -15,6 +15,7 @@ class BottomBar extends StatelessWidget {
   final VoidCallback onToggleGpuControls;
   final bool isRecording;
   final VoidCallback onToggleRecording;
+  /// Callback invoked when the user taps the capture button.
   final VoidCallback onCapture;
 
   const BottomBar({
