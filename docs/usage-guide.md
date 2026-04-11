@@ -160,6 +160,31 @@ void onReturnToCameraScreen() {
 }
 ```
 
+#### `camera.setResolution()`
+
+```dart
+Future<void> setResolution(int width, int height)
+```
+
+Switches the camera stream to a different resolution at runtime. The camera briefly transitions through `recovering` state while it tears down and reopens with the new size.
+
+- `width`, `height` — must match one of the sizes in `capabilities.supportedSizes`.
+- Throws `PlatformException` if called while recording, if the camera is closed/errored, or if the device reopen fails.
+- After returning, `capabilities` is refreshed with the new `streamWidth`/`streamHeight`.
+- No-op if the requested size matches the current stream size.
+
+```dart
+final caps = camera.capabilities;
+final sizes = caps.supportedSizes; // sorted descending by area
+
+// Switch to a smaller resolution
+final small = sizes.last;
+await camera.setResolution(small.width, small.height);
+
+// capabilities now reflects the new stream dimensions
+print('Now streaming at ${camera.capabilities.streamWidth}x${camera.capabilities.streamHeight}');
+```
+
 ---
 
 ### Preview Streams
@@ -881,7 +906,7 @@ print('Resolutions: ${caps.supportedSizes}');
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `supportedSizes` | `List<CameraSize>` | Available resolutions (largest first) |
+| `supportedSizes` | `List<CameraSize>` | All supported YUV_420_888 stream resolutions, sorted descending by area |
 | `isoMin` / `isoMax` | `int` | Sensor sensitivity range |
 | `exposureTimeMinNs` / `exposureTimeMaxNs` | `int` | Exposure time range (nanoseconds) |
 | `focusMin` / `focusMax` | `double` | Focus distance range in diopters (0 = infinity) |

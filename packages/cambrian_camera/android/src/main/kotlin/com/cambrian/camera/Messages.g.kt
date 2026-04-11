@@ -226,6 +226,7 @@ data class CamProcessingParams (
 
 /** Generated class from Pigeon that represents data sent in messages. */
 data class CamCapabilities (
+  /** All supported YUV_420_888 stream resolutions, sorted descending by area. */
   val supportedSizes: List<CamSize>,
   val isoMin: Long,
   val isoMax: Long,
@@ -514,6 +515,7 @@ interface CameraHostApi {
   fun open(cameraId: String?, settings: CamSettings?, callback: (Result<Long>) -> Unit)
   fun getCapabilities(handle: Long, callback: (Result<CamCapabilities>) -> Unit)
   fun updateSettings(handle: Long, settings: CamSettings)
+  fun setResolution(handle: Long, width: Long, height: Long, callback: (Result<Unit>) -> Unit)
   fun setProcessingParams(handle: Long, params: CamProcessingParams)
   /**
    * Captures a still JPEG image using Camera2's hardware ISP.
@@ -621,6 +623,27 @@ interface CameraHostApi {
               wrapError(exception)
             }
             reply.reply(wrapped)
+          }
+        } else {
+          channel.setMessageHandler(null)
+        }
+      }
+      run {
+        val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.cambrian_camera.CameraHostApi.setResolution$separatedMessageChannelSuffix", codec)
+        if (api != null) {
+          channel.setMessageHandler { message, reply ->
+            val args = message as List<Any?>
+            val handleArg = args[0] as Long
+            val widthArg = args[1] as Long
+            val heightArg = args[2] as Long
+            api.setResolution(handleArg, widthArg, heightArg) { result: Result<Unit> ->
+              val error = result.exceptionOrNull()
+              if (error != null) {
+                reply.reply(wrapError(error))
+              } else {
+                reply.reply(wrapResult(null))
+              }
+            }
           }
         } else {
           channel.setMessageHandler(null)

@@ -233,6 +233,14 @@ class CameraController(
     @Volatile private var pendingSettings: CamSettings? = null
 
     /**
+     * User-requested stream resolution override. When non-zero, [resolveStreamFormat]
+     * returns these values instead of auto-selecting the largest 4:3 size.
+     * Written from [setResolution] on backgroundHandler; read from [startCaptureSession].
+     */
+    @Volatile private var requestedWidth: Int = 0
+    @Volatile private var requestedHeight: Int = 0
+
+    /**
      * Accumulated settings state. Each [updateSettings] call merges non-null
      * incoming fields into this object so that omitted fields retain their
      * previous values across calls (instead of reverting to Camera2 template
@@ -693,9 +701,177 @@ class CameraController(
     }
 
     /**
+     * Changes the camera stream resolution and reconfigures the capture session.
+     *
+     * Tears down the current session and GPU pipeline (keeping the [CameraDevice] open),
+     * stores the requested resolution, and rebuilds via [startCaptureSession].
+     * Emits "recovering" during reconfiguration and "streaming" when complete.
+     *
+     * Must not be called while recording. The caller (Dart) should guard against this.
+     *
+     * @param width  Requested stream width in pixels.
+     * @param height Requested stream height in pixels.
+     * @param callback Invoked on the main thread when reconfiguration completes or fails.
+     */
+    fun setResolution(width: Int, height: Int, callback: (Result<Unit>) -> Unit) {
+        backgroundHandler.post {
+            if (released || state == State.CLOSED || state == State.ERROR) {
+                mainHandler.post { callback(Result.failure(FlutterError("invalid_state", "Camera not open", null))) }
+                return@post
+            }
+            if (isRecording) {
+                mainHandler.post { callback(Result.failure(FlutterError("recording", "Cannot change resolution while recording", null))) }
+                return@post
+            }
+            if (width == previewWidth && height == previewHeight) {
+                mainHandler.post { callback(Result.success(Unit)) }
+                return@post
+            }
+            // Cancel any pending recovery retry — a scheduled retry can fire while we are
+            // mid-reconfigure (state stays RECOVERING throughout) and call teardown()/doReopenCamera()
+            // concurrently, corrupting the capture session rebuild.
+            pendingRetryRunnable?.let { backgroundHandler.removeCallbacks(it) }
+            pendingRetryRunnable = null
+            Log.i("CC/Cam", "[$handle] setResolution ${previewWidth}x${previewHeight} -> ${width}x${height}")
+            requestedWidth = width
+            requestedHeight = height
+            setState(State.RECOVERING)
+            emitState("recovering")
+
+            val device = cameraDevice
+            val pipeline = gpuPipeline
+            if (backgroundSuspended || released || device == null || pipeline == null) {
+                // Camera went away mid-flight — let auto-recovery handle it.
+                handleNonFatalError(CamErrorCode.CONFIGURATION_FAILED, "setResolution: camera not ready")
+                mainHandler.post { callback(Result.failure(FlutterError("invalid_state", "Camera not ready for resize", null))) }
+                return@post
+            }
+
+            // Session-only teardown: close Camera2 session and image readers, but keep the
+            // CameraDevice open and the GpuPipeline's EGL context alive.
+            backgroundHandler.removeCallbacks(stallWatchdog)
+            try { captureSession?.close() } catch (_: Exception) {}
+            captureSession = null
+            try { imageReader?.close() } catch (_: Exception) {}
+            imageReader = null
+            try { jpegImageReader?.close() } catch (_: Exception) {}
+            jpegImageReader = null
+            repeatingTargetSurface = null
+            lastCaptureResultMs = 0L
+            captureResultCount = 0L
+
+            // Resolve new stream format (uses requestedWidth/requestedHeight set above).
+            // If the requested size is not in the supported list, resolveStreamFormat throws.
+            // Reset the request to the last-known-good size and let handleNonFatalError recover
+            // rather than leaving the camera stuck in RECOVERING with no capture session.
+            val (_, streamWidth, streamHeight) = try {
+                resolveStreamFormat(device)
+            } catch (e: IllegalArgumentException) {
+                requestedWidth = previewWidth
+                requestedHeight = previewHeight
+                handleNonFatalError(CamErrorCode.CONFIGURATION_FAILED, e.message ?: "Unsupported resolution")
+                mainHandler.post { callback(Result.failure(FlutterError("unsupported_resolution", e.message, null))) }
+                return@post
+            }
+            previewWidth = streamWidth
+            previewHeight = streamHeight
+            surfaceProducer.setSize(streamWidth, streamHeight)
+            val newRawW: Int
+            val newRawH: Int
+            if (enableRawStream && rawSurfaceProducer != null) {
+                // Scale raw stream width to match the new aspect ratio, then clear the LSB
+                // (`and 1.inv()`) to guarantee an even width — YUV chroma planes require
+                // width divisible by 2, or the MediaCodec/GL buffer layout is undefined.
+                newRawW = (streamWidth.toFloat() / streamHeight * rawStreamHeight + 0.5f).toInt() and 1.inv()
+                newRawH = rawStreamHeight
+                rawW = newRawW
+                rawH = newRawH
+                rawSurfaceProducer.setSize(newRawW, newRawH)
+            } else {
+                newRawW = 0; newRawH = 0
+                rawW = 0; rawH = 0
+            }
+
+            // Resize GL resources in-place: releaseGl() + initGl() at new dims, EGL untouched.
+            // If it fails, delegate to auto-recovery which will do a full device close+reopen.
+            if (!pipeline.resize(streamWidth, streamHeight, newRawW, newRawH)) {
+                Log.e("CC/Cam", "[$handle] setResolution: GPU resize failed — delegating to auto-recovery")
+                handleNonFatalError(CamErrorCode.CONFIGURATION_FAILED, "GPU resize failed")
+                mainHandler.post { callback(Result.failure(FlutterError("reconfigure_failed", "GPU resize failed", null))) }
+                return@post
+            }
+
+            // Tear and rebind the preview EGL surfaces using the *current* Surface references
+            // from the SurfaceProducers. surfaceProducer.setSize() may invalidate or replace
+            // the Surface object that GpuPipeline stored at construction, causing the internal
+            // rebind inside resize() to silently create an EGL surface at the old dimensions
+            // (content only fills the top-left corner of the old-sized buffer). Fetching a
+            // fresh reference here guarantees the GPU renders into a correctly-sized buffer.
+            pipeline.rebindPreviewSurface(surfaceProducer.getSurface())
+            if (enableRawStream && rawSurfaceProducer != null) {
+                pipeline.rebindRawSurface(rawSurfaceProducer.getSurface())
+            }
+
+            // Replay processing params so shader uniforms survive the resize.
+            lastProcessingParams?.let { setProcessingParams(it) }
+
+            // Rebuild Camera2 session with the existing cameraSurface (still valid after resize)
+            // and a fresh JPEG reader at the new dimensions.
+            val jpegReader = ImageReader.newInstance(streamWidth, streamHeight, android.graphics.ImageFormat.JPEG, 1)
+            jpegImageReader = jpegReader
+
+            val gpuSurface = pipeline.cameraSurface
+            if (gpuSurface == null) {
+                Log.e("CC/Cam", "[$handle] setResolution: cameraSurface null after resize")
+                jpegImageReader = null
+                jpegReader.close()
+                handleNonFatalError(CamErrorCode.CONFIGURATION_FAILED, "cameraSurface null after resize")
+                mainHandler.post { callback(Result.failure(FlutterError("reconfigure_failed", "Camera surface unavailable", null))) }
+                return@post
+            }
+            repeatingTargetSurface = gpuSurface
+            val surfaces = listOf(gpuSurface, jpegReader.surface)
+            val outputs = surfaces.map { android.hardware.camera2.params.OutputConfiguration(it) }
+            device.createCaptureSession(
+                android.hardware.camera2.params.SessionConfiguration(
+                    android.hardware.camera2.params.SessionConfiguration.SESSION_REGULAR,
+                    outputs,
+                    { command -> backgroundHandler.post(command) },
+                    object : android.hardware.camera2.CameraCaptureSession.StateCallback() {
+                        override fun onConfigured(session: android.hardware.camera2.CameraCaptureSession) {
+                            Log.i("CC/Cam", "[$handle] setResolution: session configured ${previewWidth}×${previewHeight}")
+                            captureSession = session
+                            try {
+                                val settings = pendingSettings
+                                val request = if (settings != null) buildCaptureRequest(device, settings)
+                                              else buildDefaultCaptureRequest(device)
+                                repeatingRequest = request
+                                session.setRepeatingRequest(request, repeatingCaptureCallback, backgroundHandler)
+                                setState(State.STREAMING)
+                                emitState("streaming")
+                                lastCaptureResultMs = android.os.SystemClock.elapsedRealtime()
+                                backgroundHandler.postDelayed(stallWatchdog, stallCheckIntervalMs)
+                                mainHandler.post { callback(Result.success(Unit)) }
+                            } catch (e: android.hardware.camera2.CameraAccessException) {
+                                handleNonFatalError(CamErrorCode.CAMERA_ACCESS_ERROR, e.message ?: "CameraAccessException")
+                                mainHandler.post { callback(Result.failure(FlutterError(CamErrorCode.CAMERA_ACCESS_ERROR.name, e.message, null))) }
+                            }
+                        }
+                        override fun onConfigureFailed(session: android.hardware.camera2.CameraCaptureSession) {
+                            Log.e("CC/Cam", "[$handle] setResolution: session configure failed")
+                            handleNonFatalError(CamErrorCode.CONFIGURATION_FAILED, "Session configuration failed during resize")
+                            mainHandler.post { callback(Result.failure(FlutterError(CamErrorCode.CONFIGURATION_FAILED.name, "Session configuration failed", null))) }
+                        }
+                    },
+                ),
+            )
+        }
+    }
+
+    /**
      * Queries [CameraCharacteristics] and returns real hardware capabilities.
      *
-     * Reports the three largest JPEG output sizes, sensor sensitivity and exposure ranges,
+     * Reports all YUV_420_888 output sizes, sensor sensitivity and exposure ranges,
      * focus distance range, zoom range, EV compensation range, and an estimate of the
      * memory used by the 4-slot ring buffer.
      *
@@ -712,12 +888,11 @@ class CameraController(
             val chars = cameraManager.getCameraCharacteristics(id)
             val configMap = chars.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
 
-            // Largest 3 JPEG output sizes, sorted descending by area.
-            val jpegSizes: List<CamSize> =
+            // All YUV_420_888 stream resolutions, sorted descending by area.
+            val yuvSizes: List<CamSize> =
                 configMap
-                    ?.getOutputSizes(ImageFormat.JPEG)
+                    ?.getOutputSizes(ImageFormat.YUV_420_888)
                     ?.sortedByDescending { it.width.toLong() * it.height }
-                    ?.take(3)
                     ?.map { CamSize(it.width.toLong(), it.height.toLong()) }
                     ?: emptyList()
 
@@ -734,7 +909,7 @@ class CameraController(
 
             val caps =
                 CamCapabilities(
-                    supportedSizes = jpegSizes,
+                    supportedSizes = yuvSizes,
                     isoMin = isoRange?.lower?.toLong() ?: 100L,
                     isoMax = isoRange?.upper?.toLong() ?: 3200L,
                     exposureTimeMinNs = expRange?.lower ?: 100_000L,
@@ -1748,12 +1923,23 @@ class CameraController(
     private fun resolveStreamFormat(device: CameraDevice): Triple<Int, Int, Int> {
         val chars = cameraManager.getCameraCharacteristics(device.id)
         val configMap = chars.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+        val yuvSizes = configMap?.getOutputSizes(ImageFormat.YUV_420_888)
+
+        // If caller requested a specific resolution, validate it against supported sizes.
+        if (requestedWidth > 0 && requestedHeight > 0) {
+            val match = yuvSizes?.find { it.width == requestedWidth && it.height == requestedHeight }
+            if (match != null) {
+                return Triple(ImageFormat.YUV_420_888, match.width, match.height)
+            }
+            throw IllegalArgumentException("Requested ${requestedWidth}x${requestedHeight} not in supported YUV sizes")
+        }
+
+        // Default: largest 4:3 YUV size.
         // Filter to 4:3: most sensors have a 4:3 active pixel array (SENSOR_INFO_ACTIVE_ARRAY_SIZE).
         // Non-4:3 output sizes crop that area, discarding live pixels. The largest 4:3 YUV size
         // = full sensor utilisation. getOutputSizes() is the authoritative valid-size list;
         // any size from it is guaranteed accepted by createCaptureSession.
-        val largest = configMap
-            ?.getOutputSizes(ImageFormat.YUV_420_888)
+        val largest = yuvSizes
             ?.filter { it.width * 3 == it.height * 4 }
             ?.maxByOrNull { it.width.toLong() * it.height }
         return if (largest != null) {

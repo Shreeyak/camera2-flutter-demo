@@ -26,10 +26,10 @@ import java.util.concurrent.atomic.AtomicReference
  * The preview [Surface] (from Flutter SurfaceProducer) may be null for headless use.
  */
 open class GpuPipeline(
-    private val width: Int,
-    private val height: Int,
-    private val previewSurface: Surface?,
-    private val rawPreviewSurface: Surface?,
+    private var width: Int,
+    private var height: Int,
+    private var previewSurface: Surface?,
+    private var rawPreviewSurface: Surface?,
     private val rawW: Int,
     private val rawH: Int,
     private val context: Context,
@@ -160,6 +160,46 @@ open class GpuPipeline(
     }
 
     /**
+     * Resize GL resources (FBOs, PBOs, textures) to new dimensions while keeping
+     * the EGL context, SurfaceTexture, and cameraSurface alive.
+     *
+     * Posts to the GL thread and blocks until complete.
+     * Must NOT be called while the pipeline is stopped.
+     *
+     * @return true if the native resize succeeded; false if GL re-init failed.
+     */
+    fun resize(newW: Int, newH: Int, newRawW: Int, newRawH: Int): Boolean {
+        val handle = gpuHandle
+        if (handle == 0L) {
+            Log.e(TAG, "resize: no active gpuHandle")
+            return false
+        }
+        var ok = false
+        val latch = CountDownLatch(1)
+        glHandler.post {
+            try {
+                // Update SurfaceTexture buffer dimensions before GL resources so the buffer
+                // queue starts allocating new-sized buffers immediately.
+                surfaceTexture?.setDefaultBufferSize(newW, newH)
+                ok = nativeGpuResize(handle, newW, newH, newRawW, newRawH)
+                if (!ok) Log.e(TAG, "nativeGpuResize failed for ${newW}x${newH}")
+            } finally {
+                latch.countDown()
+            }
+        }
+        // Timeout guards against indefinite hang if stop() clears the GL handler mid-resize.
+        if (!latch.await(RESIZE_TIMEOUT_SECONDS, java.util.concurrent.TimeUnit.SECONDS)) {
+            Log.e(TAG, "resize: timed out waiting for GL thread")
+            return false
+        }
+        if (ok) {
+            width = newW
+            height = newH
+        }
+        return ok
+    }
+
+    /**
      * Attach or detach the MediaCodec encoder surface.
      * Posts to the GL thread so EGL surface creation is serialised with drawAndReadback().
      * Pass null to detach (called when recording stops or the pipeline is torn down).
@@ -179,6 +219,7 @@ open class GpuPipeline(
     fun rebindRawSurface(surface: Surface?) {
         val handle = gpuHandle
         if (handle == 0L) return
+        rawPreviewSurface = surface
         glHandler.post {
             nativeGpuRebindRawSurface(handle, surface)
         }
@@ -191,6 +232,7 @@ open class GpuPipeline(
     fun rebindPreviewSurface(surface: Surface?) {
         val handle = gpuHandle
         if (handle == 0L) return
+        previewSurface = surface
         glHandler.post {
             nativeGpuRebindPreviewSurface(handle, surface)
         }
@@ -318,6 +360,10 @@ open class GpuPipeline(
         private const val TAG = "CC/Gpu"
         private const val STALL_THRESHOLD_MS = 3000L
         private const val STALL_CHECK_INTERVAL_MS = 1000L
+        // Upper bound for the GL thread to complete a resize. 5 s is generous for GL
+        // buffer reallocation; any real hang (e.g. stop() clearing the handler) should
+        // surface well before device ANR (5 s foreground, 10 s background on Android).
+        private const val RESIZE_TIMEOUT_SECONDS = 5L
 
         init {
             try {
@@ -353,6 +399,24 @@ open class GpuPipeline(
 
         @JvmStatic
         external fun nativeGpuRelease(gpuHandle: Long)
+
+        /**
+         * Releases and reinitialises GL resources (FBOs, PBOs, textures) at new dimensions.
+         *
+         * Must be called from the GL thread — the same thread that owns the EGL context
+         * and executes all other GPU operations (drawAndReadback, sampleCenterPatch, etc.).
+         *
+         * @param gpuHandle Opaque handle returned by [nativeGpuInit].
+         * @param newW      New processed-preview frame width in pixels.
+         * @param newH      New processed-preview frame height in pixels.
+         * @param newRawW   New raw-stream width in pixels (0 if raw stream is disabled).
+         * @param newRawH   New raw-stream height in pixels (0 if raw stream is disabled).
+         * @return true if GL re-init succeeded and the pipeline is ready to render at the
+         *         new size; false if any GL call failed (caller should treat this as a
+         *         non-recoverable GPU error and delegate to full camera recovery).
+         */
+        @JvmStatic
+        external fun nativeGpuResize(gpuHandle: Long, newW: Int, newH: Int, newRawW: Int, newRawH: Int): Boolean
 
         @JvmStatic
         external fun nativeGpuSetEncoderSurface(gpuHandle: Long, encoderSurface: Surface?)

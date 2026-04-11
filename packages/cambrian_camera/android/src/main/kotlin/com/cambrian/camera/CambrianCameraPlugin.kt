@@ -292,6 +292,23 @@ class CambrianCameraPlugin : FlutterPlugin, ActivityAware, CameraHostApi {
     }
 
     /**
+     * Changes the camera stream resolution and reconfigures the capture session.
+     *
+     * @param handle The camera handle.
+     * @param width  Requested stream width in pixels.
+     * @param height Requested stream height in pixels.
+     * @param callback Invoked when reconfiguration completes or fails.
+     */
+    override fun setResolution(handle: Long, width: Long, height: Long, callback: (Result<Unit>) -> Unit) {
+        val controller = sessions[handle]?.controller
+        if (controller == null) {
+            callback(Result.failure(FlutterError("invalid_handle", "No session for handle $handle", null)))
+            return
+        }
+        controller.setResolution(width.toInt(), height.toInt(), callback)
+    }
+
+    /**
      * Updates C++ pipeline processing parameters.
      *
      * Forwards parameters to the C++ image pipeline via JNI.

@@ -88,7 +88,8 @@ All paths are relative to `packages/cambrian_camera/android/src/main/`.
 | Decision | Rationale |
 |----------|-----------|
 | **Pigeon over raw MethodChannel** | Type-safe generated Dart/Kotlin bridge; eliminates string-based method name bugs. `@FlutterApi` replaces EventChannel for callbacks. |
-| **YUV_420_888 for streaming** | `resolveStreamFormat()` queries `StreamConfigurationMap`, selects largest 4:3 size (sensor native AR), falls back to 1280×960. Resolution reported in `CameraCapabilities.streamWidth/streamHeight`. |
+| **YUV_420_888 for streaming** | `resolveStreamFormat()` queries `StreamConfigurationMap`. By default selects largest 4:3 size (sensor native AR), falls back to 1280×960. An explicit override via `setResolution()` takes priority. Resolution reported in `CameraCapabilities.streamWidth/streamHeight`. |
+| **Runtime resolution switching** | `setResolution()` performs a full teardown (device close + EGL destroy) followed by a fresh `openCamera()` + `startCaptureSession()` at the new size. A lighter `teardownSession()` approach fails on some devices because `eglInitialize()` cannot reinit a terminated display. State transitions: STREAMING → RECOVERING → STREAMING. Blocked while recording. |
 | **Per-request ISP settings** | All `CameraSettings` map to `CaptureRequest` keys — rebuilds repeating request only (no session reconfiguration). Session-level changes (format/size) trigger full stop/start. |
 | **SurfaceProducer for preview** | Flutter's `TextureRegistry.SurfaceProducer` provides the preview Surface. Camera2 writes directly into it as a `CaptureRequest` target — no C++ memcpy on preview path. On surface invalidation (hot restart), controller rebinds to new Surface; `SurfaceProducer.id` is stable. |
 | **Generic consumer model** | No hardcoded outputs. Applications register C++ sinks via `addSink(config, callback)`. Unlimited consumers per role; each gets a dedicated dispatch thread and 1-slot drop-on-busy mailbox. Resolution differences are handled at GPU PBO readback, not per-consumer. |
@@ -256,14 +257,14 @@ enum CameraState { closed, opening, streaming, recovering, error }
 enum RecordingState { recording, idle, error }
 
 class CameraCapabilities {
-  final List<CameraSize> supportedSizes;
+  final List<CameraSize> supportedSizes;     // all YUV_420_888 sizes, sorted descending by area
   final int isoMin, isoMax;
   final int exposureTimeMinNs, exposureTimeMaxNs;
   final double focusMin, focusMax;
   final double zoomMin, zoomMax;
   final int evCompMin, evCompMax;
   final double evCompensationStep;
-  final int streamWidth, streamHeight;       // chosen by resolveStreamFormat()
+  final int streamWidth, streamHeight;       // chosen by resolveStreamFormat() or setResolution()
   final int rawStreamTextureId;              // 0 when disabled
   final int rawStreamWidth, rawStreamHeight; // 0 when disabled
 }
@@ -313,7 +314,7 @@ class FrameResult {
 
 Defined in `packages/cambrian_camera/pigeons/camera_api.dart`. Generated outputs: `messages.g.dart` (Dart), `Messages.g.kt` (Kotlin), `Messages.g.swift` (iOS stub).
 
-**HostApi** (Dart → Kotlin): `open`, `getCapabilities`, `updateSettings`, `setProcessingParams`, `captureNaturalPicture`, `captureImage`, `getNativePipelineHandle`, `startRecording`, `stopRecording`, `getDisplayRotation`, `close`
+**HostApi** (Dart → Kotlin): `open`, `getCapabilities`, `updateSettings`, `setResolution`, `setProcessingParams`, `captureNaturalPicture`, `captureImage`, `getNativePipelineHandle`, `startRecording`, `stopRecording`, `close`, `pause`, `resume`, `getPersistedProcessingParams`, `getDisplayRotation`, `sampleCenterPatch`
 
 **FlutterApi** (Kotlin → Dart): `onStateChanged`, `onError`, `onFrameResult`, `onRecordingStateChanged`
 

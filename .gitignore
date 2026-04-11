@@ -15,6 +15,7 @@ tmp_files/*
 !docs/redundant/.gitkeep
 docs/redundant
 docs/user-to-do.md
+docs/superpowers
 .claude
 # git worktree cli
 .wtp.yml
