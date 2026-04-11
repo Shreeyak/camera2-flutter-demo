@@ -41,7 +41,8 @@ Full reference: [`docs/cambrian-camera-usage-guide.md`](docs/cambrian-camera-usa
 | `camera.stateStream` | Lifecycle state changes (`streaming`, `recovering`, …) |
 | `camera.errorStream` | Camera errors with fatal/recoverable flag |
 | `camera.frameResultStream` | Actual sensor values at ~3 Hz (ISO, exposure, focus, WB gains) |
-| `camera.takePicture()` | JPEG still capture |
+| `camera.captureNaturalPicture()` | Hardware ISP JPEG capture (no GPU post-processing) |
+| `camera.captureImage()` | GPU post-processed capture (JPEG or PNG, EXIF metadata) |
 | `camera.getNativePipelineHandle()` | C++ consumer registration |
 
 ## Diagnostic Logging

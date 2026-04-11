@@ -20,6 +20,8 @@ class BottomBar extends StatelessWidget {
   final ValueChanged<CameraSize> onResolutionSelected;
   final bool isRecording;
   final VoidCallback onToggleRecording;
+  /// Callback invoked when the user taps the capture button.
+  final VoidCallback onCapture;
 
   const BottomBar({
     super.key,
@@ -36,6 +38,7 @@ class BottomBar extends StatelessWidget {
     required this.onResolutionSelected,
     required this.isRecording,
     required this.onToggleRecording,
+    required this.onCapture,
   });
 
   @override
@@ -64,6 +67,7 @@ class BottomBar extends StatelessWidget {
                     onResolutionSelected: onResolutionSelected,
                     isRecording: isRecording,
                     onToggleRecording: onToggleRecording,
+                    onCapture: onCapture,
                   ),
                 ),
               ),
@@ -93,7 +97,7 @@ class BottomBar extends StatelessWidget {
   }
 }
 
-// ── Main action bar with SETTINGS, CALIBRATE COLOR, and RECORD buttons
+// ── Main action bar with SETTINGS, CALIBRATE COLOR, CAPTURE, and RECORD buttons
 class _MainActionBar extends StatelessWidget {
   final bool isSettingsEnabled;
   final VoidCallback onToggleSettings;
@@ -103,6 +107,7 @@ class _MainActionBar extends StatelessWidget {
   final ValueChanged<CameraSize> onResolutionSelected;
   final bool isRecording;
   final VoidCallback onToggleRecording;
+  final VoidCallback onCapture;
 
   const _MainActionBar({
     required this.isSettingsEnabled,
@@ -113,6 +118,7 @@ class _MainActionBar extends StatelessWidget {
     required this.onResolutionSelected,
     required this.isRecording,
     required this.onToggleRecording,
+    required this.onCapture,
   });
 
   @override
@@ -141,6 +147,13 @@ class _MainActionBar extends StatelessWidget {
                 label: 'CALIBRATE COLOR',
                 isDisabled: false,
                 onTap: onToggleGpuControls,
+              ),
+              const SizedBox(width: 16),
+              BottomBarActionButton(
+                icon: Icons.camera_alt,
+                label: 'CAPTURE',
+                isDisabled: false,
+                onTap: onCapture,
               ),
               const SizedBox(width: 16),
               BottomBarActionButton(

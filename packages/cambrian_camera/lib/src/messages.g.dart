@@ -693,8 +693,11 @@ class CameraHostApi {
     }
   }
 
-  Future<String> takePicture(int handle) async {
-    final String pigeonVar_channelName = 'dev.flutter.pigeon.cambrian_camera.CameraHostApi.takePicture$pigeonVar_messageChannelSuffix';
+  /// Captures a still JPEG image using Camera2's hardware ISP.
+  /// Does NOT include GPU post-processing (LUT, saturation, contrast, brightness, gamma).
+  /// Returns the absolute file path of the saved image.
+  Future<String> captureNaturalPicture(int handle) async {
+    final String pigeonVar_channelName = 'dev.flutter.pigeon.cambrian_camera.CameraHostApi.captureNaturalPicture$pigeonVar_messageChannelSuffix';
     final BasicMessageChannel<Object?> pigeonVar_channel = BasicMessageChannel<Object?>(
       pigeonVar_channelName,
       pigeonChannelCodec,
@@ -702,6 +705,37 @@ class CameraHostApi {
     );
     final List<Object?>? pigeonVar_replyList =
         await pigeonVar_channel.send(<Object?>[handle]) as List<Object?>?;
+    if (pigeonVar_replyList == null) {
+      throw _createConnectionError(pigeonVar_channelName);
+    } else if (pigeonVar_replyList.length > 1) {
+      throw PlatformException(
+        code: pigeonVar_replyList[0]! as String,
+        message: pigeonVar_replyList[1] as String?,
+        details: pigeonVar_replyList[2],
+      );
+    } else if (pigeonVar_replyList[0] == null) {
+      throw PlatformException(
+        code: 'null-error',
+        message: 'Host platform returned null value for non-null return value.',
+      );
+    } else {
+      return (pigeonVar_replyList[0] as String?)!;
+    }
+  }
+
+  /// Captures the next GPU post-processed frame and saves it to disk.
+  /// Format is inferred from [fileName] extension: .jpg/.jpeg → JPEG (quality 90),
+  /// .png or absent extension → PNG. [outputDirectory] null = app Pictures directory.
+  /// Returns the absolute file path of the saved image.
+  Future<String> captureImage(int handle, String? outputDirectory, String? fileName) async {
+    final String pigeonVar_channelName = 'dev.flutter.pigeon.cambrian_camera.CameraHostApi.captureImage$pigeonVar_messageChannelSuffix';
+    final BasicMessageChannel<Object?> pigeonVar_channel = BasicMessageChannel<Object?>(
+      pigeonVar_channelName,
+      pigeonChannelCodec,
+      binaryMessenger: pigeonVar_binaryMessenger,
+    );
+    final List<Object?>? pigeonVar_replyList =
+        await pigeonVar_channel.send(<Object?>[handle, outputDirectory, fileName]) as List<Object?>?;
     if (pigeonVar_replyList == null) {
       throw _createConnectionError(pigeonVar_channelName);
     } else if (pigeonVar_replyList.length > 1) {

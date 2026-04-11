@@ -517,7 +517,19 @@ interface CameraHostApi {
   fun updateSettings(handle: Long, settings: CamSettings)
   fun setResolution(handle: Long, width: Long, height: Long, callback: (Result<Unit>) -> Unit)
   fun setProcessingParams(handle: Long, params: CamProcessingParams)
-  fun takePicture(handle: Long, callback: (Result<String>) -> Unit)
+  /**
+   * Captures a still JPEG image using Camera2's hardware ISP.
+   * Does NOT include GPU post-processing (LUT, saturation, contrast, brightness, gamma).
+   * Returns the absolute file path of the saved image.
+   */
+  fun captureNaturalPicture(handle: Long, callback: (Result<String>) -> Unit)
+  /**
+   * Captures the next GPU post-processed frame and saves it to disk.
+   * Format is inferred from [fileName] extension: .jpg/.jpeg → JPEG (quality 90),
+   * .png or absent extension → PNG. [outputDirectory] null = app Pictures directory.
+   * Returns the absolute file path of the saved image.
+   */
+  fun captureImage(handle: Long, outputDirectory: String?, fileName: String?, callback: (Result<String>) -> Unit)
   fun getNativePipelineHandle(handle: Long, callback: (Result<Long?>) -> Unit)
   fun startRecording(handle: Long, outputDirectory: String?, fileName: String?, bitrate: Long?, fps: Long?, callback: (Result<String>) -> Unit)
   fun stopRecording(handle: Long, callback: (Result<String>) -> Unit)
@@ -657,12 +669,34 @@ interface CameraHostApi {
         }
       }
       run {
-        val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.cambrian_camera.CameraHostApi.takePicture$separatedMessageChannelSuffix", codec)
+        val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.cambrian_camera.CameraHostApi.captureNaturalPicture$separatedMessageChannelSuffix", codec)
         if (api != null) {
           channel.setMessageHandler { message, reply ->
             val args = message as List<Any?>
             val handleArg = args[0] as Long
-            api.takePicture(handleArg) { result: Result<String> ->
+            api.captureNaturalPicture(handleArg) { result: Result<String> ->
+              val error = result.exceptionOrNull()
+              if (error != null) {
+                reply.reply(wrapError(error))
+              } else {
+                val data = result.getOrNull()
+                reply.reply(wrapResult(data))
+              }
+            }
+          }
+        } else {
+          channel.setMessageHandler(null)
+        }
+      }
+      run {
+        val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.cambrian_camera.CameraHostApi.captureImage$separatedMessageChannelSuffix", codec)
+        if (api != null) {
+          channel.setMessageHandler { message, reply ->
+            val args = message as List<Any?>
+            val handleArg = args[0] as Long
+            val outputDirectoryArg = args[1] as String?
+            val fileNameArg = args[2] as String?
+            api.captureImage(handleArg, outputDirectoryArg, fileNameArg) { result: Result<String> ->
               val error = result.exceptionOrNull()
               if (error != null) {
                 reply.reply(wrapError(error))

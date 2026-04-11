@@ -192,10 +192,10 @@ Async operations interact with shared state without serialization, leading to
 races that are hard to reproduce.
 
 **Examples:**
-- **`takePicture()` polls before JPEG is ready:** Posts a background task that
+- **`captureNaturalPicture()` polls before JPEG is ready:** Posts a background task that
   calls `jpegReader.acquireNextImage()` immediately after `session.capture()` —
   returns null if the JPEG hasn't been written yet (PR #2)
-- **Concurrent captures overwrite listener:** Two quick `takePicture()` calls
+- **Concurrent captures overwrite listener:** Two quick `captureNaturalPicture()` calls
   overwrite `jpegReader.setOnImageAvailableListener()` on the same one-buffer
   reader, orphaning the first callback (PR #2)
 - **`isCaptureInFlight` guard stuck:** Set to true before capture, but only cleared

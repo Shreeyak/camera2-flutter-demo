@@ -5,10 +5,19 @@
 
 #include "ImagePipeline.h"
 
+#ifdef __ANDROID__
+#include "fpng.h"
+#include <turbojpeg.h>
+#endif
+
 #include <android/log.h>
 #include <algorithm>  // std::find_if
 #include <cassert>
-#include <cstring>    // memcpy
+#include <cctype>     // std::tolower
+#include <cerrno>     // errno
+#include <cstdio>     // fopen/fwrite/fclose
+#include <cstring>    // memcpy, strerror
+#include <unistd.h>   // write() for captureToFd
 
 #define TAG  "CambrianCamera"
 #define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, TAG, __VA_ARGS__)
@@ -21,6 +30,10 @@ namespace cam {
 // ---------------------------------------------------------------------------
 
 ImagePipeline::ImagePipeline() {
+    // Detect CPU features (SSE4.1 on x86, CRC32 on ARM) for fpng's fast paths.
+#ifdef __ANDROID__
+    fpng::fpng_init();
+#endif
     LOGD("ImagePipeline created (GPU dispatch mode)");
 }
 
@@ -39,13 +52,18 @@ ImagePipeline::~ImagePipeline() {
 void ImagePipeline::deliverFullResRgba(const uint8_t* rgba, int w, int h,
                                         int stride, uint64_t frameId,
                                         const FrameMetadata& meta) {
-    // Fast-path: skip if no consumers AND no hook.
+    // Read capture flag before taking the consumer mutex so we can include it
+    // in the fast-path decision without a second lock acquisition.
+    const bool captureNeeded = captureRequested_.load(std::memory_order_acquire);
+
+    // Fast-path: skip if no consumers AND no hook AND no capture pending.
     // Use hookActive (atomic) instead of reading hook (std::function) to avoid
     // a data race with setFrameHook writing hook on another thread.
     {
         std::lock_guard<std::mutex> lk(fullResConsumersMu_);
         if (fullResConsumers_.empty() &&
-            !fullResStage_.hookActive.load(std::memory_order_acquire)) return;
+            !fullResStage_.hookActive.load(std::memory_order_acquire) &&
+            !captureNeeded) return;
     }
 
     auto frame    = std::make_shared<Frame>();
@@ -60,6 +78,16 @@ void ImagePipeline::deliverFullResRgba(const uint8_t* rgba, int w, int h,
     const size_t size = static_cast<size_t>(h) * stride;
     frame->data.resize(size);
     memcpy(frame->data.data(), rgba, size);
+
+    // Satisfy a pending captureToFile() request with this frame.
+    // exchange(false) atomically clears the flag and returns whether it was set,
+    // preventing a second frame from overwriting capturedFrame_ before captureToFile()
+    // has consumed the first one.
+    if (captureNeeded && captureRequested_.exchange(false, std::memory_order_acq_rel)) {
+        std::lock_guard<std::mutex> lk(captureResultMu_);
+        capturedFrame_ = frame;   // shared_ptr copy; no pixel data copy
+        captureCV_.notify_one();
+    }
 
     routeFrame(fullResStage_, std::move(frame),
                &ImagePipeline::publishToFullResConsumers);
@@ -372,6 +400,288 @@ void ImagePipeline::shutdownConsumers() {
     drainVector(trackerConsumersMu_, trackerConsumers_);
     drainVector(rawConsumersMu_, rawConsumers_);
     LOGD("shutdownConsumers: all consumers removed");
+}
+
+// ---------------------------------------------------------------------------
+// Capture helpers
+// ---------------------------------------------------------------------------
+
+/// Rotates an RGBA pixel buffer 90° CW, producing a new buffer with swapped dimensions.
+///
+/// The GPU pipeline renders into a portrait-dimensioned FBO (src_w × src_h) using a
+/// 90° CW UV rotation to normalise output to landscape-right. The pixel data therefore
+/// needs a 90° CW rotation before saving to disk to produce a landscape image.
+///
+/// 90° CW formula: dst(nr, nc) = src(src_h - 1 - nc, nr)
+///   dst dimensions: new_width = src_h, new_height = src_w.
+///
+/// @return RGBA buffer of size (src_h * src_w * 4), width = src_h, height = src_w.
+static std::vector<uint8_t> rotateRgba90CW(
+        const uint8_t* src, int src_w, int src_h) {
+    const int dst_w = src_h;
+    const int dst_h = src_w;
+    std::vector<uint8_t> dst(static_cast<size_t>(dst_w) * dst_h * 4);
+    for (int nr = 0; nr < dst_h; ++nr) {
+        for (int nc = 0; nc < dst_w; ++nc) {
+            const int old_r = src_h - 1 - nc;
+            const int old_c = nr;
+            const uint8_t* sp = src + (old_r * src_w + old_c) * 4;
+            uint8_t* dp = dst.data() + (nr * dst_w + nc) * 4;
+            dp[0] = sp[0];
+            dp[1] = sp[1];
+            dp[2] = sp[2];
+            dp[3] = sp[3];
+        }
+    }
+    return dst;
+}
+
+// ---------------------------------------------------------------------------
+// On-request still capture
+// ---------------------------------------------------------------------------
+
+bool ImagePipeline::captureToFile(const std::string& outputPath,
+                                   int jpegQuality, int timeoutMs) {
+    // Reset any leftover captured frame from a previous (possibly timed-out) call.
+    {
+        std::lock_guard<std::mutex> lk(captureResultMu_);
+        capturedFrame_ = nullptr;
+    }
+
+    // Signal deliverFullResRgba to store the next frame it receives.
+    captureRequested_.store(true, std::memory_order_release);
+
+    // Block until deliverFullResRgba delivers a frame or we time out.
+    SharedFrame frame;
+    {
+        std::unique_lock<std::mutex> lk(captureResultMu_);
+        const bool arrived = captureCV_.wait_for(
+            lk,
+            std::chrono::milliseconds(timeoutMs),
+            [this] { return capturedFrame_ != nullptr; });
+
+        if (!arrived) {
+            // Clear flag so a late-arriving frame doesn't corrupt the next call.
+            captureRequested_.store(false, std::memory_order_release);
+            LOGE("captureToFile: timed out waiting for frame after %d ms", timeoutMs);
+            return false;
+        }
+        frame = capturedFrame_;
+        capturedFrame_ = nullptr;
+    }
+
+    // Infer format from extension: .jpg/.jpeg → JPEG, .png → PNG, anything else → error.
+    // Compare the last 4-5 characters lowercase to avoid a full string-lower pass.
+    enum class ImageFormat { JPEG, PNG, UNKNOWN };
+    const ImageFormat fmt = [&outputPath]() -> ImageFormat {
+        const size_t n = outputPath.size();
+        auto lc = [](char c) {
+            return static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        };
+        if (n >= 4) {
+            char e4[5]{};
+            for (size_t i = 0; i < 4; ++i) e4[i] = lc(outputPath[n - 4 + i]);
+            if (std::string(e4) == ".jpg") return ImageFormat::JPEG;
+            if (std::string(e4) == ".png") return ImageFormat::PNG;
+        }
+        if (n >= 5) {
+            char e5[6]{};
+            for (size_t i = 0; i < 5; ++i) e5[i] = lc(outputPath[n - 5 + i]);
+            if (std::string(e5) == ".jpeg") return ImageFormat::JPEG;
+        }
+        return ImageFormat::UNKNOWN;
+    }();
+
+    if (fmt == ImageFormat::UNKNOWN) {
+        LOGE("captureToFile: unsupported extension in '%s' — use .jpg, .jpeg, or .png",
+             outputPath.c_str());
+        return false;
+    }
+    const bool asJpeg = (fmt == ImageFormat::JPEG);
+
+    const int w      = frame->width;
+    const int h      = frame->height;
+    const uint8_t* data = frame->data.data();
+
+    // Rotate 90° CW to convert the portrait-dimensioned GPU readback buffer
+    // into a landscape image. The GPU pipeline uses a 90° CW UV rotation so
+    // output is always landscape-right; the pixel data must be rotated the
+    // same way before encoding. Output dimensions are h × w (landscape).
+    const std::vector<uint8_t> rotated = rotateRgba90CW(data, w, h);
+    const int out_w = h;    // landscape width
+    const int out_h = w;    // landscape height
+    const uint8_t* enc_data = rotated.data();
+
+#ifndef __ANDROID__
+    LOGE("captureToFile: image encoding not supported in non-Android builds");
+    return false;
+#else
+    if (asJpeg) {
+        // Encode RGBA → JPEG using libjpeg-turbo (NEON-accelerated on arm64).
+        // GL_RGBA readback delivers RGBA byte order; TJPF_RGBA matches that.
+        // TJSAMP_420: 4:2:0 chroma subsampling — standard for photos.
+        tjhandle tjh = tjInitCompress();
+        if (!tjh) {
+            LOGE("captureToFile: tjInitCompress failed");
+            return false;
+        }
+        unsigned char* jpegBuf = nullptr;
+        unsigned long  jpegSize = 0;
+        const int ret = tjCompress2(tjh, enc_data, out_w, out_w * 4, out_h, TJPF_RGBA,
+                                    &jpegBuf, &jpegSize,
+                                    TJSAMP_420, jpegQuality, TJFLAG_FASTDCT);
+        if (ret != 0) {
+            LOGE("captureToFile: tjCompress2 failed: %s", tjGetErrorStr2(tjh));
+            tjDestroy(tjh);
+            return false;
+        }
+        tjDestroy(tjh);
+
+        FILE* f = fopen(outputPath.c_str(), "wb");
+        bool ok = f && fwrite(jpegBuf, jpegSize, 1, f) == 1;
+        if (f && fclose(f) != 0) {
+            LOGE("captureToFile: fclose failed for '%s': %s",
+                 outputPath.c_str(), strerror(errno));
+            ok = false;
+        }
+        tjFree(jpegBuf);
+        if (!ok) {
+            LOGE("captureToFile: failed to write JPEG to '%s'", outputPath.c_str());
+            return false;
+        }
+    } else {
+        // Encode RGBA → PNG (RGB, no alpha) using fpng (CRC32-hw-accelerated on arm64).
+        // GL_RGBA readback delivers RGBA; drop alpha, keep R G B order as-is.
+        // Alpha is always opaque from the GPU pipeline and carries no information.
+        const int nPixels = out_w * out_h;
+        std::vector<uint8_t> rgb(static_cast<size_t>(nPixels * 3));
+        for (int i = 0; i < nPixels; ++i) {
+            rgb[i*3 + 0] = enc_data[i*4 + 0]; // R
+            rgb[i*3 + 1] = enc_data[i*4 + 1]; // G
+            rgb[i*3 + 2] = enc_data[i*4 + 2]; // B
+            // alpha dropped
+        }
+        if (!fpng::fpng_encode_image_to_file(outputPath.c_str(), rgb.data(), out_w, out_h, 3)) {
+            LOGE("captureToFile: fpng_encode_image_to_file failed for '%s'",
+                 outputPath.c_str());
+            return false;
+        }
+    }
+
+    LOGD("captureToFile: wrote %dx%d %s → '%s'",
+         out_w, out_h, asJpeg ? "JPEG" : "PNG", outputPath.c_str());
+    return true;
+#endif  // __ANDROID__
+}
+
+// ---------------------------------------------------------------------------
+// captureToFd — encode and write to an open file descriptor
+// ---------------------------------------------------------------------------
+
+/// Writes all bytes in [buf, buf+size) to fd, retrying on short writes.
+/// @return true on success, false on I/O error.
+static bool writeFully(int fd, const void* buf, size_t size) {
+    const uint8_t* p = static_cast<const uint8_t*>(buf);
+    size_t rem = size;
+    while (rem > 0) {
+        ssize_t n = ::write(fd, p, rem);
+        if (n <= 0) return false;
+        p   += n;
+        rem -= static_cast<size_t>(n);
+    }
+    return true;
+}
+
+bool ImagePipeline::captureToFd(int fd, bool asJpeg, int jpegQuality,
+                                 int timeoutMs) {
+    // Reset any leftover captured frame from a previous (possibly timed-out) call.
+    {
+        std::lock_guard<std::mutex> lk(captureResultMu_);
+        capturedFrame_ = nullptr;
+    }
+
+    captureRequested_.store(true, std::memory_order_release);
+
+    SharedFrame frame;
+    {
+        std::unique_lock<std::mutex> lk(captureResultMu_);
+        const bool arrived = captureCV_.wait_for(
+            lk,
+            std::chrono::milliseconds(timeoutMs),
+            [this] { return capturedFrame_ != nullptr; });
+
+        if (!arrived) {
+            captureRequested_.store(false, std::memory_order_release);
+            LOGE("captureToFd: timed out waiting for frame after %d ms", timeoutMs);
+            return false;
+        }
+        frame = capturedFrame_;
+        capturedFrame_ = nullptr;
+    }
+
+    const int w      = frame->width;
+    const int h      = frame->height;
+    const uint8_t* data = frame->data.data();
+
+    // Rotate 90° CW — same reason as captureToFile.
+    const std::vector<uint8_t> rotated = rotateRgba90CW(data, w, h);
+    const int out_w = h;
+    const int out_h = w;
+    const uint8_t* enc_data = rotated.data();
+
+#ifndef __ANDROID__
+    LOGE("captureToFd: image encoding not supported in non-Android builds");
+    return false;
+#else
+    if (asJpeg) {
+        // Encode RGBA → JPEG using libjpeg-turbo, then stream to fd.
+        tjhandle tjh = tjInitCompress();
+        if (!tjh) {
+            LOGE("captureToFd: tjInitCompress failed");
+            return false;
+        }
+        unsigned char* jpegBuf = nullptr;
+        unsigned long  jpegSize = 0;
+        const int ret = tjCompress2(tjh, enc_data, out_w, out_w * 4, out_h, TJPF_RGBA,
+                                    &jpegBuf, &jpegSize,
+                                    TJSAMP_420, jpegQuality, TJFLAG_FASTDCT);
+        if (ret != 0) {
+            LOGE("captureToFd: tjCompress2 failed: %s", tjGetErrorStr2(tjh));
+            tjDestroy(tjh);
+            return false;
+        }
+        tjDestroy(tjh);
+
+        const bool ok = writeFully(fd, jpegBuf, jpegSize);
+        tjFree(jpegBuf);
+        if (!ok) {
+            LOGE("captureToFd: write failed (fd=%d)", fd);
+            return false;
+        }
+    } else {
+        // Encode RGBA → PNG (RGB, no alpha) using fpng, then stream to fd.
+        const int nPixels = out_w * out_h;
+        std::vector<uint8_t> rgb(static_cast<size_t>(nPixels * 3));
+        for (int i = 0; i < nPixels; ++i) {
+            rgb[i*3 + 0] = enc_data[i*4 + 0]; // R
+            rgb[i*3 + 1] = enc_data[i*4 + 1]; // G
+            rgb[i*3 + 2] = enc_data[i*4 + 2]; // B
+            // alpha dropped
+        }
+        std::vector<uint8_t> pngBuf;
+        if (!fpng::fpng_encode_image_to_memory(rgb.data(), out_w, out_h, 3, pngBuf)) {
+            LOGE("captureToFd: fpng_encode_image_to_memory failed (fd=%d)", fd);
+            return false;
+        }
+        if (!writeFully(fd, pngBuf.data(), pngBuf.size())) {
+            LOGE("captureToFd: write failed (fd=%d)", fd);
+            return false;
+        }
+    }
+
+    LOGD("captureToFd: wrote %dx%d %s to fd=%d", out_w, out_h, asJpeg ? "JPEG" : "PNG", fd);
+    return true;
+#endif  // __ANDROID__
 }
 
 } // namespace cam

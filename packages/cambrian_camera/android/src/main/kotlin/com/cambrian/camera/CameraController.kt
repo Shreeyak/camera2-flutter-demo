@@ -2,8 +2,11 @@
 package com.cambrian.camera
 
 import android.Manifest
+import android.content.ContentValues
 import android.content.Context
 import android.content.pm.PackageManager
+import android.os.Environment
+import android.provider.MediaStore
 import android.graphics.ImageFormat
 import android.hardware.camera2.CameraAccessException
 import android.hardware.camera2.CameraCaptureSession
@@ -44,7 +47,8 @@ import java.util.concurrent.atomic.AtomicBoolean
  * - Routes shader adjustment params via [GpuPipeline.setAdjustments].
  * - Implements an auto-recovery state machine with exponential backoff.
  * - Applies per-request ISP settings via [updateSettings].
- * - Provides [takePicture] to capture a single JPEG frame to the app's cache directory.
+ * - Provides [captureNaturalPicture] (hardware ISP JPEG, no post-processing) and
+ *   [captureImage] (GPU post-processed frame from the C++ pipeline, JPEG or PNG).
  *
  * @param context     Application or activity context (used for camera manager and cache dir).
  * @param surfaceProducer  Flutter texture backing the camera preview.
@@ -99,6 +103,8 @@ class CameraController(
         const val LOW_FPS_STREAK_LIMIT = 3
         /** Milliseconds AE may stay in SEARCHING before emitting [CamErrorCode.AE_CONVERGENCE_TIMEOUT]. */
         const val AE_CONVERGENCE_TIMEOUT_MS = 5000L
+        /** JPEG encode quality (0–100). 90 gives good perceptual quality with ~3× size reduction vs. lossless. */
+        const val JPEG_QUALITY = 90
     }
 
     // -------------------------------------------------------------------------
@@ -267,13 +273,13 @@ class CameraController(
     @Volatile private var lastAwbState: Int? = null
 
     /**
-     * Last sensor values reported by Camera2 capture results.
-     * Updated on every frame from the latest TotalCaptureResult.
-     * Used to seed manual mode when the user switches one field to manual —
-     * the partner is initialised to the last live AE value so exposure is continuous.
+     * Snapshot of the most recent [TotalCaptureResult] fields.
+     * Updated on every streaming frame in [onCaptureCompleted].
+     * Read by [captureImage] and [captureNaturalPicture] to write EXIF metadata.
+     * Also used to seed manual mode when switching a single AE field — the partner
+     * is initialised from the last live value so exposure is continuous.
      */
-    @Volatile private var lastKnownIso: Int? = null
-    @Volatile private var lastKnownExposureTimeNs: Long? = null
+    @Volatile private var lastCaptureSnapshot: CaptureResultSnapshot? = null
 
     // -------------------------------------------------------------------------
     // Frame stall watchdog
@@ -986,7 +992,7 @@ class CameraController(
         val finalIsoManual = merged.isoMode == "manual"
         val finalExpManual = merged.exposureMode == "manual"
         if (finalIsoManual && !finalExpManual) {
-            val knownExp = lastKnownExposureTimeNs
+            val knownExp = lastCaptureSnapshot?.exposureTimeNs
             if (knownExp == null) {
                 val msg = "Cannot switch to manual ISO: no prior AE exposure value available yet. " +
                     "Provide exposureTimeNs explicitly or wait for the first capture result."
@@ -999,7 +1005,7 @@ class CameraController(
             Log.d("CC/Settings", "Auto-filled exposureTimeNs=$knownExp from last AE result")
             merged = merged.copy(exposureMode = "manual", exposureTimeNs = knownExp)
         } else if (finalExpManual && !finalIsoManual) {
-            val knownIso = lastKnownIso
+            val knownIso = lastCaptureSnapshot?.iso
             if (knownIso == null) {
                 val msg = "Cannot switch to manual exposure: no prior AE ISO value available yet. " +
                     "Provide iso explicitly or wait for the first capture result."
@@ -1134,14 +1140,26 @@ class CameraController(
     }
 
     /**
-     * Captures a single JPEG frame and writes it to the app's cache directory.
+     * Captures a still JPEG image using Camera2's hardware ISP ImageReader.
+     *
+     * **Important:** This method bypasses the GPU post-processing pipeline. The resulting image
+     * reflects raw ISP output — no LUT, color transforms (saturation, contrast, brightness,
+     * black-level, gamma) or other adjustments applied by [GpuPipeline] are present.
+     * Use this when you need the highest-fidelity hardware-encoded JPEG.
+     *
+     * For a post-processed image that matches what the user sees on screen, use [captureImage].
      *
      * Captures via the pre-allocated JPEG [ImageReader], acquires the next image on a
      * background thread, and writes the bytes to `<cacheDir>/capture_<timestamp>.jpg`.
      *
+     * EXIF metadata (ISO, exposure time, focal length, aperture, flash, white balance mode,
+     * subject distance, pixel dimensions, orientation, and capture timestamp) is written
+     * using [android.media.ExifInterface] from the most recent streaming-frame snapshot.
+     * All metadata fields are best-effort and silently omitted if no snapshot is available.
+     *
      * @param callback Invoked with the absolute file path on success, or a [FlutterError].
      */
-    fun takePicture(callback: (Result<String>) -> Unit) {
+    fun captureNaturalPicture(callback: (Result<String>) -> Unit) {
         val session = captureSession
         val device = cameraDevice
         val jpegReader = jpegImageReader
@@ -1175,6 +1193,9 @@ class CameraController(
                     val timestamp = System.currentTimeMillis()
                     val file = File(context.cacheDir, "capture_$timestamp.jpg")
                     FileOutputStream(file).use { it.write(bytes) }
+                    try { writeExifMetadata(file, lastCaptureSnapshot) } catch (e: Exception) {
+                        Log.w("CC/Cam", "[$handle] captureNaturalPicture: failed to write EXIF — ${e.message}")
+                    }
                     mainHandler.post { callback(Result.success(file.absolutePath)) }
                 } catch (e: Exception) {
                     mainHandler.post { callback(Result.failure(FlutterError("capture_failed", e.message, null))) }
@@ -1203,6 +1224,377 @@ class CameraController(
             callback(Result.failure(FlutterError("capture_failed", e.message, null)))
         }
     }
+
+    /**
+     * Captures the next GPU post-processed full-resolution RGBA frame from the C++ pipeline,
+     * encodes it as JPEG or PNG, saves it to disk, and writes EXIF metadata.
+     *
+     * Format is inferred from the [fileName] extension:
+     * - `.jpg` / `.jpeg` → JPEG (quality 90)
+     * - `.png` or absent / unrecognised extension → PNG (lossless)
+     *
+     * The default output directory is the shared [MediaStore.Images] collection under
+     * `Pictures/CambrianCamera`, so images appear in the system gallery without
+     * requiring any additional storage permissions on API 33+.
+     *
+     * EXIF metadata is written using [android.media.ExifInterface] after encoding.
+     * Standard tags written: ISO, exposure time, focal length, aperture, subject distance,
+     * flash, white balance mode, exposure program, pixel dimensions, orientation, and
+     * capture timestamp.  All remaining [TotalCaptureResult] fields (3A states/modes,
+     * processing modes, sensor timing, WB gains, lens distortion) are written as a
+     * structured JSON blob in [android.media.ExifInterface.TAG_USER_COMMENT] under a
+     * `camera2` key.  All fields are best-effort: omitted if the hardware did not report them.
+     *
+     * @param outputDirectory Absolute path to the target directory, or null for the default.
+     * @param fileName        Filename including extension, or null for a timestamped default.
+     * @param callback        Invoked with the absolute file path on success, or a [FlutterError].
+     */
+    fun captureImage(
+        outputDirectory: String?,
+        fileName: String?,
+        callback: (Result<String>) -> Unit,
+    ) {
+        if (!isCaptureInFlight.compareAndSet(false, true)) {
+            callback(Result.failure(FlutterError("capture_in_progress", "A capture is already in progress", null)))
+            return
+        }
+
+        backgroundHandler.post {
+            try {
+                // Re-read nativePipelinePtr under pipelineLock to avoid a TOCTOU race with teardown():
+                // teardown() zeroes the pointer and frees the pipeline, so capturing the pointer
+                // before the post risks using a freed handle if teardown runs in the window.
+                val pipelinePtr = synchronized(pipelineLock) { nativePipelinePtr }
+                if (pipelinePtr == 0L) {
+                    mainHandler.post {
+                        callback(Result.failure(FlutterError("not_streaming", "Pipeline not initialized", null)))
+                    }
+                    return@post
+                }
+                // Resolve filename; default to PNG with a timestamp if omitted or extension-less.
+                val ts = System.currentTimeMillis()
+                val resolvedName = when {
+                    fileName.isNullOrBlank()   -> "capture_$ts.png"
+                    !fileName.contains('.')    -> "$fileName.png"
+                    else                       -> fileName
+                }
+                val lowerName = resolvedName.lowercase(java.util.Locale.ROOT)
+                val isJpeg = lowerName.endsWith(".jpg") || lowerName.endsWith(".jpeg")
+                val isPng  = lowerName.endsWith(".png")
+                if (!isJpeg && !isPng) {
+                    mainHandler.post {
+                        callback(Result.failure(FlutterError("invalid_format",
+                            "Unsupported file extension in '$resolvedName' — use .jpg, .jpeg, or .png",
+                            null)))
+                    }
+                    return@post
+                }
+                val mimeType = if (isJpeg) "image/jpeg" else "image/png"
+                val jpegQuality = JPEG_QUALITY
+                val writeExif = isJpeg || isPng
+
+                if (outputDirectory != null) {
+                    // Caller supplied an explicit directory: use the existing file-path flow.
+                    val dir = File(outputDirectory).also { it.mkdirs() }
+                    val file = File(dir, resolvedName)
+                    val errorMsg = nativeCaptureImage(pipelinePtr, file.absolutePath, jpegQuality)
+                    if (errorMsg.isNotEmpty()) {
+                        mainHandler.post {
+                            callback(Result.failure(FlutterError("capture_failed", errorMsg, null)))
+                        }
+                        return@post
+                    }
+                    if (writeExif) {
+                        try { writeExifMetadata(file, lastCaptureSnapshot) } catch (e: Exception) {
+                            Log.w("CC/Cam", "[$handle] captureImage: failed to write EXIF — ${e.message}")
+                        }
+                    }
+                    mainHandler.post { callback(Result.success(file.absolutePath)) }
+                    return@post
+                }
+
+                // Default path: insert via MediaStore so the image appears in the system gallery
+                // under Pictures/CambrianCamera.  minSdk is 33 so no version guarding is needed.
+                val cv = ContentValues().apply {
+                    put(MediaStore.Images.Media.DISPLAY_NAME, resolvedName)
+                    put(MediaStore.Images.Media.MIME_TYPE, mimeType)
+                    // RELATIVE_PATH places the file in the shared Pictures/CambrianCamera directory.
+                    put(MediaStore.Images.Media.RELATIVE_PATH,
+                        "${Environment.DIRECTORY_PICTURES}/CambrianCamera")
+                    // IS_PENDING=1 reserves the MediaStore slot while C++ writes bytes.
+                    // The flag is cleared after writing so the gallery can index the file.
+                    put(MediaStore.Images.Media.IS_PENDING, 1)
+                }
+                val collection = MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+                val uri = context.contentResolver.insert(collection, cv)
+                if (uri == null) {
+                    mainHandler.post {
+                        callback(Result.failure(FlutterError("capture_failed",
+                            "MediaStore insert failed — check that external storage is available", null)))
+                    }
+                    return@post
+                }
+
+                try {
+                    // Open a writable fd from the content URI and pass it to C++.
+                    context.contentResolver.openFileDescriptor(uri, "w")!!.use { pfd ->
+                        val errorMsg = nativeCaptureImageToFd(pipelinePtr, pfd.fd, isJpeg, jpegQuality)
+                        if (errorMsg.isNotEmpty()) {
+                            context.contentResolver.delete(uri, null, null)
+                            mainHandler.post {
+                                callback(Result.failure(FlutterError("capture_failed", errorMsg, null)))
+                            }
+                            return@post
+                        }
+                    }
+
+                    // Write EXIF via a separate rw fd; ExifInterface supports JPEG and PNG on API 31+.
+                    if (writeExif) {
+                        try {
+                            context.contentResolver.openFileDescriptor(uri, "rw")!!.use { pfd ->
+                                writeExifMetadata(android.media.ExifInterface(pfd.fileDescriptor),
+                                    lastCaptureSnapshot)
+                            }
+                        } catch (e: Exception) {
+                            Log.w("CC/Cam", "[$handle] captureImage: failed to write EXIF — ${e.message}")
+                        }
+                    }
+
+                    // Clear IS_PENDING so the gallery can index the new image.
+                    val done = ContentValues().apply { put(MediaStore.Images.Media.IS_PENDING, 0) }
+                    context.contentResolver.update(uri, done, null, null)
+
+                    // Resolve the absolute file path from the DATA column.
+                    // The DATA column is populated for files the app itself created on API 33.
+                    val filePath = context.contentResolver.query(
+                        uri, arrayOf(MediaStore.Images.Media.DATA), null, null, null
+                    )?.use { c ->
+                        if (c.moveToFirst()) c.getString(0) else null
+                    }
+                    if (filePath == null) {
+                        context.contentResolver.delete(uri, null, null)
+                        mainHandler.post {
+                            callback(Result.failure(FlutterError("capture_failed",
+                                "MediaStore did not return a file path for the saved image", null)))
+                        }
+                        return@post
+                    }
+
+                    mainHandler.post { callback(Result.success(filePath)) }
+                } catch (e: Exception) {
+                    context.contentResolver.delete(uri, null, null)
+                    mainHandler.post {
+                        callback(Result.failure(FlutterError("capture_failed",
+                            e.message ?: "unknown error", null)))
+                    }
+                }
+            } finally {
+                isCaptureInFlight.set(false)
+            }
+        }
+    }
+
+    /**
+     * Writes available [CaptureResultSnapshot] fields into [file] as EXIF tags.
+     * Silently skipped if [snapshot] is null (no frame delivered yet).
+     */
+    private fun writeExifMetadata(file: File, snapshot: CaptureResultSnapshot?) {
+        snapshot ?: return
+        // android.media.ExifInterface supports JPEG and PNG on API 31+; minSdk is 33.
+        writeExifMetadata(android.media.ExifInterface(file.absolutePath), snapshot)
+    }
+
+    /**
+     * Overload for the MediaStore path: accepts an already-opened [ExifInterface]
+     * (e.g. constructed from a [android.os.ParcelFileDescriptor]) and writes all available tags.
+     * Silently skipped if [snapshot] is null (no frame delivered yet).
+     */
+    private fun writeExifMetadata(exif: android.media.ExifInterface, snapshot: CaptureResultSnapshot?) {
+        snapshot ?: return
+
+        // Read pixel dimensions written by the encoder into the image bitstream headers
+        // (SOF0 for JPEG via libjpeg-turbo, IHDR for PNG via fpng).  These must be read
+        // before saveAttributes() rewrites the file.
+        val imgWidth  = exif.getAttributeInt(android.media.ExifInterface.TAG_IMAGE_WIDTH,  -1)
+        val imgHeight = exif.getAttributeInt(android.media.ExifInterface.TAG_IMAGE_LENGTH, -1)
+
+        // --- Standard EXIF tags ---
+        // All fields are best-effort: omitted if the hardware did not report a value.
+
+        snapshot.exposureTimeNs?.let { ns ->
+            exif.setAttribute(android.media.ExifInterface.TAG_EXPOSURE_TIME,
+                (ns / 1_000_000_000.0).toString())
+        }
+        snapshot.iso?.let { iso ->
+            exif.setAttribute(android.media.ExifInterface.TAG_ISO_SPEED_RATINGS, iso.toString())
+        }
+        snapshot.focalLengthMm?.let { fl ->
+            // Rational format "numerator/denominator" required by ExifInterface.
+            exif.setAttribute(android.media.ExifInterface.TAG_FOCAL_LENGTH,
+                "${(fl * 1000).toInt()}/1000")
+        }
+        snapshot.aperture?.let { ap ->
+            exif.setAttribute(android.media.ExifInterface.TAG_F_NUMBER, ap.toString())
+        }
+        snapshot.focusDistanceDiopters?.let { d ->
+            // EXIF SubjectDistance is in metres.  0 diopters = optical infinity → "0/1".
+            val distStr = if (d == 0f) "0/1" else "${(1_000_000f / d).toInt()}/1000000"
+            exif.setAttribute(android.media.ExifInterface.TAG_SUBJECT_DISTANCE, distStr)
+        }
+
+        // Flash: EXIF TAG_FLASH is a bit-field.
+        //   Bit 0    : flash fired (1 = fired)
+        //   Bits 3-4 : flash mode (0x08 = compulsory on, 0x10 = compulsory off)
+        //   Bit 5    : flash hardware present
+        val flashMode  = snapshot.flashMode
+        val flashState = snapshot.flashState
+        if (flashMode != null || flashState != null) {
+            var flashValue = 0
+            // Bit 0: FLASH_STATE_FIRED=3 or FLASH_STATE_PARTIAL=4 → fired
+            if (flashState == 3 || flashState == 4) flashValue = flashValue or 0x01
+            // Bits 3-4: mode
+            when (flashMode) {
+                0    -> flashValue = flashValue or 0x10  // FLASH_MODE_OFF → compulsory off
+                1, 2 -> flashValue = flashValue or 0x08  // SINGLE or TORCH → compulsory on
+            }
+            // Bit 5: flash present (state != null and != UNAVAILABLE=0)
+            if (flashState != null && flashState != 0) flashValue = flashValue or 0x20
+            exif.setAttribute(android.media.ExifInterface.TAG_FLASH, flashValue.toString())
+        }
+
+        // White balance: AWB_MODE_AUTO=1 → EXIF 0 (auto); any other mode → EXIF 1 (manual).
+        snapshot.awbMode?.let { mode ->
+            val exifWb = if (mode == CaptureResult.CONTROL_AWB_MODE_AUTO) 0 else 1
+            exif.setAttribute(android.media.ExifInterface.TAG_WHITE_BALANCE, exifWb.toString())
+        }
+
+        // Exposure program: AE_MODE_OFF=0 → EXIF 1 (manual); any ON* mode → EXIF 2 (normal auto).
+        snapshot.aeMode?.let { mode ->
+            val exifProg = if (mode == CaptureResult.CONTROL_AE_MODE_OFF) 1 else 2
+            exif.setAttribute(android.media.ExifInterface.TAG_EXPOSURE_PROGRAM, exifProg.toString())
+        }
+
+        // Pixel dimensions read from the encoder's image headers above.
+        if (imgWidth  > 0) exif.setAttribute(android.media.ExifInterface.TAG_PIXEL_X_DIMENSION, imgWidth.toString())
+        if (imgHeight > 0) exif.setAttribute(android.media.ExifInterface.TAG_PIXEL_Y_DIMENSION, imgHeight.toString())
+
+        // Orientation: combine display rotation with the camera sensor's fixed mounting angle
+        // and reverse for front-facing cameras per the Camera2 spec.
+        @Suppress("DEPRECATION")
+        val displayDeg = when (
+            (context.getSystemService(Context.WINDOW_SERVICE) as android.view.WindowManager)
+                .defaultDisplay.rotation
+        ) {
+            android.view.Surface.ROTATION_90  ->  90
+            android.view.Surface.ROTATION_180 -> 180
+            android.view.Surface.ROTATION_270 -> 270
+            else                              ->   0
+        }
+        val cameraId = resolvedCameraId
+        val adjustedDeg = if (cameraId != null) {
+            val characteristics = cameraManager.getCameraCharacteristics(cameraId)
+            // SENSOR_ORIENTATION: the clockwise angle the sensor image must be rotated to appear
+            // upright when the device is held in its natural orientation.
+            val sensorOrientation = characteristics.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
+            val isFront = characteristics.get(CameraCharacteristics.LENS_FACING) ==
+                CameraCharacteristics.LENS_FACING_FRONT
+            // Front cameras are mirrored — negate device rotation before combining.
+            if (isFront) (sensorOrientation - displayDeg + 360) % 360
+            else         (sensorOrientation + displayDeg) % 360
+        } else {
+            displayDeg
+        }
+        val orientationTag = when (adjustedDeg) {
+            90  -> android.media.ExifInterface.ORIENTATION_ROTATE_90
+            180 -> android.media.ExifInterface.ORIENTATION_ROTATE_180
+            270 -> android.media.ExifInterface.ORIENTATION_ROTATE_270
+            else -> android.media.ExifInterface.ORIENTATION_NORMAL
+        }
+        exif.setAttribute(android.media.ExifInterface.TAG_ORIENTATION, orientationTag.toString())
+
+        // Capture timestamp in EXIF datetime format.
+        val sdf = java.text.SimpleDateFormat("yyyy:MM:dd HH:mm:ss", java.util.Locale.US)
+        exif.setAttribute(android.media.ExifInterface.TAG_DATETIME_ORIGINAL,
+            sdf.format(java.util.Date()))
+
+        // --- camera2 JSON blob in UserComment ---
+        // Contains all non-standard Camera2 fields with no direct EXIF equivalent.
+        exif.setAttribute(android.media.ExifInterface.TAG_USER_COMMENT,
+            buildCamera2Json(snapshot))
+
+        exif.saveAttributes()
+    }
+
+    /**
+     * Builds a JSON string encoding all non-standard [CaptureResultSnapshot] fields under
+     * a `camera2` top-level key.  Fields are omitted when null (hardware did not report them).
+     * 3A states use human-readable string names via the existing [aeStateName]/[afStateName]/
+     * [awbStateName] helpers; all other integer fields are written as integers.
+     */
+    private fun buildCamera2Json(snapshot: CaptureResultSnapshot): String {
+        val parts = mutableListOf<String>()
+
+        // sensor
+        val sensorParts = mutableListOf<String>()
+        snapshot.sensorTimestampNs?.let { sensorParts.add("\"timestamp_ns\":$it") }
+        snapshot.frameDurationNs?.let   { sensorParts.add("\"frame_duration_ns\":$it") }
+        if (sensorParts.isNotEmpty()) parts.add("\"sensor\":{${sensorParts.joinToString(",")}}")
+
+        // ae / af / awb (states as strings, modes as integers)
+        val aeParts = mutableListOf<String>()
+        snapshot.aeMode?.let  { aeParts.add("\"mode\":$it") }
+        snapshot.aeState?.let { aeParts.add("\"state\":\"${aeStateName(it)}\"") }
+        if (aeParts.isNotEmpty()) parts.add("\"ae\":{${aeParts.joinToString(",")}}")
+
+        val afParts = mutableListOf<String>()
+        snapshot.afMode?.let  { afParts.add("\"mode\":$it") }
+        snapshot.afState?.let { afParts.add("\"state\":\"${afStateName(it)}\"") }
+        if (afParts.isNotEmpty()) parts.add("\"af\":{${afParts.joinToString(",")}}")
+
+        val awbParts = mutableListOf<String>()
+        snapshot.awbMode?.let  { awbParts.add("\"mode\":$it") }
+        snapshot.awbState?.let { awbParts.add("\"state\":\"${awbStateName(it)}\"") }
+        if (awbParts.isNotEmpty()) parts.add("\"awb\":{${awbParts.joinToString(",")}}")
+
+        // wb gains
+        val wbParts = mutableListOf<String>()
+        snapshot.wbGainR?.let { wbParts.add("\"r\":${"%.4f".format(it)}") }
+        snapshot.wbGainG?.let { wbParts.add("\"g\":${"%.4f".format(it)}") }
+        snapshot.wbGainB?.let { wbParts.add("\"b\":${"%.4f".format(it)}") }
+        if (wbParts.isNotEmpty()) parts.add("\"wb\":{${wbParts.joinToString(",")}}")
+
+        snapshot.sceneMode?.let     { parts.add("\"scene_mode\":$it") }
+        snapshot.captureIntent?.let { parts.add("\"capture_intent\":$it") }
+
+        // flash
+        val flashParts = mutableListOf<String>()
+        snapshot.flashMode?.let  { flashParts.add("\"mode\":$it") }
+        snapshot.flashState?.let { flashParts.add("\"state\":$it") }
+        if (flashParts.isNotEmpty()) parts.add("\"flash\":{${flashParts.joinToString(",")}}")
+
+        snapshot.colorCorrectionMode?.let { parts.add("\"color_correction_mode\":$it") }
+        snapshot.noiseReductionMode?.let  { parts.add("\"noise_reduction_mode\":$it") }
+        snapshot.edgeMode?.let            { parts.add("\"edge_mode\":$it") }
+        snapshot.hotPixelMode?.let        { parts.add("\"hot_pixel_mode\":$it") }
+        snapshot.lensOisMode?.let         { parts.add("\"ois_mode\":$it") }
+        snapshot.tonemapMode?.let         { parts.add("\"tonemap_mode\":$it") }
+        snapshot.focusDistanceDiopters?.let {
+            parts.add("\"focus_distance_diopters\":${"%.4f".format(it)}")
+        }
+        snapshot.lensDistortion?.let { dist ->
+            parts.add("\"lens_distortion\":[${dist.joinToString(",") { "%.6f".format(it) }}]")
+        }
+
+        return "{\"camera2\":{${parts.joinToString(",")}}}"
+    }
+
+    /** JNI: request the next full-res RGBA frame from the C++ pipeline, encode, and save. */
+    private external fun nativeCaptureImage(pipelinePtr: Long, outputPath: String, jpegQuality: Int): String
+
+    /** JNI: like nativeCaptureImage but writes encoded bytes to an open file descriptor.
+     *  Used by the MediaStore path: Kotlin opens the fd from the content URI and passes it here.
+     *  Caller retains ownership of [fd] and must close it after this returns. */
+    private external fun nativeCaptureImageToFd(pipelinePtr: Long, fd: Int, isJpeg: Boolean, jpegQuality: Int): String
 
     /**
      * Returns the opaque native pipeline pointer for direct JNI interop, or null if
@@ -1576,7 +1968,7 @@ class CameraController(
      * (so the GPU OES SurfaceTexture receives camera frames) and [CaptureRequest.CONTROL_MODE_AUTO]
      * applied. Encoder output is routed via [GpuPipeline.setEncoderSurface] rather than as a
      * Camera2 session target. The JPEG [jpegImageReader] is intentionally excluded — it is
-     * targeted only by the one-shot request in [takePicture].
+     * targeted only by the one-shot request in [captureNaturalPicture].
      */
     private fun createRepeatingRequestBuilder(
         device: CameraDevice,
@@ -1873,8 +2265,7 @@ class CameraController(
         consecutiveHalErrors = 0
         lowFpsStreak = 0
         aeSearchingStartMs = 0L
-        lastKnownIso = null
-        lastKnownExposureTimeNs = null
+        lastCaptureSnapshot = null
         lastAeState = null
         lastAfState = null
         lastAwbState = null
@@ -2081,10 +2472,39 @@ class CameraController(
                 // Update stall watchdog timestamp so it knows frames are still arriving.
                 lastCaptureResultMs = android.os.SystemClock.elapsedRealtime()
 
-                // Always track the latest sensor values so that switching to manual mode
-                // can seed the partner field with the last live AE value.
-                result.get(CaptureResult.SENSOR_SENSITIVITY)?.let { lastKnownIso = it }
-                result.get(CaptureResult.SENSOR_EXPOSURE_TIME)?.let { lastKnownExposureTimeNs = it }
+                // Build a snapshot of all available TotalCaptureResult fields.
+                // Used to seed manual mode and to write EXIF metadata on capture.
+                val gains = result.get(CaptureResult.COLOR_CORRECTION_GAINS)
+                lastCaptureSnapshot = CaptureResultSnapshot(
+                    iso                   = result.get(CaptureResult.SENSOR_SENSITIVITY),
+                    exposureTimeNs        = result.get(CaptureResult.SENSOR_EXPOSURE_TIME),
+                    frameDurationNs       = result.get(CaptureResult.SENSOR_FRAME_DURATION),
+                    sensorTimestampNs     = result.get(CaptureResult.SENSOR_TIMESTAMP),
+                    focalLengthMm         = result.get(CaptureResult.LENS_FOCAL_LENGTH),
+                    aperture              = result.get(CaptureResult.LENS_APERTURE),
+                    focusDistanceDiopters = result.get(CaptureResult.LENS_FOCUS_DISTANCE),
+                    lensOisMode           = result.get(CaptureResult.LENS_OPTICAL_STABILIZATION_MODE),
+                    lensDistortion        = result.get(CaptureResult.LENS_DISTORTION),
+                    wbGainR               = gains?.red,
+                    // Average the two green channels (greenEven and greenOdd from Bayer pattern)
+                    wbGainG               = gains?.let { (it.greenEven + it.greenOdd) / 2f },
+                    wbGainB               = gains?.blue,
+                    colorCorrectionMode   = result.get(CaptureResult.COLOR_CORRECTION_MODE),
+                    aeMode                = result.get(CaptureResult.CONTROL_AE_MODE),
+                    aeState               = result.get(CaptureResult.CONTROL_AE_STATE),
+                    afMode                = result.get(CaptureResult.CONTROL_AF_MODE),
+                    afState               = result.get(CaptureResult.CONTROL_AF_STATE),
+                    awbMode               = result.get(CaptureResult.CONTROL_AWB_MODE),
+                    awbState              = result.get(CaptureResult.CONTROL_AWB_STATE),
+                    sceneMode             = result.get(CaptureResult.CONTROL_SCENE_MODE),
+                    captureIntent         = result.get(CaptureResult.CONTROL_CAPTURE_INTENT),
+                    flashMode             = result.get(CaptureResult.FLASH_MODE),
+                    flashState            = result.get(CaptureResult.FLASH_STATE),
+                    noiseReductionMode    = result.get(CaptureResult.NOISE_REDUCTION_MODE),
+                    edgeMode              = result.get(CaptureResult.EDGE_MODE),
+                    hotPixelMode          = result.get(CaptureResult.HOT_PIXEL_MODE),
+                    tonemapMode           = result.get(CaptureResult.TONEMAP_MODE),
+                )
 
                 captureResultCount++
 

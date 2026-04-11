@@ -21,7 +21,7 @@ All paths are relative to `packages/cambrian_camera/android/src/main/`.
 
 - **Preview = consumer output.** The tone-mapped preview is pixel-identical to what `FULL_RES` sinks receive.
 - **1 memcpy per frame.** PBO → `std::vector` in `SharedFrame`. All downstream dispatch is `shared_ptr` copy only.
-- **No per-frame allocation.** Ring buffers are pre-allocated at sink registration time.
+- **No per-consumer copies.** Each `SharedFrame` buffer is allocated once on delivery and ref-counted through the pipeline; downstream dispatch is `shared_ptr` copy only.
 - **`null` = don't change.** `CameraSettings` fields that are `null` retain their previous Kotlin-side values.
 - **ISO ↔ exposure are coupled.** Setting either to `auto` propagates to the other via Camera2's single AE flag.
 - **LUT rebuilt atomically.** When `ProcessingParams` change, the 256-entry LUT is rebuilt and swapped; no partial updates visible to the frame loop.
@@ -40,7 +40,7 @@ All paths are relative to `packages/cambrian_camera/android/src/main/`.
 | Dart Public API | `CambrianCamera` class, all types, settings update strategies |
 | Platform Bridge | Pigeon interface + JNI metadata layout |
 | Kotlin Layer | Auto-recovery state machine + video recording subsystem |
-| C++ Pipeline Internals | GPU rendering, frame delivery, buffer ownership, processing stages, consumer fan-out, ring buffers, memory budget |
+| C++ Pipeline Internals | GPU rendering, frame delivery, buffer ownership, processing stages, consumer fan-out, memory budget |
 | C++ Native Consumer API | Public header, sink registration example |
 | Testing Strategy | Dart unit, C++ unit, Kotlin integration, on-device tests |
 
@@ -92,7 +92,7 @@ All paths are relative to `packages/cambrian_camera/android/src/main/`.
 | **Runtime resolution switching** | `setResolution()` performs a full teardown (device close + EGL destroy) followed by a fresh `openCamera()` + `startCaptureSession()` at the new size. A lighter `teardownSession()` approach fails on some devices because `eglInitialize()` cannot reinit a terminated display. State transitions: STREAMING → RECOVERING → STREAMING. Blocked while recording. |
 | **Per-request ISP settings** | All `CameraSettings` map to `CaptureRequest` keys — rebuilds repeating request only (no session reconfiguration). Session-level changes (format/size) trigger full stop/start. |
 | **SurfaceProducer for preview** | Flutter's `TextureRegistry.SurfaceProducer` provides the preview Surface. Camera2 writes directly into it as a `CaptureRequest` target — no C++ memcpy on preview path. On surface invalidation (hot restart), controller rebinds to new Surface; `SurfaceProducer.id` is stable. |
-| **Generic consumer model** | No hardcoded outputs. Applications register C++ sinks with the config they need (resolution, channels, ring size). Library handles downscaling, channel extraction, ring buffers per-sink. |
+| **Generic consumer model** | No hardcoded outputs. Applications register C++ sinks via `addSink(config, callback)`. Unlimited consumers per role; each gets a dedicated dispatch thread and 1-slot drop-on-busy mailbox. Resolution differences are handled at GPU PBO readback, not per-consumer. |
 | **Auto-recovery** | Camera errors handled internally with exponential backoff. Dart receives state transitions (including `recovering`) but doesn't implement recovery logic. |
 
 ---
@@ -187,7 +187,14 @@ class CambrianCamera {
   /// Fire-and-forget: mutex-protected struct copy in C++, next frame picks up new values.
   Future<void> setProcessingParams(ProcessingParams params);
 
-  Future<String> takePicture();
+  /// Hardware ISP JPEG capture. Does NOT include GPU post-processing
+  /// (LUT, saturation, contrast, brightness, gamma). Highest quality JPEG.
+  Future<String> captureNaturalPicture();
+
+  /// GPU post-processed frame capture. Reads the next RGBA frame from the
+  /// C++ pipeline (what the user sees on screen), encodes as JPEG or PNG
+  /// (inferred from fileName extension; default PNG), writes EXIF metadata.
+  Future<String> captureImage({String? outputDirectory, String? fileName});
 
   /// Returns display rotation in degrees CW from portrait (0/90/180/270).
   static Future<int> getDisplayRotation();
@@ -307,7 +314,7 @@ class FrameResult {
 
 Defined in `packages/cambrian_camera/pigeons/camera_api.dart`. Generated outputs: `messages.g.dart` (Dart), `Messages.g.kt` (Kotlin), `Messages.g.swift` (iOS stub).
 
-**HostApi** (Dart → Kotlin): `open`, `getCapabilities`, `updateSettings`, `setResolution`, `setProcessingParams`, `takePicture`, `getNativePipelineHandle`, `startRecording`, `stopRecording`, `close`, `pause`, `resume`, `getPersistedProcessingParams`, `getDisplayRotation`
+**HostApi** (Dart → Kotlin): `open`, `getCapabilities`, `updateSettings`, `setResolution`, `setProcessingParams`, `captureNaturalPicture`, `captureImage`, `getNativePipelineHandle`, `startRecording`, `stopRecording`, `close`, `pause`, `resume`, `getPersistedProcessingParams`, `getDisplayRotation`, `sampleCenterPatch`
 
 **FlutterApi** (Kotlin → Dart): `onStateChanged`, `onError`, `onFrameResult`, `onRecordingStateChanged`
 
@@ -784,29 +791,31 @@ Pure math primitives (`wbError`, `wbStep`, `bbError`, `bbStep`) live in `package
 
 ### Consumer fan-out
 
-After GPU rendering and PBO readback, the pipeline fans out to registered sinks. Each sink has its own dispatch thread and 1-slot mailbox. Per-sink transforms (downscale via `cv::resize`, channel extraction) are applied before posting.
+After GPU rendering and PBO readback, `ImagePipeline` fans out to all registered sinks for that role. There is no fixed limit on the number of consumers — each `addSink()` call appends to the appropriate `std::vector<unique_ptr<Consumer>>`. Every consumer gets:
+
+- Its own **dedicated dispatch thread** (started at `addSink` time, joined at `removeSink`).
+- A **1-slot mailbox** (`SharedFrame pending`). If the consumer is still processing the previous frame when a new one arrives, the new frame replaces it (latest-wins, no queuing, no back-pressure on the GL thread).
+- A **shared_ptr copy** of the `SharedFrame` — no additional pixel data copy. All consumers share the same heap buffer; the `shared_ptr` ref-count keeps it alive until the last consumer drops its reference.
+
+Resolution differences between roles (FULL_RES vs TRACKER) are handled at the **GPU PBO readback stage** inside `GpuRenderer`, not per-consumer on the CPU. There is no `cv::resize` or channel extraction in `ImagePipeline`.
 
 Preview rendering is separate — FBO blitted to Flutter `SurfaceProducer` surface via `eglSwapBuffers`, no CPU memcpy.
 
-### Ring buffer design
-
-`SlotRing<Slot>` — pre-allocated ring with `acquire()` / `release()` semantics. The `release` closure captures a `shared_ptr` to ring state, preventing use-after-free if pipeline is destroyed while a consumer holds a frame.
-
 ### Memory budget
 
-All ring buffers pre-allocated at registration. Memory per sink = `width × height × channels × ringSize`.
+Each registered consumer holds at most one `SharedFrame` at a time (its mailbox slot + the local ref held during the callback). The pixel buffer itself is allocated once per frame in `deliverFullResRgba` / `deliverTrackerRgba` / `deliverRawRgba` and freed when all consumers release their `shared_ptr`.
 
-Example (4K = 3840×2160):
+Approximate per-frame buffer sizes:
 
-| Sink | Resolution | Ch | Ring | Memory |
-|------|-----------|-----|------|--------|
-| Input ring (ImageReader) | 3840×2160 | 4 | 4 | 133 MB |
-| ANativeWindow (preview) | 3840×2160 | 4 | 2 | 66 MB |
-| "stitcher" consumer | 3840×2160 | 4 | 4 | 133 MB |
-| "tracker" consumer | 960×540 | 1 | 8 | 4 MB |
-| **Total (processed)** | | | | **~336 MB** |
+| Stream | Resolution | Format | Size |
+|--------|-----------|--------|------|
+| FULL_RES | sensor native (e.g. 3840×2160) | RGBA | ~32 MB |
+| TRACKER | ~853×480 | RGBA | ~1.6 MB |
+| RAW | configurable `rawStreamHeight` (e.g. 1280×720) | RGBA | ~3.7 MB |
 
-Raw stream adds: rawFBO (~8 MB at 1080p), rawPBOs[2] (~16 MB), rawEGLSurface (~8 MB).
+With N consumers on a role, the approximate lower bound is `(N + 1) × frame_size` (one in the mailbox per consumer, plus the one being dispatched). The actual worst case is closer to `(2N + 1) × frame_size` — a slow consumer can simultaneously hold a frame in its 1-slot mailbox **and** a second frame as a local reference inside its callback. Slow consumers hold their refs longer, increasing peak resident memory.
+
+Raw stream adds: `rawFBO` (~8 MB at 1080p), `rawPBOs[2]` (~16 MB), `rawEGLSurface` (~8 MB).
 
 ---
 

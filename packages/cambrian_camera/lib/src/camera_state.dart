@@ -228,17 +228,19 @@ class CameraTextureInfo {
 /// [displayRotationDeg] is the value returned by [CambrianCamera.getDisplayRotation]:
 /// degrees clockwise from portrait: 0, 90, 180, or 270.
 ///
-/// The GPU pipeline always outputs landscape-right frames (ROTATION_270 perspective).
-/// Display rotation is clockwise from portrait, so this function accounts for the
-/// difference to compute the correct number of 90° rotations:
+/// The GPU pipeline outputs landscape-right frames (ROTATION_270 perspective).
+/// See GpuPipeline.kt: the fixed 90° CW UV rotation in the shader normalises
+/// every frame to landscape-right orientation, independent of device rotation.
+/// This function accounts for that to compute the correct number of 90° CW
+/// rotations to apply to the preview texture:
 ///
-///   0°  (portrait)          → 3 turns (90° CCW)
-///   90° (landscape-left)    → 2 turns (180°)
-///   180° (reverse-portrait) → 1 turn  (90° CW)
+///   0°  (portrait)          → 1 turn  (90° CW)
+///   90° (landscape-left)    → 2 turns (180° — landscape-left from landscape-right)
+///   180° (reverse-portrait) → 3 turns (90° CCW)
 ///   270° (landscape-right)  → 0 turns (no rotation — matches GPU output)
 int quarterTurnsFromDisplayRotation(int displayRotationDeg) => switch (displayRotationDeg) {
-  90  => 2,   // landscape-left (device rotated 90° CCW)
-  180 => 1,   // reverse-portrait
-  270 => 0,   // landscape-right (device rotated 90° CW)
-  _   => 3,   // portrait
+  90  => 2,   // landscape-left — 180° from landscape-right GPU output
+  180 => 3,   // reverse-portrait
+  270 => 0,   // landscape-right — matches GPU output directly
+  _   => 1,   // portrait
 };

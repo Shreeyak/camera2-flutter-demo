@@ -348,18 +348,41 @@ class CambrianCameraPlugin : FlutterPlugin, ActivityAware, CameraHostApi {
     }
 
     /**
-     * Captures a still JPEG image and returns its file path.
+     * Captures a still JPEG image using Camera2's hardware ISP and returns its file path.
+     * Does NOT include GPU post-processing (color transforms, LUT, etc.).
      *
      * @param handle   The camera handle.
-     * @param callback Invoked with [Result.success] containing the file path.
+     * @param callback Invoked with [Result.success] containing the absolute file path.
      */
-    override fun takePicture(handle: Long, callback: (Result<String>) -> Unit) {
+    override fun captureNaturalPicture(handle: Long, callback: (Result<String>) -> Unit) {
         val controller = sessions[handle]?.controller
         if (controller == null) {
             callback(Result.failure(FlutterError("invalid_handle", "No session for handle $handle", null)))
             return
         }
-        controller.takePicture(callback)
+        controller.captureNaturalPicture(callback)
+    }
+
+    /**
+     * Captures the next GPU post-processed frame from the C++ pipeline and saves to disk.
+     *
+     * @param handle          The camera handle.
+     * @param outputDirectory Absolute path to the target directory, or null for the default.
+     * @param fileName        Filename including extension, or null for a timestamped default.
+     * @param callback        Invoked with [Result.success] containing the absolute file path.
+     */
+    override fun captureImage(
+        handle: Long,
+        outputDirectory: String?,
+        fileName: String?,
+        callback: (Result<String>) -> Unit,
+    ) {
+        val controller = sessions[handle]?.controller
+        if (controller == null) {
+            callback(Result.failure(FlutterError("invalid_handle", "No session for handle $handle", null)))
+            return
+        }
+        controller.captureImage(outputDirectory, fileName, callback)
     }
 
     /**

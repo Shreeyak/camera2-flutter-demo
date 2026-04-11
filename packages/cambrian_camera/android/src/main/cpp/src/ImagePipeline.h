@@ -79,6 +79,34 @@ public:
     void deliverRawRgba(const uint8_t* rgba, int w, int h, int stride,
                         uint64_t frameId, const FrameMetadata& meta);
 
+    /// Capture the next delivered full-res RGBA frame and encode it to disk.
+    ///
+    /// Sets an atomic flag so the next deliverFullResRgba call stores its frame,
+    /// then blocks until that frame arrives (up to timeoutMs) before encoding.
+    /// Format is inferred from outputPath extension (.jpg/.jpeg → JPEG, else PNG).
+    ///
+    /// @param outputPath  Absolute path including filename and extension.
+    /// @param jpegQuality JPEG encode quality [1-100]; ignored for PNG.
+    /// @param timeoutMs   Maximum wait for next frame in milliseconds.
+    /// @return true on success; false on timeout or encode failure.
+    bool captureToFile(const std::string& outputPath, int jpegQuality = 90,
+                       int timeoutMs = 500);
+
+    /// Like captureToFile but writes encoded bytes to an open file descriptor.
+    ///
+    /// Used by the Kotlin layer when saving via MediaStore (Android 10+ scoped
+    /// storage): Kotlin inserts the MediaStore entry, opens a writable fd from
+    /// the resulting content URI, and passes it here.  The caller retains
+    /// ownership of fd and must close it after this call returns.
+    ///
+    /// @param fd          Writable POSIX file descriptor.
+    /// @param asJpeg      true → JPEG encode; false → PNG encode.
+    /// @param jpegQuality JPEG encode quality [1-100]; ignored for PNG.
+    /// @param timeoutMs   Maximum wait for next frame in milliseconds.
+    /// @return true on success; false on timeout or encode failure.
+    bool captureToFd(int fd, bool asJpeg, int jpegQuality = 90,
+                     int timeoutMs = 500);
+
     // -- IImagePipeline ----------------------------------------------------------
     void setFrameHook(SinkRole role, FrameHookFn fn) override;
     void addSink(const SinkConfig& config, SinkCallback callback) override;
@@ -113,6 +141,15 @@ private:
     ProcessingStage fullResStage_;
     ProcessingStage trackerStage_;
     ProcessingStage rawStage_;
+
+    // -- On-request frame capture -------------------------------------------------
+    // captureRequested_ is set by captureToFile() and cleared by deliverFullResRgba()
+    // when it stores the captured frame. Zero steady-state overhead: when the flag is
+    // false, the fast-path early-return in deliverFullResRgba is unaffected.
+    std::atomic<bool>       captureRequested_{false};
+    std::mutex              captureResultMu_;
+    std::condition_variable captureCV_;
+    SharedFrame             capturedFrame_;  ///< populated by deliverFullResRgba when captureRequested_
 
     void publishToFullResConsumers(SharedFrame frame);
     void publishToTrackerConsumers(SharedFrame frame);

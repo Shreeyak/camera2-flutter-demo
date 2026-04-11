@@ -667,6 +667,72 @@ Java_com_cambrian_camera_GpuPipeline_nativeGpuClearRebindFlag(
 }
 
 // ---------------------------------------------------------------------------
+// nativeCaptureImage
+//
+// Requests the next full-res RGBA frame from the ImagePipeline, encodes it as
+// JPEG or PNG (inferred from the file extension in outputPath), and writes it
+// to disk.  Called from CameraController on the backgroundHandler thread —
+// blocks up to 500 ms waiting for the next camera frame.
+//
+// @param pipelinePtr  Handle returned by nativeInit (ImagePipeline pointer).
+// @param outputPath   Absolute file path; extension determines format:
+//                       .jpg / .jpeg → JPEG (jpegQuality applied)
+//                       anything else → PNG (lossless)
+// @param jpegQuality  JPEG encode quality [1-100]; ignored for PNG.
+// @return Empty jstring on success; non-empty human-readable error on failure.
+// ---------------------------------------------------------------------------
+JNIEXPORT jstring JNICALL
+Java_com_cambrian_camera_CameraController_nativeCaptureImage(
+        JNIEnv* env, jclass /*clazz*/,
+        jlong pipelinePtr, jstring outputPath, jint jpegQuality) {
+    if (!pipelinePtr) {
+        return env->NewStringUTF("nativeCaptureImage: null pipeline handle");
+    }
+    const char* pathChars = env->GetStringUTFChars(outputPath, nullptr);
+    if (!pathChars) {
+        return env->NewStringUTF("nativeCaptureImage: failed to decode output path");
+    }
+    std::string path(pathChars);
+    env->ReleaseStringUTFChars(outputPath, pathChars);
+
+    cam::ImagePipeline* pipeline = pipelineFromHandle(pipelinePtr);
+    const bool ok = pipeline->captureToFile(path, static_cast<int>(jpegQuality));
+    return ok ? env->NewStringUTF("")
+              : env->NewStringUTF("captureToFile failed — check logcat for details");
+}
+
+// ---------------------------------------------------------------------------
+// nativeCaptureImageToFd
+//
+// Like nativeCaptureImage but writes encoded bytes to an already-open writable
+// file descriptor.  Used by the Kotlin layer when saving via MediaStore: Kotlin
+// inserts a MediaStore entry, opens a ParcelFileDescriptor from the resulting
+// content URI, and passes its raw fd here.  Kotlin retains ownership and closes
+// the fd after this call returns.
+//
+// @param pipelinePtr  Handle returned by nativeInit (ImagePipeline pointer).
+// @param fd           Writable POSIX file descriptor.
+// @param isJpeg       JNI_TRUE → JPEG encode; JNI_FALSE → PNG encode.
+// @param jpegQuality  JPEG encode quality [1-100]; ignored for PNG.
+// @return Empty jstring on success; non-empty human-readable error on failure.
+// ---------------------------------------------------------------------------
+JNIEXPORT jstring JNICALL
+Java_com_cambrian_camera_CameraController_nativeCaptureImageToFd(
+        JNIEnv* env, jclass /*clazz*/,
+        jlong pipelinePtr, jint fd, jboolean isJpeg, jint jpegQuality) {
+    if (!pipelinePtr) {
+        return env->NewStringUTF("nativeCaptureImageToFd: null pipeline handle");
+    }
+    cam::ImagePipeline* pipeline = pipelineFromHandle(pipelinePtr);
+    const bool ok = pipeline->captureToFd(
+        static_cast<int>(fd),
+        static_cast<bool>(isJpeg),
+        static_cast<int>(jpegQuality));
+    return ok ? env->NewStringUTF("")
+              : env->NewStringUTF("captureToFd failed — check logcat for details");
+}
+
+// ---------------------------------------------------------------------------
 // nativeGpuSampleCenterPatch
 //
 // Samples the center 96×96 pixel patch of the most recent rendered FBO.
