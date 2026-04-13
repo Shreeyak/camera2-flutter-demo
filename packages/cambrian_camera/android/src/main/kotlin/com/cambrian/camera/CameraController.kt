@@ -221,6 +221,18 @@ class CameraController(
 
     @Volatile private var previewHeight: Int = 0
 
+    // Camera session (sensor) YUV stream dims. Equal to previewWidth/Height
+    // unless an active cropOutputSize has shrunk the post-GPU output.
+    // The JPEG jpegImageReader is allocated at these dims so
+    // captureNaturalPicture() always delivers the full-sensor JPEG.
+    @Volatile private var sensorStreamWidth: Int = 0
+    @Volatile private var sensorStreamHeight: Int = 0
+
+    // Pending crop request, validated at apply time. Null = no crop.
+    // Persisted across session rebuilds so a pre-open() update or a
+    // setResolution() call can reapply crop on the new session.
+    @Volatile private var pendingCropOutputSize: CamSize? = null
+
     /** Raw stream dimensions, set during [startCaptureSession] when [enableRawStream] is true. */
     @Volatile private var rawW: Int = 0
 
@@ -773,7 +785,9 @@ class CameraController(
                 mainHandler.post { callback(Result.failure(FlutterError("unsupported_resolution", e.message, null))) }
                 return@post
             }
-            previewWidth = streamWidth
+            sensorStreamWidth  = streamWidth
+            sensorStreamHeight = streamHeight
+            previewWidth  = streamWidth
             previewHeight = streamHeight
             surfaceProducer.setSize(streamWidth, streamHeight)
             val newRawW: Int
@@ -817,7 +831,8 @@ class CameraController(
 
             // Rebuild Camera2 session with the existing cameraSurface (still valid after resize)
             // and a fresh JPEG reader at the new dimensions.
-            val jpegReader = ImageReader.newInstance(streamWidth, streamHeight, android.graphics.ImageFormat.JPEG, 1)
+            // JPEG ImageReader at sensor dims; see spec §5.
+            val jpegReader = ImageReader.newInstance(sensorStreamWidth, sensorStreamHeight, android.graphics.ImageFormat.JPEG, 1)
             jpegImageReader = jpegReader
 
             val gpuSurface = pipeline.cameraSurface
@@ -926,6 +941,10 @@ class CameraController(
                     rawStreamTextureId = if (gpuPipeline?.isRunning == true) rawSurfaceProducer?.id() ?: 0L else 0L,
                     rawStreamWidth = if (gpuPipeline?.isRunning == true) rawW.toLong() else 0L,
                     rawStreamHeight = if (gpuPipeline?.isRunning == true) rawH.toLong() else 0L,
+                    // Report the post-GPU OUTPUT dims (= sensor dims unless
+                    // a crop is active). See spec §7 — "downstream blind to
+                    // crop" principle: Dart callers see one source of truth
+                    // for "what size am I actually receiving".
                     streamWidth = previewWidth.toLong(),
                     streamHeight = previewHeight.toLong(),
                 )
@@ -1777,7 +1796,12 @@ class CameraController(
         captureFailureCount = 0L
         bufferLostCount = 0L
 
-        previewWidth = streamWidth
+        sensorStreamWidth  = streamWidth
+        sensorStreamHeight = streamHeight
+        // previewWidth/Height track the POST-GPU output dims, which equal the
+        // sensor stream dims unless a crop is active. pendingCropOutputSize
+        // is applied further down (Task 6) and will overwrite these if valid.
+        previewWidth  = streamWidth
         previewHeight = streamHeight
         if (CambrianCameraConfig.debugDataFlow) {
             Log.i("CC/Cam", "Stream resolution: ${streamWidth}x${streamHeight} (4:3=${streamWidth * 3 == streamHeight * 4})")
@@ -1793,8 +1817,11 @@ class CameraController(
         }
         Log.i("CC/Cam", "streaming fmt=YUV_420_888 ${streamWidth}×${streamHeight}")
 
-        // JPEG ImageReader — pre-allocated for still capture (use streaming resolution).
-        val jpegReader = ImageReader.newInstance(streamWidth, streamHeight, ImageFormat.JPEG, 1)
+        // JPEG ImageReader — always sized at sensor stream dims so
+        // captureNaturalPicture() returns the full-sensor image regardless
+        // of any active cropOutputSize. See spec §5 (intentional FOV
+        // mismatch with captureImage).
+        val jpegReader = ImageReader.newInstance(sensorStreamWidth, sensorStreamHeight, ImageFormat.JPEG, 1)
         jpegImageReader = jpegReader
 
         // ImagePipeline is used only for sink dispatch in the GPU path.
