@@ -35,6 +35,12 @@ open class GpuPipeline(
     private val context: Context,
     private val pipelineHandle: Long   // ImagePipeline* handle from nativeInit
 ) {
+    // Camera SurfaceTexture source dims — equal to the configured camera
+    // session YUV stream size. Unchanged by setCropOutput(); only resize()
+    // modifies these (on setResolution).
+    private var sourceWidth: Int = width
+    private var sourceHeight: Int = height
+
     private val glThread = HandlerThread("GpuPipeline-GL").also { it.start() }
     private val glHandler = Handler(glThread.looper)
 
@@ -195,9 +201,75 @@ open class GpuPipeline(
         if (ok) {
             width = newW
             height = newH
+            sourceWidth = newW     // resize() swaps camera session — source = output
+            sourceHeight = newH
         }
         return ok
     }
+
+    /**
+     * Change the post-GPU output dims to [outW]×[outH] without touching the
+     * SurfaceTexture source dims. Used by the crop feature: the camera
+     * continues to deliver frames at the full sensor resolution, and the
+     * GPU fragment shader samples a centered sub-rectangle of that source
+     * into a smaller output FBO.
+     *
+     * Caller must pass the new raw-stream dims too: the native
+     * `releaseGl()` zeros them, so they must be re-supplied. If the raw
+     * stream is disabled, pass 0,0.
+     *
+     * Pass `outW == sourceWidth && outH == sourceHeight` to clear an active
+     * crop.
+     *
+     * Posts to the GL thread and blocks until complete. Must NOT be called
+     * while the pipeline is stopped.
+     *
+     * @return true if the native resize succeeded; false on invalid dims or
+     *         GL re-init failure.
+     */
+    fun setCropOutput(outW: Int, outH: Int, newRawW: Int, newRawH: Int): Boolean {
+        val handle = gpuHandle
+        if (handle == 0L) {
+            Log.e(TAG, "setCropOutput: no active gpuHandle")
+            return false
+        }
+        if (outW <= 0 || outH <= 0 || outW > sourceWidth || outH > sourceHeight) {
+            Log.e(TAG, "setCropOutput: invalid ${outW}x${outH} (source ${sourceWidth}x${sourceHeight})")
+            return false
+        }
+        var ok = false
+        val latch = CountDownLatch(1)
+        glHandler.post {
+            try {
+                ok = nativeGpuSetCropOutput(handle, outW, outH, newRawW, newRawH)
+                if (!ok) Log.e(TAG, "nativeGpuSetCropOutput failed for ${outW}x${outH}")
+            } finally {
+                latch.countDown()
+            }
+        }
+        if (!latch.await(RESIZE_TIMEOUT_SECONDS, java.util.concurrent.TimeUnit.SECONDS)) {
+            Log.e(TAG, "setCropOutput: timed out waiting for GL thread")
+            return false
+        }
+        if (ok) {
+            width = outW
+            height = outH
+            // sourceWidth / sourceHeight intentionally not touched.
+        }
+        return ok
+    }
+
+    /** Current post-GPU output width (may be smaller than source when cropping). */
+    val outputWidth: Int get() = width
+
+    /** Current post-GPU output height. */
+    val outputHeight: Int get() = height
+
+    /** Current SurfaceTexture source width (camera session YUV width). */
+    val sensorSourceWidth: Int get() = sourceWidth
+
+    /** Current SurfaceTexture source height. */
+    val sensorSourceHeight: Int get() = sourceHeight
 
     /**
      * Attach or detach the MediaCodec encoder surface.
@@ -417,6 +489,21 @@ open class GpuPipeline(
          */
         @JvmStatic
         external fun nativeGpuResize(gpuHandle: Long, newW: Int, newH: Int, newRawW: Int, newRawH: Int): Boolean
+
+        /**
+         * Shrink or restore the output-side GL resources (FBO, PBO, tracker, raw)
+         * to [outW]×[outH] while leaving the SurfaceTexture source dims untouched.
+         * Used by the crop feature. Raw dims are passed because the native
+         * releaseGl() zeros them before initGl() re-runs.
+         *
+         * Must be called from the GL thread.
+         *
+         * @return true on success; false on invalid dims or GL re-init failure.
+         */
+        @JvmStatic
+        external fun nativeGpuSetCropOutput(
+            gpuHandle: Long, outW: Int, outH: Int, newRawW: Int, newRawH: Int,
+        ): Boolean
 
         @JvmStatic
         external fun nativeGpuSetEncoderSurface(gpuHandle: Long, encoderSurface: Surface?)
