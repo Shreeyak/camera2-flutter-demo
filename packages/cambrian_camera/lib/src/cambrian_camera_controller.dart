@@ -72,7 +72,9 @@ class CambrianCamera {
        _errorController = StreamController<CameraError>.broadcast(),
        _frameResultController = StreamController<FrameResult>.broadcast(),
        _recordingStateController =
-           StreamController<RecordingState>.broadcast() {
+           StreamController<RecordingState>.broadcast(),
+       _capabilitiesController =
+           StreamController<CameraCapabilities>.broadcast() {
     // Register in the global instance map so FlutterApi callbacks can be
     // routed to the correct camera by handle.
     _instances[handle] = this;
@@ -129,6 +131,7 @@ class CambrianCamera {
   final StreamController<CameraError> _errorController;
   final StreamController<FrameResult> _frameResultController;
   final StreamController<RecordingState> _recordingStateController;
+  final StreamController<CameraCapabilities> _capabilitiesController;
   late final CameraSettingsSerializer _serializer;
 
   /// The most recent camera lifecycle state. Used as [StreamBuilder.initialData]
@@ -694,9 +697,6 @@ class CambrianCamera {
   /// stream size.
   Stream<CameraCapabilities> get capabilitiesStream =>
       _capabilitiesController.stream;
-
-  late final StreamController<CameraCapabilities> _capabilitiesController =
-      StreamController<CameraCapabilities>.broadcast();
 
   void _onCapabilitiesChanged(CamCapabilities caps) {
     final dartCaps = CameraCapabilities.fromPigeon(caps);
