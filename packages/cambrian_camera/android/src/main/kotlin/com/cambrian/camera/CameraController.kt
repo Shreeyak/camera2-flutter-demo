@@ -1041,6 +1041,16 @@ class CameraController(
             merged = merged.copy(isoMode = "manual", iso = knownIso.toLong())
         }
 
+        // Crop handling — split off from the AE-settings path because it
+        // affects GPU output dims, not the Camera2 CaptureRequest. Validated
+        // against the current sensorStreamWidth/Height; on failure we emit a
+        // SETTINGS_CONFLICT error and abort without mutating appliedSettings.
+        incoming.cropOutputSize?.let { reqCrop ->
+            if (!applyCropOutputSize(reqCrop)) {
+                return@updateSettings
+            }
+        }
+
         val prevSettings = appliedSettings
         appliedSettings = merged
         pendingSettings = merged
@@ -1064,6 +1074,137 @@ class CameraController(
             Log.w("CC/Cam", "updateSettings failed: ${e.message}")
         } catch (e: IllegalStateException) {
             Log.w("CC/Cam", "updateSettings: session already closed")
+        }
+    }
+
+    /**
+     * Validate and apply a caller-requested cropOutputSize.
+     *
+     * Returns true if the request was accepted (may still have been a no-op,
+     * e.g. crop equal to sensor dims); false if it was rejected with a
+     * SETTINGS_CONFLICT error posted to [flutterApi.onError].
+     *
+     * Must be called on the caller's thread (updateSettings runs on whatever
+     * thread Pigeon dispatches on). GPU work is posted to the GL handler
+     * inside [GpuPipeline.setCropOutput], which blocks until complete.
+     */
+    private fun applyCropOutputSize(reqCrop: CamSize): Boolean {
+        val w = reqCrop.width.toInt()
+        val h = reqCrop.height.toInt()
+        val sw = sensorStreamWidth
+        val sh = sensorStreamHeight
+
+        // If no session is active yet, just stash the pending request — it
+        // will be applied at the next startCaptureSession() (Task 7).
+        if (sw == 0 || sh == 0) {
+            pendingCropOutputSize = reqCrop
+            return true
+        }
+
+        // Validation per spec §8.
+        val err: String? = when {
+            w <= 0 || h <= 0 -> "crop dims must be positive"
+            (w and 1) != 0 || (h and 1) != 0 -> "crop dims must be even (GPU/PBO/encoder alignment)"
+            w > sw || h > sh -> "crop ${w}x${h} exceeds configured stream ${sw}x${sh}"
+            else -> null
+        }
+        if (err != null) {
+            Log.e("CC/Settings", "applyCropOutputSize: $err")
+            mainHandler.post {
+                flutterApi.onError(
+                    handle,
+                    CamError(CamErrorCode.SETTINGS_CONFLICT, "invalid_crop: $err", false),
+                ) {}
+            }
+            return false
+        }
+
+        // No-op case: crop equal to sensor dims. Clear any stored crop and
+        // fall through without touching the GPU or emitting a change.
+        if (w == sw && h == sh) {
+            pendingCropOutputSize = null
+            // If we were previously cropped, restore output dims to sensor dims.
+            if (previewWidth != sw || previewHeight != sh) {
+                applyOutputDims(sw, sh)
+            }
+            return true
+        }
+
+        // Actual crop change. Skip if nothing moved.
+        if (w == previewWidth && h == previewHeight) {
+            pendingCropOutputSize = reqCrop
+            return true
+        }
+
+        pendingCropOutputSize = reqCrop
+        applyOutputDims(w, h)
+        return true
+    }
+
+    /**
+     * Internal helper: apply new post-GPU output dims to the GPU layer, the
+     * Flutter preview surface, and Dart's CamCapabilities.
+     *
+     * Assumes the new dims are already validated and safe to pass to
+     * [GpuPipeline.setCropOutput]. No-op if the pipeline is not running —
+     * callers should have already stashed [pendingCropOutputSize].
+     */
+    private fun applyOutputDims(outW: Int, outH: Int) {
+        val pipeline = gpuPipeline ?: return
+        if (!pipeline.isRunning) return
+
+        // Compute raw dims from the new output aspect before the GPU call,
+        // because the native side needs them as explicit arguments (the
+        // releaseGl() inside setCropOutput zeros its cached raw dims).
+        val newRawW: Int
+        val newRawH: Int
+        if (enableRawStream && rawSurfaceProducer != null) {
+            // Scale raw width to match the new output aspect ratio, keeping
+            // rawStreamHeight fixed (the user-requested output height).
+            newRawW = (outW.toFloat() / outH * rawStreamHeight + 0.5f).toInt() and 1.inv()
+            newRawH = rawStreamHeight
+        } else {
+            newRawW = 0
+            newRawH = 0
+        }
+
+        val ok = pipeline.setCropOutput(outW, outH, newRawW, newRawH)
+        if (!ok) {
+            Log.e("CC/Cam", "applyOutputDims: GPU setCropOutput failed for ${outW}x${outH}")
+            mainHandler.post {
+                flutterApi.onError(
+                    handle,
+                    CamError(CamErrorCode.PIPELINE_ERROR, "crop_failed: GPU resize failed", false),
+                ) {}
+            }
+            return
+        }
+        previewWidth  = outW
+        previewHeight = outH
+        surfaceProducer.setSize(outW, outH)
+        if (enableRawStream && rawSurfaceProducer != null) {
+            rawW = newRawW
+            rawH = newRawH
+            rawSurfaceProducer.setSize(newRawW, newRawH)
+        }
+        emitCapabilitiesChanged()
+    }
+
+    /**
+     * Build a fresh [CamCapabilities] reflecting the current post-GPU output
+     * dims and push it to Dart. Called whenever the effective output size
+     * changes (cropOutputSize update, setResolution completion).
+     */
+    private fun emitCapabilitiesChanged() {
+        getCapabilities { result ->
+            result.onSuccess { caps ->
+                mainHandler.post {
+                    flutterApi.onCapabilitiesChanged(handle, caps) {}
+                }
+            }
+            result.onFailure { e ->
+                Log.w("CC/Cam", "emitCapabilitiesChanged: failed to build caps — ${e.message}")
+            }
         }
     }
 
