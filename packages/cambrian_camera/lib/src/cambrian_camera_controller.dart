@@ -646,6 +646,7 @@ class CambrianCamera {
       await _errorController.close();
       await _frameResultController.close();
       await _recordingStateController.close();
+      await _capabilitiesController.close();
     }
   }
 
@@ -686,6 +687,27 @@ class CambrianCamera {
       debugPrint('CC/Dart: recordingState=$state handle=$_handle');
     _recordingStateController.add(RecordingState.fromString(state));
   }
+
+  /// Emits the latest [CameraCapabilities] whenever the effective post-GPU
+  /// output dimensions change — e.g. after [updateSettings] sets a new
+  /// `cropOutputSize` or after `setResolution` resolves to a new camera
+  /// stream size.
+  Stream<CameraCapabilities> get capabilitiesStream =>
+      _capabilitiesController.stream;
+
+  late final StreamController<CameraCapabilities> _capabilitiesController =
+      StreamController<CameraCapabilities>.broadcast();
+
+  void _onCapabilitiesChanged(CamCapabilities caps) {
+    final dartCaps = CameraCapabilities.fromPigeon(caps);
+    _capabilities = dartCaps;
+    if (kDebugMode) {
+      debugPrint(
+        'CC/Dart: capabilitiesChanged stream=${dartCaps.streamWidth}x${dartCaps.streamHeight}',
+      );
+    }
+    _capabilitiesController.add(dartCaps);
+  }
 }
 
 /// Routes Kotlin→Dart callbacks to the correct [CambrianCamera] instance.
@@ -718,8 +740,6 @@ class _FlutterApiDispatcher extends CameraFlutterApi {
 
   @override
   void onCapabilitiesChanged(int handle, CamCapabilities capabilities) {
-    // Temporary no-op: incoming onCapabilitiesChanged calls are silently
-    // discarded until Task 9 wires the real handler (stores updated
-    // CamCapabilities + publishes on capabilitiesStream).
+    CambrianCamera._instances[handle]?._onCapabilitiesChanged(capabilities);
   }
 }
