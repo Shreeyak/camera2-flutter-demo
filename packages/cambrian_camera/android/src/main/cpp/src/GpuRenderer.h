@@ -61,6 +61,24 @@ public:
     /// @return true on success; false if GL re-init fails.
     bool resize(int newW, int newH, int newRawW, int newRawH);
 
+    /// Change the output FBO / PBO / preview dims to [outW]×[outH] without
+    /// changing the source SurfaceTexture buffer dims. The camera continues
+    /// to deliver frames at the full sensor size; the GPU fragment shader
+    /// samples a centered sub-rectangle of that source and writes it to a
+    /// smaller output FBO.
+    ///
+    /// Takes the new raw-stream dims too, because `releaseGl()` zeros the
+    /// cached raw dims before `initGl()` re-reads them — the caller must
+    /// pass the correct raw dims computed from the output aspect (same as
+    /// [resize]). Pass 0,0 if the raw stream is disabled.
+    ///
+    /// Pass `outW == sourceWidth_ && outH == sourceHeight_` to clear an
+    /// active crop.
+    ///
+    /// Must be called on the GL thread.
+    /// @return true on success; false if GL re-init fails.
+    bool setCropOutput(int outW, int outH, int newRawW, int newRawH);
+
     /// Per-frame render + readback.
     ///
     /// Sequence:
@@ -152,8 +170,10 @@ private:
     /// while keeping GPU readback bandwidth well under 1 MB/frame.
     static constexpr int kTrackerHeight = 480;
     int debugLevel_ = 0;  ///< 0=errors only, 1=lifecycle, 2=periodic/perf
-    int width_;
-    int height_;
+    int width_;            ///< Output FBO width (may be smaller than source when cropping)
+    int height_;           ///< Output FBO height
+    int sourceWidth_;      ///< Camera SurfaceTexture source width (full sensor stream)
+    int sourceHeight_;     ///< Camera SurfaceTexture source height
     int trackerWidth_;
     int trackerHeight_;
 
