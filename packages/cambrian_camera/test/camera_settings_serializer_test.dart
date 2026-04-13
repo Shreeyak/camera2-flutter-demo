@@ -170,6 +170,21 @@ void main() {
       expect(cam.wbMode, isNull);
       expect(cam.zoomRatio, 3.0);
     });
+
+    test('cropOutputSize round-trips through toCam', () {
+      final settings = CameraSettings(
+        cropOutputSize: const CameraSize(1600, 1200),
+      );
+      final cam = settings.toCam();
+      expect(cam.cropOutputSize, isNotNull);
+      expect(cam.cropOutputSize!.width, 1600);
+      expect(cam.cropOutputSize!.height, 1200);
+    });
+
+    test('cropOutputSize null by default', () {
+      final settings = CameraSettings();
+      expect(settings.toCam().cropOutputSize, isNull);
+    });
   });
 
   group('ProcessingParams', () {
