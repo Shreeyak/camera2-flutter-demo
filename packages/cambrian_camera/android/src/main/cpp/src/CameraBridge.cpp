@@ -264,6 +264,43 @@ Java_com_cambrian_camera_GpuPipeline_nativeGpuResize(
 }
 
 // ---------------------------------------------------------------------------
+// nativeGpuSetCropOutput
+//
+// Resizes only the output-side GL resources (FBO, PBO, tracker, raw FBO/PBO)
+// to [outW]×[outH] while leaving the SurfaceTexture source dims untouched.
+// The GL fragment shader then samples a centered sub-rectangle of the source
+// texture matching the output aspect / size.
+//
+// Raw dims are passed in because releaseGl() zeros them; the Kotlin layer
+// computes them from the output aspect and the configured rawStreamHeight.
+//
+// Must be called on the GL thread.
+//
+// @param gpuHandle    Handle returned by nativeGpuInit.
+// @param outW / outH  New output FBO dimensions.
+// @param newRawW / newRawH  New raw stream dims; 0 if raw is disabled.
+// @return JNI_TRUE on success; JNI_FALSE if GL re-init fails or outW/outH
+//         exceed the source dims.
+// ---------------------------------------------------------------------------
+JNIEXPORT jboolean JNICALL
+Java_com_cambrian_camera_GpuPipeline_nativeGpuSetCropOutput(
+        JNIEnv* /*env*/, jclass /*clazz*/,
+        jlong gpuHandle,
+        jint outW, jint outH,
+        jint newRawW, jint newRawH) {
+    if (!gpuHandle) {
+        LOGE("nativeGpuSetCropOutput: null renderer handle");
+        return JNI_FALSE;
+    }
+    cam::GpuRenderer* renderer = rendererFromHandle(gpuHandle);
+    const bool ok = renderer->setCropOutput(
+        static_cast<int>(outW), static_cast<int>(outH),
+        static_cast<int>(newRawW), static_cast<int>(newRawH));
+    if (!ok) LOGE("nativeGpuSetCropOutput: failed for %dx%d", (int)outW, (int)outH);
+    return ok ? JNI_TRUE : JNI_FALSE;
+}
+
+// ---------------------------------------------------------------------------
 // nativeGpuRebindRawSurface
 //
 // Replaces the raw preview EGL window surface with one created from newRawSurface.
