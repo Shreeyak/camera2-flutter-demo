@@ -2129,7 +2129,16 @@ class CameraController(
                             setState(State.STREAMING)
                             emitState("streaming")
                             // Apply any cropOutputSize that was requested before
-                            // the session became ready.
+                            // the session became ready. If the pending crop is
+                            // valid, applyPendingCropIfAny → applyOutputDims will
+                            // emit onCapabilitiesChanged with the cropped dims.
+                            //
+                            // Intentional asymmetry with setResolution: we do NOT
+                            // call emitCapabilitiesChanged() unconditionally here.
+                            // The initial capabilities are delivered via the
+                            // getCapabilities() return path at open() time, so
+                            // Dart already has a fresh snapshot. Unlike setResolution,
+                            // no prior capabilities cache needs refreshing.
                             applyPendingCropIfAny()
                             // Start the frame stall watchdog now that streaming is active.
                             lastCaptureResultMs = android.os.SystemClock.elapsedRealtime()
