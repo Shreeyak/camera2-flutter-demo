@@ -831,7 +831,10 @@ class CameraController(
 
             // Rebuild Camera2 session with the existing cameraSurface (still valid after resize)
             // and a fresh JPEG reader at the new dimensions.
-            // JPEG ImageReader at sensor dims; see spec §5.
+            // JPEG ImageReader — always sized at sensor stream dims so
+            // captureNaturalPicture() returns the full-sensor image regardless
+            // of any active cropOutputSize. See spec §5 (intentional FOV
+            // mismatch with captureImage).
             val jpegReader = ImageReader.newInstance(sensorStreamWidth, sensorStreamHeight, android.graphics.ImageFormat.JPEG, 1)
             jpegImageReader = jpegReader
 
