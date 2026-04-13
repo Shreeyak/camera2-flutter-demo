@@ -206,6 +206,7 @@ GpuRenderer::GpuRenderer(int width, int height, int debugLevel)
     if (height_ <= 0) {
         LOGE("GpuRenderer: invalid height %d — clamping to 1 to avoid division by zero", height_);
         height_ = 1;
+        sourceHeight_ = height_;  // keep source in sync with clamped value
     }
     // Compute tracker FBO size: fixed kTrackerHeight rows, width scaled to preserve aspect,
     // rounded to nearest even width to keep YUV chroma-plane alignment.
