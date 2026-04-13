@@ -112,8 +112,9 @@ class CamSettings {
   ///
   /// Null = "don't change the current crop" (matches the latest-value-wins
   /// semantics of the other CamSettings fields). To CLEAR an active crop,
-  /// send `cropOutputSize` equal to the current sensor stream dims — the
-  /// Kotlin side treats that as a no-op that restores output = source.
+  /// send `cropOutputSize` equal to the current sensor stream dims. The
+  /// Kotlin side detects that output == source and removes the crop,
+  /// restoring full-sensor output without a Camera2 session restart.
   /// The initial state before any crop has been set is "no crop".
   ///
   /// Constraints (enforced on the Kotlin side; caller receives

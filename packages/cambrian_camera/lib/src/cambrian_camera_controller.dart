@@ -718,6 +718,8 @@ class _FlutterApiDispatcher extends CameraFlutterApi {
 
   @override
   void onCapabilitiesChanged(int handle, CamCapabilities capabilities) {
-    // Temporary no-op; real handler added in Task 9.
+    // Temporary no-op: incoming onCapabilitiesChanged calls are silently
+    // discarded until Task 9 wires the real handler (stores updated
+    // CamCapabilities + publishes on capabilitiesStream).
   }
 }
