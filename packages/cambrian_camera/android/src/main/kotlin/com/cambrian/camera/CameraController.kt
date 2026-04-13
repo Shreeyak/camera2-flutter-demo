@@ -867,6 +867,17 @@ class CameraController(
                                 session.setRepeatingRequest(request, repeatingCaptureCallback, backgroundHandler)
                                 setState(State.STREAMING)
                                 emitState("streaming")
+                                // After the new session is running, reapply any
+                                // previously-stored cropOutputSize; clear it if
+                                // it no longer fits.
+                                applyPendingCropIfAny()
+                                // Always emit a fresh CamCapabilities so Dart's
+                                // cache reflects the new stream dims. If
+                                // applyPendingCropIfAny already emitted via
+                                // applyOutputDims, this second emit is an
+                                // idempotent duplicate (Dart's `_capabilities`
+                                // ends up at the same value).
+                                emitCapabilitiesChanged()
                                 lastCaptureResultMs = android.os.SystemClock.elapsedRealtime()
                                 backgroundHandler.postDelayed(stallWatchdog, stallCheckIntervalMs)
                                 mainHandler.post { callback(Result.success(Unit)) }
@@ -1221,6 +1232,51 @@ class CameraController(
                 Log.w("CC/Cam", "emitCapabilitiesChanged: failed to build caps — ${e.message}")
             }
         }
+    }
+
+    /**
+     * Reapply [pendingCropOutputSize] against the current sensor dims. Called
+     * at the end of [startCaptureSession] (after the GPU pipeline is up and
+     * `sensorStreamWidth/Height` are populated) and at the end of
+     * [setResolution] after the new session is running.
+     *
+     * Validates the stored request against the new sensor dims; if it still
+     * fits, invokes [applyOutputDims]. If the crop no longer fits (e.g. after
+     * a shrink via setResolution), clears the pending crop and emits a
+     * SETTINGS_CONFLICT error so Dart can either retry with smaller dims or
+     * drop its cached crop value.
+     */
+    private fun applyPendingCropIfAny() {
+        val pending = pendingCropOutputSize ?: return
+        val w = pending.width.toInt()
+        val h = pending.height.toInt()
+        val sw = sensorStreamWidth
+        val sh = sensorStreamHeight
+        if (sw == 0 || sh == 0) return  // no session yet — keep pending
+
+        if (w > sw || h > sh) {
+            Log.w("CC/Cam", "applyPendingCropIfAny: stored crop ${w}x${h} no longer fits stream ${sw}x${sh} — clearing")
+            pendingCropOutputSize = null
+            mainHandler.post {
+                flutterApi.onError(
+                    handle,
+                    CamError(
+                        CamErrorCode.SETTINGS_CONFLICT,
+                        "invalid_crop: stored crop ${w}x${h} exceeds new stream ${sw}x${sh}",
+                        false,
+                    ),
+                ) {}
+            }
+            return
+        }
+
+        // No-op when crop equals sensor dims.
+        if (w == sw && h == sh) {
+            pendingCropOutputSize = null
+            return
+        }
+
+        applyOutputDims(w, h)
     }
 
     /**
@@ -2072,6 +2128,9 @@ class CameraController(
                             session.setRepeatingRequest(request, repeatingCaptureCallback, backgroundHandler)
                             setState(State.STREAMING)
                             emitState("streaming")
+                            // Apply any cropOutputSize that was requested before
+                            // the session became ready.
+                            applyPendingCropIfAny()
                             // Start the frame stall watchdog now that streaming is active.
                             lastCaptureResultMs = android.os.SystemClock.elapsedRealtime()
                             backgroundHandler.postDelayed(stallWatchdog, stallCheckIntervalMs)

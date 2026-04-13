@@ -527,4 +527,78 @@ class CameraControllerGpuTest {
         verify(mockSurfaceProducer, never()).setSize(any(), any())
         verify(mockFlutterApi, never()).onCapabilitiesChanged(any(), any(), any())
     }
+
+    @Test
+    fun `pendingCropOutputSize set before session is applied at session start`() {
+        // Arrange: inject mock gpuPipeline; set pendingCropOutputSize via reflection
+        // to simulate a call that arrived before the session started.
+        gpuPipelineField.set(controller, mockGpuPipeline)
+        whenever(mockGpuPipeline.setCropOutput(1600, 1200, 0, 0)).thenReturn(true)
+        whenever(mockGpuPipeline.isRunning).thenReturn(true)
+
+        val pendingField = CameraController::class.java.getDeclaredField("pendingCropOutputSize")
+        pendingField.isAccessible = true
+        pendingField.set(controller, CamSize(1600L, 1200L))
+
+        val sensorWField = CameraController::class.java.getDeclaredField("sensorStreamWidth")
+        sensorWField.isAccessible = true
+        sensorWField.setInt(controller, 4000)
+        val sensorHField = CameraController::class.java.getDeclaredField("sensorStreamHeight")
+        sensorHField.isAccessible = true
+        sensorHField.setInt(controller, 3000)
+        val previewWField = CameraController::class.java.getDeclaredField("previewWidth")
+        previewWField.isAccessible = true
+        previewWField.setInt(controller, 4000)
+        val previewHField = CameraController::class.java.getDeclaredField("previewHeight")
+        previewHField.isAccessible = true
+        previewHField.setInt(controller, 3000)
+
+        // Stub getCapabilities dependency: resolvedCameraId + camera characteristics.
+        // applyOutputDims → emitCapabilitiesChanged → getCapabilities needs these.
+        setPrivateField("resolvedCameraId", "camera0")
+        val mockChars = makeMockCameraCharacteristics()
+        whenever(mockCameraManager.getCameraCharacteristics("camera0")).thenReturn(mockChars)
+
+        // Act: call the private applyPendingCropIfAny() helper via reflection
+        // (added in Step 3 below). This simulates what startCaptureSession
+        // does after it has populated sensorStreamWidth/Height and initialized
+        // the GPU pipeline.
+        val applyMethod = CameraController::class.java.getDeclaredMethod("applyPendingCropIfAny")
+        applyMethod.isAccessible = true
+        applyMethod.invoke(controller)
+
+        // Assert
+        verify(mockGpuPipeline).setCropOutput(1600, 1200, 0, 0)
+        verify(mockSurfaceProducer).setSize(1600, 1200)
+    }
+
+    @Test
+    fun `pendingCropOutputSize exceeding new sensor dims after setResolution is cleared with error`() {
+        gpuPipelineField.set(controller, mockGpuPipeline)
+
+        val pendingField = CameraController::class.java.getDeclaredField("pendingCropOutputSize")
+        pendingField.isAccessible = true
+        pendingField.set(controller, CamSize(2000L, 1500L)) // valid at 4000x3000
+
+        // Simulate setResolution result: new sensor dims = 1280x960, so the
+        // pending 2000x1500 crop no longer fits.
+        val sensorWField = CameraController::class.java.getDeclaredField("sensorStreamWidth")
+        sensorWField.isAccessible = true
+        sensorWField.setInt(controller, 1280)
+        val sensorHField = CameraController::class.java.getDeclaredField("sensorStreamHeight")
+        sensorHField.isAccessible = true
+        sensorHField.setInt(controller, 960)
+
+        val applyMethod = CameraController::class.java.getDeclaredMethod("applyPendingCropIfAny")
+        applyMethod.isAccessible = true
+        applyMethod.invoke(controller)
+
+        // Pending should be cleared; GPU must NOT have been called; an error emitted.
+        assertNull(pendingField.get(controller))
+        verify(mockGpuPipeline, never()).setCropOutput(any(), any(), any(), any())
+        argumentCaptor<CamError>().apply {
+            verify(mockFlutterApi).onError(eq(1L), capture(), any())
+            assertEquals(CamErrorCode.SETTINGS_CONFLICT, firstValue.code)
+        }
+    }
 }
