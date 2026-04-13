@@ -1045,6 +1045,21 @@ class CameraController(
         // affects GPU output dims, not the Camera2 CaptureRequest. Validated
         // against the current sensorStreamWidth/Height; on failure we emit a
         // SETTINGS_CONFLICT error and abort without mutating appliedSettings.
+        //
+        // Threading: applyCropOutputSize → applyOutputDims → GpuPipeline.setCropOutput
+        // posts to the GL handler and blocks on a CountDownLatch with a 5 s
+        // safety timeout. In practice the GL resize is a framebuffer
+        // reallocation measured in milliseconds, so blocking the Pigeon
+        // dispatch thread here is acceptable. If this ever shows up in
+        // traces as a jank/ANR source, move the GPU call onto
+        // backgroundHandler and make updateSettings async via an @async
+        // Pigeon method.
+        //
+        // Note: returning early on validation failure means any sibling
+        // fields in the same CamSettings batch (iso, exposure, etc.) are
+        // silently dropped. Callers that care about atomic sibling updates
+        // should send crop in a separate updateSettings call. This matches
+        // the existing early-return pattern for ISO/exposure conflicts.
         incoming.cropOutputSize?.let { reqCrop ->
             if (!applyCropOutputSize(reqCrop)) {
                 return@updateSettings
