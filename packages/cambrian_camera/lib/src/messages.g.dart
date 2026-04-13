@@ -96,6 +96,7 @@ class CamSettings {
     this.evCompensation,
     this.enableRawStream,
     this.rawStreamHeight,
+    this.cropOutputSize,
   });
 
   /// "auto" | "manual" | null (don't change).
@@ -148,6 +149,43 @@ class CamSettings {
   /// Requested height of the GPU raw stream in pixels. Null = don't change. 0 = use default.
   int? rawStreamHeight;
 
+  /// Center-crop the GPU output to this exact pixel size.
+  ///
+  /// When set, the GPU fragment shader samples from the centered
+  /// sub-rectangle of the configured stream, and the output FBO/PBO/preview
+  /// buffers are resized to these dims. All downstream consumers — preview
+  /// surface, raw stream, 480p C++ sink, `captureImage()`, video recording —
+  /// receive frames at the cropped dims. The camera session stays at full
+  /// sensor resolution (no Camera2 reconfigure, no `SCALER_CROP_REGION`).
+  ///
+  /// Null = "don't change the current crop" (matches the latest-value-wins
+  /// semantics of the other CamSettings fields). To CLEAR an active crop,
+  /// send `cropOutputSize` equal to the current sensor stream dims — the
+  /// Kotlin side treats that as a no-op that restores output = source.
+  /// The initial state before any crop has been set is "no crop".
+  ///
+  /// Constraints (enforced on the Kotlin side; caller receives
+  /// `FlutterError("invalid_crop", ...)` on violation):
+  ///   - `0 < width  <= streamWidth`
+  ///   - `0 < height <= streamHeight`
+  ///   - `width  % 2 == 0` (GPU/PBO/encoder alignment)
+  ///   - `height % 2 == 0`
+  ///
+  /// Aspect ratio is NOT constrained: cropping a 4160×3120 stream to
+  /// 1920×1080 is a valid request and produces a symmetric
+  /// letterbox-style center crop.
+  ///
+  /// **Interaction with `zoomRatio`:** zoom and crop compose
+  /// multiplicatively. The ISP delivers a zoomed full-resolution frame to
+  /// the GPU, which then center-crops it. Effective zoom from the caller's
+  /// perspective is approximately `zoomRatio × (streamWidth / cropWidth)`.
+  ///
+  /// **Interaction with `captureNaturalPicture()`:** that method
+  /// intentionally ignores `cropOutputSize` and always returns the
+  /// full-sensor hardware JPEG. Use `captureImage()` if you want the
+  /// cropped image.
+  CamSize? cropOutputSize;
+
   Object encode() {
     return <Object?>[
       isoMode,
@@ -166,6 +204,7 @@ class CamSettings {
       evCompensation,
       enableRawStream,
       rawStreamHeight,
+      cropOutputSize,
     ];
   }
 
@@ -188,6 +227,7 @@ class CamSettings {
       evCompensation: result[13] as int?,
       enableRawStream: result[14] as bool?,
       rawStreamHeight: result[15] as int?,
+      cropOutputSize: result[16] as CamSize?,
     );
   }
 }
@@ -725,7 +765,7 @@ class CameraHostApi {
 
   /// Captures the next GPU post-processed frame and saves it to disk.
   /// Format is inferred from [fileName] extension: .jpg/.jpeg → JPEG (quality 90),
-  /// .png or absent extension → PNG. [outputDirectory] null = app Pictures directory.
+  /// .png or absent extension → PNG. [outputDirectory] null = system gallery under Pictures/CambrianCamera (via MediaStore).
   /// Returns the absolute file path of the saved image.
   Future<String> captureImage(int handle, String? outputDirectory, String? fileName) async {
     final String pigeonVar_channelName = 'dev.flutter.pigeon.cambrian_camera.CameraHostApi.captureImage$pigeonVar_messageChannelSuffix';
@@ -954,10 +994,10 @@ class CameraHostApi {
     }
   }
 
-  /// Samples the center 16×16 pixel patch of the most recent GPU-processed
-  /// RGBA frame and returns the mean R, G, B as values in [0.0, 1.0].
+  /// Samples the center 96×96 pixel patch of the most recent GPU-processed
+  /// RGBA frame and returns the trimmed-mean R, G, B as values in [0.0, 1.0].
   ///
-  /// Returns (0.5, 0.5, 0.5) if no frame has been rendered yet.
+  /// Throws with error code "patch_not_ready" if no frame has been rendered yet.
   Future<CamRgbSample> sampleCenterPatch(int handle) async {
     final String pigeonVar_channelName = 'dev.flutter.pigeon.cambrian_camera.CameraHostApi.sampleCenterPatch$pigeonVar_messageChannelSuffix';
     final BasicMessageChannel<Object?> pigeonVar_channel = BasicMessageChannel<Object?>(
@@ -998,6 +1038,12 @@ abstract class CameraFlutterApi {
   /// Called when the recording state changes.
   /// [state] is one of: "recording", "idle", "error".
   void onRecordingStateChanged(int handle, String state);
+
+  /// Called when the effective post-GPU output dimensions change — e.g.
+  /// after `cropOutputSize` is set or cleared, or after `setResolution`
+  /// resolves to a new camera stream size. Dart consumers should replace
+  /// their cached [CamCapabilities] with the new value.
+  void onCapabilitiesChanged(int handle, CamCapabilities capabilities);
 
   static void setUp(CameraFlutterApi? api, {BinaryMessenger? binaryMessenger, String messageChannelSuffix = '',}) {
     messageChannelSuffix = messageChannelSuffix.isNotEmpty ? '.$messageChannelSuffix' : '';
@@ -1104,6 +1150,34 @@ abstract class CameraFlutterApi {
               'Argument for dev.flutter.pigeon.cambrian_camera.CameraFlutterApi.onRecordingStateChanged was null, expected non-null String.');
           try {
             api.onRecordingStateChanged(arg_handle!, arg_state!);
+            return wrapResponse(empty: true);
+          } on PlatformException catch (e) {
+            return wrapResponse(error: e);
+          }          catch (e) {
+            return wrapResponse(error: PlatformException(code: 'error', message: e.toString()));
+          }
+        });
+      }
+    }
+    {
+      final BasicMessageChannel<Object?> pigeonVar_channel = BasicMessageChannel<Object?>(
+          'dev.flutter.pigeon.cambrian_camera.CameraFlutterApi.onCapabilitiesChanged$messageChannelSuffix', pigeonChannelCodec,
+          binaryMessenger: binaryMessenger);
+      if (api == null) {
+        pigeonVar_channel.setMessageHandler(null);
+      } else {
+        pigeonVar_channel.setMessageHandler((Object? message) async {
+          assert(message != null,
+          'Argument for dev.flutter.pigeon.cambrian_camera.CameraFlutterApi.onCapabilitiesChanged was null.');
+          final List<Object?> args = (message as List<Object?>?)!;
+          final int? arg_handle = (args[0] as int?);
+          assert(arg_handle != null,
+              'Argument for dev.flutter.pigeon.cambrian_camera.CameraFlutterApi.onCapabilitiesChanged was null, expected non-null int.');
+          final CamCapabilities? arg_capabilities = (args[1] as CamCapabilities?);
+          assert(arg_capabilities != null,
+              'Argument for dev.flutter.pigeon.cambrian_camera.CameraFlutterApi.onCapabilitiesChanged was null, expected non-null CamCapabilities.');
+          try {
+            api.onCapabilitiesChanged(arg_handle!, arg_capabilities!);
             return wrapResponse(empty: true);
           } on PlatformException catch (e) {
             return wrapResponse(error: e);

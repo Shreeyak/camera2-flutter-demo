@@ -715,4 +715,9 @@ class _FlutterApiDispatcher extends CameraFlutterApi {
   void onRecordingStateChanged(int handle, String state) {
     CambrianCamera._instances[handle]?._onRecordingStateChanged(state);
   }
+
+  @override
+  void onCapabilitiesChanged(int handle, CamCapabilities capabilities) {
+    // Temporary no-op; real handler added in Task 9.
+  }
 }

@@ -155,6 +155,42 @@ struct CamSettings {
   var enableRawStream: Bool? = nil
   /// Requested height of the GPU raw stream in pixels. Null = don't change. 0 = use default.
   var rawStreamHeight: Int64? = nil
+  /// Center-crop the GPU output to this exact pixel size.
+  ///
+  /// When set, the GPU fragment shader samples from the centered
+  /// sub-rectangle of the configured stream, and the output FBO/PBO/preview
+  /// buffers are resized to these dims. All downstream consumers — preview
+  /// surface, raw stream, 480p C++ sink, `captureImage()`, video recording —
+  /// receive frames at the cropped dims. The camera session stays at full
+  /// sensor resolution (no Camera2 reconfigure, no `SCALER_CROP_REGION`).
+  ///
+  /// Null = "don't change the current crop" (matches the latest-value-wins
+  /// semantics of the other CamSettings fields). To CLEAR an active crop,
+  /// send `cropOutputSize` equal to the current sensor stream dims — the
+  /// Kotlin side treats that as a no-op that restores output = source.
+  /// The initial state before any crop has been set is "no crop".
+  ///
+  /// Constraints (enforced on the Kotlin side; caller receives
+  /// `FlutterError("invalid_crop", ...)` on violation):
+  ///   - `0 < width  <= streamWidth`
+  ///   - `0 < height <= streamHeight`
+  ///   - `width  % 2 == 0` (GPU/PBO/encoder alignment)
+  ///   - `height % 2 == 0`
+  ///
+  /// Aspect ratio is NOT constrained: cropping a 4160×3120 stream to
+  /// 1920×1080 is a valid request and produces a symmetric
+  /// letterbox-style center crop.
+  ///
+  /// **Interaction with `zoomRatio`:** zoom and crop compose
+  /// multiplicatively. The ISP delivers a zoomed full-resolution frame to
+  /// the GPU, which then center-crops it. Effective zoom from the caller's
+  /// perspective is approximately `zoomRatio × (streamWidth / cropWidth)`.
+  ///
+  /// **Interaction with `captureNaturalPicture()`:** that method
+  /// intentionally ignores `cropOutputSize` and always returns the
+  /// full-sensor hardware JPEG. Use `captureImage()` if you want the
+  /// cropped image.
+  var cropOutputSize: CamSize? = nil
 
 
   // swift-format-ignore: AlwaysUseLowerCamelCase
@@ -175,6 +211,7 @@ struct CamSettings {
     let evCompensation: Int64? = nilOrValue(pigeonVar_list[13])
     let enableRawStream: Bool? = nilOrValue(pigeonVar_list[14])
     let rawStreamHeight: Int64? = nilOrValue(pigeonVar_list[15])
+    let cropOutputSize: CamSize? = nilOrValue(pigeonVar_list[16])
 
     return CamSettings(
       isoMode: isoMode,
@@ -192,7 +229,8 @@ struct CamSettings {
       edgeMode: edgeMode,
       evCompensation: evCompensation,
       enableRawStream: enableRawStream,
-      rawStreamHeight: rawStreamHeight
+      rawStreamHeight: rawStreamHeight,
+      cropOutputSize: cropOutputSize
     )
   }
   func toList() -> [Any?] {
@@ -213,6 +251,7 @@ struct CamSettings {
       evCompensation,
       enableRawStream,
       rawStreamHeight,
+      cropOutputSize,
     ]
   }
 }
@@ -576,7 +615,7 @@ protocol CameraHostApi {
   func captureNaturalPicture(handle: Int64, completion: @escaping (Result<String, Error>) -> Void)
   /// Captures the next GPU post-processed frame and saves it to disk.
   /// Format is inferred from [fileName] extension: .jpg/.jpeg → JPEG (quality 90),
-  /// .png or absent extension → PNG. [outputDirectory] null = app Pictures directory.
+  /// .png or absent extension → PNG. [outputDirectory] null = system gallery under Pictures/CambrianCamera (via MediaStore).
   /// Returns the absolute file path of the saved image.
   func captureImage(handle: Int64, outputDirectory: String?, fileName: String?, completion: @escaping (Result<String, Error>) -> Void)
   func getNativePipelineHandle(handle: Int64, completion: @escaping (Result<Int64?, Error>) -> Void)
@@ -596,10 +635,10 @@ protocol CameraHostApi {
   /// for all four device orientations, since [MediaQuery.orientation] only
   /// distinguishes portrait from landscape.
   func getDisplayRotation() throws -> Int64
-  /// Samples the center 16×16 pixel patch of the most recent GPU-processed
-  /// RGBA frame and returns the mean R, G, B as values in [0.0, 1.0].
+  /// Samples the center 96×96 pixel patch of the most recent GPU-processed
+  /// RGBA frame and returns the trimmed-mean R, G, B as values in [0.0, 1.0].
   ///
-  /// Returns (0.5, 0.5, 0.5) if no frame has been rendered yet.
+  /// Throws with error code "patch_not_ready" if no frame has been rendered yet.
   func sampleCenterPatch(handle: Int64, completion: @escaping (Result<CamRgbSample, Error>) -> Void)
 }
 
@@ -717,7 +756,7 @@ class CameraHostApiSetup {
     }
     /// Captures the next GPU post-processed frame and saves it to disk.
     /// Format is inferred from [fileName] extension: .jpg/.jpeg → JPEG (quality 90),
-    /// .png or absent extension → PNG. [outputDirectory] null = app Pictures directory.
+    /// .png or absent extension → PNG. [outputDirectory] null = system gallery under Pictures/CambrianCamera (via MediaStore).
     /// Returns the absolute file path of the saved image.
     let captureImageChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.cambrian_camera.CameraHostApi.captureImage\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
     if let api = api {
@@ -881,10 +920,10 @@ class CameraHostApiSetup {
     } else {
       getDisplayRotationChannel.setMessageHandler(nil)
     }
-    /// Samples the center 16×16 pixel patch of the most recent GPU-processed
-    /// RGBA frame and returns the mean R, G, B as values in [0.0, 1.0].
+    /// Samples the center 96×96 pixel patch of the most recent GPU-processed
+    /// RGBA frame and returns the trimmed-mean R, G, B as values in [0.0, 1.0].
     ///
-    /// Returns (0.5, 0.5, 0.5) if no frame has been rendered yet.
+    /// Throws with error code "patch_not_ready" if no frame has been rendered yet.
     let sampleCenterPatchChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.cambrian_camera.CameraHostApi.sampleCenterPatch\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
     if let api = api {
       sampleCenterPatchChannel.setMessageHandler { message, reply in
@@ -912,6 +951,11 @@ protocol CameraFlutterApiProtocol {
   /// Called when the recording state changes.
   /// [state] is one of: "recording", "idle", "error".
   func onRecordingStateChanged(handle handleArg: Int64, state stateArg: String, completion: @escaping (Result<Void, PigeonError>) -> Void)
+  /// Called when the effective post-GPU output dimensions change — e.g.
+  /// after `cropOutputSize` is set or cleared, or after `setResolution`
+  /// resolves to a new camera stream size. Dart consumers should replace
+  /// their cached [CamCapabilities] with the new value.
+  func onCapabilitiesChanged(handle handleArg: Int64, capabilities capabilitiesArg: CamCapabilities, completion: @escaping (Result<Void, PigeonError>) -> Void)
 }
 class CameraFlutterApi: CameraFlutterApiProtocol {
   private let binaryMessenger: FlutterBinaryMessenger
@@ -983,6 +1027,28 @@ class CameraFlutterApi: CameraFlutterApiProtocol {
     let channelName: String = "dev.flutter.pigeon.cambrian_camera.CameraFlutterApi.onRecordingStateChanged\(messageChannelSuffix)"
     let channel = FlutterBasicMessageChannel(name: channelName, binaryMessenger: binaryMessenger, codec: codec)
     channel.sendMessage([handleArg, stateArg] as [Any?]) { response in
+      guard let listResponse = response as? [Any?] else {
+        completion(.failure(createConnectionError(withChannelName: channelName)))
+        return
+      }
+      if listResponse.count > 1 {
+        let code: String = listResponse[0] as! String
+        let message: String? = nilOrValue(listResponse[1])
+        let details: Any? = listResponse[2]
+        completion(.failure(PigeonError(code: code, message: message, details: details)))
+      } else {
+        completion(.success(Void()))
+      }
+    }
+  }
+  /// Called when the effective post-GPU output dimensions change — e.g.
+  /// after `cropOutputSize` is set or cleared, or after `setResolution`
+  /// resolves to a new camera stream size. Dart consumers should replace
+  /// their cached [CamCapabilities] with the new value.
+  func onCapabilitiesChanged(handle handleArg: Int64, capabilities capabilitiesArg: CamCapabilities, completion: @escaping (Result<Void, PigeonError>) -> Void) {
+    let channelName: String = "dev.flutter.pigeon.cambrian_camera.CameraFlutterApi.onCapabilitiesChanged\(messageChannelSuffix)"
+    let channel = FlutterBasicMessageChannel(name: channelName, binaryMessenger: binaryMessenger, codec: codec)
+    channel.sendMessage([handleArg, capabilitiesArg] as [Any?]) { response in
       guard let listResponse = response as? [Any?] else {
         completion(.failure(createConnectionError(withChannelName: channelName)))
         return
