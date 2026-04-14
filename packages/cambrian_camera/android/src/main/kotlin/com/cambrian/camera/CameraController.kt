@@ -431,6 +431,12 @@ class CameraController(
         val merged = if (settings != null) mergeSettings(persisted, settings) else persisted
         pendingSettings = merged
         appliedSettings = merged
+        // Propagate the initial crop request into the separate pendingCropOutputSize
+        // slot so applyPendingCropIfAny() picks it up at session start. Without this,
+        // cropOutputSize passed to open() is silently dropped.
+        // Note: mergeSettings() does not carry cropOutputSize (it is not a persistent ISP
+        // setting), so we read it directly from the incoming settings argument.
+        pendingCropOutputSize = settings?.cropOutputSize
         // Restore processing params from previous session if not yet set.
         if (lastProcessingParams == null && settingsStore.hasSavedProcessingParams()) {
             lastProcessingParams = settingsStore.loadProcessingParams()

@@ -12,6 +12,7 @@ import java.lang.reflect.Field
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -570,6 +571,35 @@ class CameraControllerGpuTest {
         // Assert
         verify(mockGpuPipeline).setCropOutput(1600, 1200, 0, 0)
         verify(mockSurfaceProducer).setSize(1600, 1200)
+    }
+
+    /**
+     * Verifies that [CameraController.open] propagates a [CamSettings.cropOutputSize] argument
+     * into the [pendingCropOutputSize] slot so that [applyPendingCropIfAny] picks it up at
+     * session start.
+     *
+     * The open() call short-circuits with "no_camera" (cameraIdList returns empty array),
+     * but the settings merge — and the fix's pendingCropOutputSize stash — happen BEFORE
+     * the camera-ID resolution gate, so the reflection assertion is valid.
+     */
+    @Test
+    fun `open with cropOutputSize copies it into pendingCropOutputSize`() {
+        // Stub cameraIdList to return an empty array so selectDefaultCameraId() returns null
+        // cleanly (rather than NPE on a null list). open() will then early-return with
+        // "no_camera" — but only AFTER the settings merge lines we are testing have run.
+        whenever(mockCameraManager.cameraIdList).thenReturn(emptyArray())
+
+        controller.open(
+            cameraId = null,
+            settings = CamSettings(cropOutputSize = CamSize(1600L, 1200L)),
+        ) { /* ignore result — we're testing pre-callback state */ }
+
+        val pendingField = CameraController::class.java.getDeclaredField("pendingCropOutputSize")
+        pendingField.isAccessible = true
+        val pending = pendingField.get(controller) as? CamSize
+        assertNotNull("pendingCropOutputSize should have been populated by open()", pending)
+        assertEquals(1600L, pending!!.width)
+        assertEquals(1200L, pending.height)
     }
 
     @Test
