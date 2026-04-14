@@ -292,7 +292,16 @@ data class CamCapabilities (
   /** Width of the GPU processed stream texture (pixels). Matches the largest 4:3 YUV size. */
   val streamWidth: Long,
   /** Height of the GPU processed stream texture (pixels). */
-  val streamHeight: Long
+  val streamHeight: Long,
+  /**
+   * Width of the camera session's YUV stream (the actual sensor output
+   * before any GPU crop). Unlike [streamWidth], this does NOT change when
+   * [CamSettings.cropOutputSize] is active — it always reports the
+   * Camera2 session's configured output size.
+   */
+  val sensorStreamWidth: Long,
+  /** Height of the camera session's YUV stream. See [sensorStreamWidth]. */
+  val sensorStreamHeight: Long
 )
  {
   companion object {
@@ -314,7 +323,9 @@ data class CamCapabilities (
       val rawStreamHeight = pigeonVar_list[14] as Long
       val streamWidth = pigeonVar_list[15] as Long
       val streamHeight = pigeonVar_list[16] as Long
-      return CamCapabilities(supportedSizes, isoMin, isoMax, exposureTimeMinNs, exposureTimeMaxNs, focusMin, focusMax, zoomMin, zoomMax, evCompMin, evCompMax, evCompensationStep, rawStreamTextureId, rawStreamWidth, rawStreamHeight, streamWidth, streamHeight)
+      val sensorStreamWidth = pigeonVar_list[17] as Long
+      val sensorStreamHeight = pigeonVar_list[18] as Long
+      return CamCapabilities(supportedSizes, isoMin, isoMax, exposureTimeMinNs, exposureTimeMaxNs, focusMin, focusMax, zoomMin, zoomMax, evCompMin, evCompMax, evCompensationStep, rawStreamTextureId, rawStreamWidth, rawStreamHeight, streamWidth, streamHeight, sensorStreamWidth, sensorStreamHeight)
     }
   }
   fun toList(): List<Any?> {
@@ -336,6 +347,8 @@ data class CamCapabilities (
       rawStreamHeight,
       streamWidth,
       streamHeight,
+      sensorStreamWidth,
+      sensorStreamHeight,
     )
   }
 }

@@ -248,8 +248,8 @@ class _CameraScreenState extends State<CameraScreen>
       );
       await camera.setProcessingParams(initialParams);
       final caps = camera.capabilities;
-      final sensorSize = caps.supportedSizes.isNotEmpty
-          ? caps.supportedSizes.first
+      final sensorSize = caps.sensorStreamWidth > 0 && caps.sensorStreamHeight > 0
+          ? CameraSize(caps.sensorStreamWidth, caps.sensorStreamHeight)
           : null;
       final ranges = CameraRanges(
         isoMin: caps.isoMin,
@@ -272,7 +272,7 @@ class _CameraScreenState extends State<CameraScreen>
         _values = CameraSettingsValues.fromSettings(_kInitialSettings, ranges);
         _processingParams = initialParams; // sidebar sliders reflect persisted or default values
         _availableResolutions = caps.supportedSizes;
-        _currentResolutionLabel = '${caps.streamWidth}x${caps.streamHeight}';
+        _currentResolutionLabel = '${caps.sensorStreamWidth}x${caps.sensorStreamHeight}';
         _sensorStreamSize = sensorSize;
       });
       _frameResultSub = camera.frameResultStream.listen(_onFrameResult);
@@ -621,7 +621,7 @@ class _CameraScreenState extends State<CameraScreen>
       if (!mounted) return;
       final caps = camera.capabilities;
       setState(() {
-        _currentResolutionLabel = '${caps.streamWidth}x${caps.streamHeight}';
+        _currentResolutionLabel = '${caps.sensorStreamWidth}x${caps.sensorStreamHeight}';
         _availableResolutions = caps.supportedSizes;
       });
     } catch (e) {

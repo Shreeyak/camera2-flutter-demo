@@ -242,7 +242,16 @@ open class GpuPipeline(
         glHandler.post {
             try {
                 ok = nativeGpuSetCropOutput(handle, outW, outH, newRawW, newRawH)
-                if (!ok) Log.e(TAG, "nativeGpuSetCropOutput failed for ${outW}x${outH}")
+                if (!ok) {
+                    Log.e(TAG, "nativeGpuSetCropOutput failed for ${outW}x${outH}")
+                } else {
+                    // Recreate the EGL window surface so its backing buffer geometry
+                    // matches the new dimensions. Without this, the old EGL surface
+                    // is still sized at the previous resolution; the blit only fills
+                    // its top-left corner and the rest of the frame shows the stale
+                    // previous image. Same pattern as resize() — see commit 16ffe92.
+                    nativeGpuRebindPreviewSurface(handle, previewSurface)
+                }
             } finally {
                 latch.countDown()
             }

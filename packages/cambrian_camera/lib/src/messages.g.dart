@@ -303,6 +303,8 @@ class CamCapabilities {
     required this.rawStreamHeight,
     required this.streamWidth,
     required this.streamHeight,
+    required this.sensorStreamWidth,
+    required this.sensorStreamHeight,
   });
 
   /// All supported YUV_420_888 stream resolutions, sorted descending by area.
@@ -346,6 +348,15 @@ class CamCapabilities {
   /// Height of the GPU processed stream texture (pixels).
   int streamHeight;
 
+  /// Width of the camera session's YUV stream (the actual sensor output
+  /// before any GPU crop). Unlike [streamWidth], this does NOT change when
+  /// [CamSettings.cropOutputSize] is active — it always reports the
+  /// Camera2 session's configured output size.
+  int sensorStreamWidth;
+
+  /// Height of the camera session's YUV stream. See [sensorStreamWidth].
+  int sensorStreamHeight;
+
   Object encode() {
     return <Object?>[
       supportedSizes,
@@ -365,6 +376,8 @@ class CamCapabilities {
       rawStreamHeight,
       streamWidth,
       streamHeight,
+      sensorStreamWidth,
+      sensorStreamHeight,
     ];
   }
 
@@ -388,6 +401,8 @@ class CamCapabilities {
       rawStreamHeight: result[14]! as int,
       streamWidth: result[15]! as int,
       streamHeight: result[16]! as int,
+      sensorStreamWidth: result[17]! as int,
+      sensorStreamHeight: result[18]! as int,
     );
   }
 }

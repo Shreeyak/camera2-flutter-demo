@@ -967,6 +967,11 @@ class CameraController(
                     // for "what size am I actually receiving".
                     streamWidth = previewWidth.toLong(),
                     streamHeight = previewHeight.toLong(),
+                    // Report the Camera2 session dims (unchanged by crop). Dart
+                    // uses these to label the resolution picker and to send the
+                    // correct "clear crop" size back via cropOutputSize.
+                    sensorStreamWidth = sensorStreamWidth.toLong(),
+                    sensorStreamHeight = sensorStreamHeight.toLong(),
                 )
             callback(Result.success(caps))
         } catch (e: CameraAccessException) {
@@ -1200,6 +1205,19 @@ class CameraController(
             newRawH = 0
         }
 
+        // Resize the Flutter SurfaceProducer BEFORE the GPU resize (mirrors
+        // the setResolution order: producer first, then pipeline). This ensures
+        // the buffer queue starts allocating correctly-sized buffers before
+        // initGl() recreates the EGL surface against the queue.
+        previewWidth  = outW
+        previewHeight = outH
+        surfaceProducer.setSize(outW, outH)
+        if (enableRawStream && rawSurfaceProducer != null) {
+            rawW = newRawW
+            rawH = newRawH
+            rawSurfaceProducer.setSize(newRawW, newRawH)
+        }
+
         val ok = pipeline.setCropOutput(outW, outH, newRawW, newRawH)
         if (!ok) {
             Log.e("CC/Cam", "applyOutputDims: GPU setCropOutput failed for ${outW}x${outH}")
@@ -1211,14 +1229,17 @@ class CameraController(
             }
             return
         }
-        previewWidth  = outW
-        previewHeight = outH
-        surfaceProducer.setSize(outW, outH)
+
+        // Fetch fresh Surface refs from the Flutter producers and rebind
+        // the EGL surfaces. surfaceProducer.setSize() (called above) can
+        // replace the underlying Surface object, and the GpuPipeline's
+        // internal rebind in setCropOutput() uses the stored ref which
+        // may be stale. Same pattern as setResolution() — see commit 16ffe92.
+        pipeline.rebindPreviewSurface(surfaceProducer.getSurface())
         if (enableRawStream && rawSurfaceProducer != null) {
-            rawW = newRawW
-            rawH = newRawH
-            rawSurfaceProducer.setSize(newRawW, newRawH)
+            pipeline.rebindRawSurface(rawSurfaceProducer.getSurface())
         }
+
         emitCapabilitiesChanged()
     }
 

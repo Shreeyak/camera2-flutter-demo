@@ -327,6 +327,13 @@ struct CamCapabilities {
   var streamWidth: Int64
   /// Height of the GPU processed stream texture (pixels).
   var streamHeight: Int64
+  /// Width of the camera session's YUV stream (the actual sensor output
+  /// before any GPU crop). Unlike [streamWidth], this does NOT change when
+  /// [CamSettings.cropOutputSize] is active — it always reports the
+  /// Camera2 session's configured output size.
+  var sensorStreamWidth: Int64
+  /// Height of the camera session's YUV stream. See [sensorStreamWidth].
+  var sensorStreamHeight: Int64
 
 
   // swift-format-ignore: AlwaysUseLowerCamelCase
@@ -348,6 +355,8 @@ struct CamCapabilities {
     let rawStreamHeight = pigeonVar_list[14] as! Int64
     let streamWidth = pigeonVar_list[15] as! Int64
     let streamHeight = pigeonVar_list[16] as! Int64
+    let sensorStreamWidth = pigeonVar_list[17] as! Int64
+    let sensorStreamHeight = pigeonVar_list[18] as! Int64
 
     return CamCapabilities(
       supportedSizes: supportedSizes,
@@ -366,7 +375,9 @@ struct CamCapabilities {
       rawStreamWidth: rawStreamWidth,
       rawStreamHeight: rawStreamHeight,
       streamWidth: streamWidth,
-      streamHeight: streamHeight
+      streamHeight: streamHeight,
+      sensorStreamWidth: sensorStreamWidth,
+      sensorStreamHeight: sensorStreamHeight
     )
   }
   func toList() -> [Any?] {
@@ -388,6 +399,8 @@ struct CamCapabilities {
       rawStreamHeight,
       streamWidth,
       streamHeight,
+      sensorStreamWidth,
+      sensorStreamHeight,
     ]
   }
 }
