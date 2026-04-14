@@ -1209,12 +1209,8 @@ class CameraController(
         // the setResolution order: producer first, then pipeline). This ensures
         // the buffer queue starts allocating correctly-sized buffers before
         // initGl() recreates the EGL surface against the queue.
-        previewWidth  = outW
-        previewHeight = outH
         surfaceProducer.setSize(outW, outH)
         if (enableRawStream && rawSurfaceProducer != null) {
-            rawW = newRawW
-            rawH = newRawH
             rawSurfaceProducer.setSize(newRawW, newRawH)
         }
 
@@ -1228,6 +1224,16 @@ class CameraController(
                 ) {}
             }
             return
+        }
+
+        // Update tracked dims only after GPU succeeds — if setCropOutput fails
+        // and we return above, the GPU is still at the old size, so keeping the
+        // old field values is the least-surprising state.
+        previewWidth  = outW
+        previewHeight = outH
+        if (enableRawStream && rawSurfaceProducer != null) {
+            rawW = newRawW
+            rawH = newRawH
         }
 
         // Fetch fresh Surface refs from the Flutter producers and rebind
