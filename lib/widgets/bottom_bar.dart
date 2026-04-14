@@ -22,6 +22,10 @@ class BottomBar extends StatelessWidget {
   final VoidCallback onToggleRecording;
   /// Callback invoked when the user taps the capture button.
   final VoidCallback onCapture;
+  /// Whether the GPU center crop (1600×1200) is currently active.
+  final bool isCropEnabled;
+  /// Callback invoked when the user taps the CROP toggle button.
+  final VoidCallback onToggleCrop;
 
   const BottomBar({
     super.key,
@@ -39,6 +43,8 @@ class BottomBar extends StatelessWidget {
     required this.isRecording,
     required this.onToggleRecording,
     required this.onCapture,
+    required this.isCropEnabled,
+    required this.onToggleCrop,
   });
 
   @override
@@ -68,6 +74,8 @@ class BottomBar extends StatelessWidget {
                     isRecording: isRecording,
                     onToggleRecording: onToggleRecording,
                     onCapture: onCapture,
+                    isCropEnabled: isCropEnabled,
+                    onToggleCrop: onToggleCrop,
                   ),
                 ),
               ),
@@ -108,6 +116,10 @@ class _MainActionBar extends StatelessWidget {
   final bool isRecording;
   final VoidCallback onToggleRecording;
   final VoidCallback onCapture;
+  /// Whether the GPU center crop (1600×1200) is currently active.
+  final bool isCropEnabled;
+  /// Callback invoked when the user taps the CROP toggle button.
+  final VoidCallback onToggleCrop;
 
   const _MainActionBar({
     required this.isSettingsEnabled,
@@ -119,6 +131,8 @@ class _MainActionBar extends StatelessWidget {
     required this.isRecording,
     required this.onToggleRecording,
     required this.onCapture,
+    required this.isCropEnabled,
+    required this.onToggleCrop,
   });
 
   @override
@@ -162,6 +176,14 @@ class _MainActionBar extends StatelessWidget {
                 isActive: isRecording,
                 isDisabled: false,
                 onTap: onToggleRecording,
+              ),
+              const SizedBox(width: 16),
+              BottomBarActionButton(
+                icon: Icons.crop,
+                label: isCropEnabled ? 'CROP 1600×1200' : 'CROP OFF',
+                isActive: isCropEnabled,
+                isDisabled: false,
+                onTap: onToggleCrop,
               ),
               const SizedBox(width: 16),
               BottomBarActionButton(
