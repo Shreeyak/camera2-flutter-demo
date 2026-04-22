@@ -52,6 +52,7 @@ const _kInitialSettings = CameraSettings(
   whiteBalance: WhiteBalance.auto(),
   enableRawStream: true,
   rawStreamHeight: 720,
+  cropOutputSize: CameraSize(1600, 1200),
 );
 
 void main() async {
@@ -109,6 +110,17 @@ class _CameraScreenState extends State<CameraScreen>
   /// True once the first frame result with real AE values has arrived.
   /// Guards manual ISO/exposure changes to prevent a settingsConflict on open.
   bool _aeSeeded = false;
+
+  // ── Crop state ──────────────────────────────────────────────────────────
+  /// Whether the GPU center crop is currently active. Starts true to match
+  /// [_kInitialSettings.cropOutputSize]. Toggled via the CROP bottom-bar button.
+  bool _cropEnabled = true;
+
+  /// The full-sensor stream size, captured from [CameraCapabilities.supportedSizes]
+  /// right after [open()], before any crop is applied. Used to "clear" the crop
+  /// by sending these dims back to the plugin (since `null` means "don't change").
+  /// Null until the camera opens successfully.
+  CameraSize? _sensorStreamSize;
 
   // ── White Balance state ─────────────────────────────────────────────────
   WhiteBalance _wbMode = const WhiteBalance.auto();
@@ -236,6 +248,9 @@ class _CameraScreenState extends State<CameraScreen>
       );
       await camera.setProcessingParams(initialParams);
       final caps = camera.capabilities;
+      final sensorSize = caps.sensorStreamWidth > 0 && caps.sensorStreamHeight > 0
+          ? CameraSize(caps.sensorStreamWidth, caps.sensorStreamHeight)
+          : null;
       final ranges = CameraRanges(
         isoMin: caps.isoMin,
         isoMax: caps.isoMax,
@@ -257,7 +272,8 @@ class _CameraScreenState extends State<CameraScreen>
         _values = CameraSettingsValues.fromSettings(_kInitialSettings, ranges);
         _processingParams = initialParams; // sidebar sliders reflect persisted or default values
         _availableResolutions = caps.supportedSizes;
-        _currentResolutionLabel = '${caps.streamWidth}x${caps.streamHeight}';
+        _currentResolutionLabel = '${caps.sensorStreamWidth}x${caps.sensorStreamHeight}';
+        _sensorStreamSize = sensorSize;
       });
       _frameResultSub = camera.frameResultStream.listen(_onFrameResult);
       _errorSub = camera.errorStream.listen(_onCameraError);
@@ -292,6 +308,25 @@ class _CameraScreenState extends State<CameraScreen>
   void _applyProcessingParams(ProcessingParams params) {
     setState(() => _processingParams = params);
     _camera?.setProcessingParams(params);
+  }
+
+  /// Toggles the GPU center crop between the default 1600×1200 and the full
+  /// sensor resolution. "Off" is implemented by sending [_sensorStreamSize]
+  /// as [CameraSettings.cropOutputSize] — the plugin treats
+  /// `cropOutputSize == sensorStreamSize` as "clear crop and restore full
+  /// sensor output".
+  void _toggleCrop() {
+    final sensorSize = _sensorStreamSize;
+    if (sensorSize == null) return; // camera not ready yet
+    final nextEnabled = !_cropEnabled;
+    setState(() => _cropEnabled = nextEnabled);
+    _applySettings(
+      CameraSettings(
+        cropOutputSize: nextEnabled
+            ? const CameraSize(1600, 1200)
+            : sensorSize,
+      ),
+    );
   }
 
   void _toggleAf() {
@@ -586,7 +621,7 @@ class _CameraScreenState extends State<CameraScreen>
       if (!mounted) return;
       final caps = camera.capabilities;
       setState(() {
-        _currentResolutionLabel = '${caps.streamWidth}x${caps.streamHeight}';
+        _currentResolutionLabel = '${caps.sensorStreamWidth}x${caps.sensorStreamHeight}';
         _availableResolutions = caps.supportedSizes;
       });
     } catch (e) {
@@ -944,6 +979,8 @@ class _CameraScreenState extends State<CameraScreen>
                       isRecording: _isRecording,
                       onToggleRecording: _toggleRecording,
                       onCapture: _captureImage,
+                      isCropEnabled: _cropEnabled,
+                      onToggleCrop: _toggleCrop,
                     ),
                   ),
                 ],

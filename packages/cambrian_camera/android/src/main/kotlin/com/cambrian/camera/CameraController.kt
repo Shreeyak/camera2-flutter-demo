@@ -221,6 +221,18 @@ class CameraController(
 
     @Volatile private var previewHeight: Int = 0
 
+    // Camera session (sensor) YUV stream dims. Equal to previewWidth/Height
+    // unless an active cropOutputSize has shrunk the post-GPU output.
+    // The JPEG jpegImageReader is allocated at these dims so
+    // captureNaturalPicture() always delivers the full-sensor JPEG.
+    @Volatile private var sensorStreamWidth: Int = 0
+    @Volatile private var sensorStreamHeight: Int = 0
+
+    // Pending crop request, validated at apply time. Null = no crop.
+    // Persisted across session rebuilds so a pre-open() update or a
+    // setResolution() call can reapply crop on the new session.
+    @Volatile private var pendingCropOutputSize: CamSize? = null
+
     /** Raw stream dimensions, set during [startCaptureSession] when [enableRawStream] is true. */
     @Volatile private var rawW: Int = 0
 
@@ -419,6 +431,12 @@ class CameraController(
         val merged = if (settings != null) mergeSettings(persisted, settings) else persisted
         pendingSettings = merged
         appliedSettings = merged
+        // Propagate the initial crop request into the separate pendingCropOutputSize
+        // slot so applyPendingCropIfAny() picks it up at session start. Without this,
+        // cropOutputSize passed to open() is silently dropped.
+        // Note: mergeSettings() does not carry cropOutputSize (it is not a persistent ISP
+        // setting), so we read it directly from the incoming settings argument.
+        pendingCropOutputSize = settings?.cropOutputSize
         // Restore processing params from previous session if not yet set.
         if (lastProcessingParams == null && settingsStore.hasSavedProcessingParams()) {
             lastProcessingParams = settingsStore.loadProcessingParams()
@@ -773,7 +791,9 @@ class CameraController(
                 mainHandler.post { callback(Result.failure(FlutterError("unsupported_resolution", e.message, null))) }
                 return@post
             }
-            previewWidth = streamWidth
+            sensorStreamWidth  = streamWidth
+            sensorStreamHeight = streamHeight
+            previewWidth  = streamWidth
             previewHeight = streamHeight
             surfaceProducer.setSize(streamWidth, streamHeight)
             val newRawW: Int
@@ -817,7 +837,11 @@ class CameraController(
 
             // Rebuild Camera2 session with the existing cameraSurface (still valid after resize)
             // and a fresh JPEG reader at the new dimensions.
-            val jpegReader = ImageReader.newInstance(streamWidth, streamHeight, android.graphics.ImageFormat.JPEG, 1)
+            // JPEG ImageReader — always sized at sensor stream dims so
+            // captureNaturalPicture() returns the full-sensor image regardless
+            // of any active cropOutputSize. See spec §5 (intentional FOV
+            // mismatch with captureImage).
+            val jpegReader = ImageReader.newInstance(sensorStreamWidth, sensorStreamHeight, android.graphics.ImageFormat.JPEG, 1)
             jpegImageReader = jpegReader
 
             val gpuSurface = pipeline.cameraSurface
@@ -849,6 +873,17 @@ class CameraController(
                                 session.setRepeatingRequest(request, repeatingCaptureCallback, backgroundHandler)
                                 setState(State.STREAMING)
                                 emitState("streaming")
+                                // After the new session is running, reapply any
+                                // previously-stored cropOutputSize; clear it if
+                                // it no longer fits.
+                                applyPendingCropIfAny()
+                                // Always emit a fresh CamCapabilities so Dart's
+                                // cache reflects the new stream dims. If
+                                // applyPendingCropIfAny already emitted via
+                                // applyOutputDims, this second emit is an
+                                // idempotent duplicate (Dart's `_capabilities`
+                                // ends up at the same value).
+                                emitCapabilitiesChanged()
                                 lastCaptureResultMs = android.os.SystemClock.elapsedRealtime()
                                 backgroundHandler.postDelayed(stallWatchdog, stallCheckIntervalMs)
                                 mainHandler.post { callback(Result.success(Unit)) }
@@ -926,8 +961,17 @@ class CameraController(
                     rawStreamTextureId = if (gpuPipeline?.isRunning == true) rawSurfaceProducer?.id() ?: 0L else 0L,
                     rawStreamWidth = if (gpuPipeline?.isRunning == true) rawW.toLong() else 0L,
                     rawStreamHeight = if (gpuPipeline?.isRunning == true) rawH.toLong() else 0L,
+                    // Report the post-GPU OUTPUT dims (= sensor dims unless
+                    // a crop is active). See spec §7 — "downstream blind to
+                    // crop" principle: Dart callers see one source of truth
+                    // for "what size am I actually receiving".
                     streamWidth = previewWidth.toLong(),
                     streamHeight = previewHeight.toLong(),
+                    // Report the Camera2 session dims (unchanged by crop). Dart
+                    // uses these to label the resolution picker and to send the
+                    // correct "clear crop" size back via cropOutputSize.
+                    sensorStreamWidth = sensorStreamWidth.toLong(),
+                    sensorStreamHeight = sensorStreamHeight.toLong(),
                 )
             callback(Result.success(caps))
         } catch (e: CameraAccessException) {
@@ -1019,6 +1063,31 @@ class CameraController(
             merged = merged.copy(isoMode = "manual", iso = knownIso.toLong())
         }
 
+        // Crop handling — split off from the AE-settings path because it
+        // affects GPU output dims, not the Camera2 CaptureRequest. Validated
+        // against the current sensorStreamWidth/Height; on failure we emit a
+        // SETTINGS_CONFLICT error and abort without mutating appliedSettings.
+        //
+        // Threading: applyCropOutputSize → applyOutputDims → GpuPipeline.setCropOutput
+        // posts to the GL handler and blocks on a CountDownLatch with a 5 s
+        // safety timeout. In practice the GL resize is a framebuffer
+        // reallocation measured in milliseconds, so blocking the Pigeon
+        // dispatch thread here is acceptable. If this ever shows up in
+        // traces as a jank/ANR source, move the GPU call onto
+        // backgroundHandler and make updateSettings async via an @async
+        // Pigeon method.
+        //
+        // Note: returning early on validation failure means any sibling
+        // fields in the same CamSettings batch (iso, exposure, etc.) are
+        // silently dropped. Callers that care about atomic sibling updates
+        // should send crop in a separate updateSettings call. This matches
+        // the existing early-return pattern for ISO/exposure conflicts.
+        incoming.cropOutputSize?.let { reqCrop ->
+            if (!applyCropOutputSize(reqCrop)) {
+                return@updateSettings
+            }
+        }
+
         val prevSettings = appliedSettings
         appliedSettings = merged
         pendingSettings = merged
@@ -1043,6 +1112,204 @@ class CameraController(
         } catch (e: IllegalStateException) {
             Log.w("CC/Cam", "updateSettings: session already closed")
         }
+    }
+
+    /**
+     * Validate and apply a caller-requested cropOutputSize.
+     *
+     * Returns true if the request was accepted (may still have been a no-op,
+     * e.g. crop equal to sensor dims); false if it was rejected with a
+     * SETTINGS_CONFLICT error posted to [flutterApi.onError].
+     *
+     * Must be called on the caller's thread (updateSettings runs on whatever
+     * thread Pigeon dispatches on). GPU work is posted to the GL handler
+     * inside [GpuPipeline.setCropOutput], which blocks until complete.
+     */
+    private fun applyCropOutputSize(reqCrop: CamSize): Boolean {
+        val w = reqCrop.width.toInt()
+        val h = reqCrop.height.toInt()
+        val sw = sensorStreamWidth
+        val sh = sensorStreamHeight
+
+        // If no session is active yet, just stash the pending request — it
+        // will be applied at the next startCaptureSession() (Task 7).
+        if (sw == 0 || sh == 0) {
+            pendingCropOutputSize = reqCrop
+            return true
+        }
+
+        // Validation per spec §8.
+        val err: String? = when {
+            w <= 0 || h <= 0 -> "crop dims must be positive"
+            (w and 1) != 0 || (h and 1) != 0 -> "crop dims must be even (GPU/PBO/encoder alignment)"
+            w > sw || h > sh -> "crop ${w}x${h} exceeds configured stream ${sw}x${sh}"
+            else -> null
+        }
+        if (err != null) {
+            Log.e("CC/Settings", "applyCropOutputSize: $err")
+            mainHandler.post {
+                flutterApi.onError(
+                    handle,
+                    CamError(CamErrorCode.SETTINGS_CONFLICT, "invalid_crop: $err", false),
+                ) {}
+            }
+            return false
+        }
+
+        // No-op case: crop equal to sensor dims. Clear any stored crop and
+        // fall through without touching the GPU or emitting a change.
+        if (w == sw && h == sh) {
+            pendingCropOutputSize = null
+            // If we were previously cropped, restore output dims to sensor dims.
+            if (previewWidth != sw || previewHeight != sh) {
+                applyOutputDims(sw, sh)
+            }
+            return true
+        }
+
+        // Actual crop change. Skip if nothing moved.
+        if (w == previewWidth && h == previewHeight) {
+            pendingCropOutputSize = reqCrop
+            return true
+        }
+
+        pendingCropOutputSize = reqCrop
+        applyOutputDims(w, h)
+        return true
+    }
+
+    /**
+     * Internal helper: apply new post-GPU output dims to the GPU layer, the
+     * Flutter preview surface, and Dart's CamCapabilities.
+     *
+     * Assumes the new dims are already validated and safe to pass to
+     * [GpuPipeline.setCropOutput]. No-op if the pipeline is not running —
+     * callers should have already stashed [pendingCropOutputSize].
+     */
+    private fun applyOutputDims(outW: Int, outH: Int) {
+        val pipeline = gpuPipeline ?: return
+        if (!pipeline.isRunning) return
+
+        // Compute raw dims from the new output aspect before the GPU call,
+        // because the native side needs them as explicit arguments (the
+        // releaseGl() inside setCropOutput zeros its cached raw dims).
+        val newRawW: Int
+        val newRawH: Int
+        if (enableRawStream && rawSurfaceProducer != null) {
+            // Scale raw width to match the new output aspect ratio, keeping
+            // rawStreamHeight fixed (the user-requested output height).
+            newRawW = (outW.toFloat() / outH * rawStreamHeight + 0.5f).toInt() and 1.inv()
+            newRawH = rawStreamHeight
+        } else {
+            newRawW = 0
+            newRawH = 0
+        }
+
+        // Resize the Flutter SurfaceProducer BEFORE the GPU resize (mirrors
+        // the setResolution order: producer first, then pipeline). This ensures
+        // the buffer queue starts allocating correctly-sized buffers before
+        // initGl() recreates the EGL surface against the queue.
+        surfaceProducer.setSize(outW, outH)
+        if (enableRawStream && rawSurfaceProducer != null) {
+            rawSurfaceProducer.setSize(newRawW, newRawH)
+        }
+
+        val ok = pipeline.setCropOutput(outW, outH, newRawW, newRawH)
+        if (!ok) {
+            Log.e("CC/Cam", "applyOutputDims: GPU setCropOutput failed for ${outW}x${outH}")
+            mainHandler.post {
+                flutterApi.onError(
+                    handle,
+                    CamError(CamErrorCode.PIPELINE_ERROR, "crop_failed: GPU resize failed", false),
+                ) {}
+            }
+            return
+        }
+
+        // Update tracked dims only after GPU succeeds — if setCropOutput fails
+        // and we return above, the GPU is still at the old size, so keeping the
+        // old field values is the least-surprising state.
+        previewWidth  = outW
+        previewHeight = outH
+        if (enableRawStream && rawSurfaceProducer != null) {
+            rawW = newRawW
+            rawH = newRawH
+        }
+
+        // Fetch fresh Surface refs from the Flutter producers and rebind
+        // the EGL surfaces. surfaceProducer.setSize() (called above) can
+        // replace the underlying Surface object, and the GpuPipeline's
+        // internal rebind in setCropOutput() uses the stored ref which
+        // may be stale. Same pattern as setResolution() — see commit 16ffe92.
+        pipeline.rebindPreviewSurface(surfaceProducer.getSurface())
+        if (enableRawStream && rawSurfaceProducer != null) {
+            pipeline.rebindRawSurface(rawSurfaceProducer.getSurface())
+        }
+
+        emitCapabilitiesChanged()
+    }
+
+    /**
+     * Build a fresh [CamCapabilities] reflecting the current post-GPU output
+     * dims and push it to Dart. Called whenever the effective output size
+     * changes (cropOutputSize update, setResolution completion).
+     */
+    private fun emitCapabilitiesChanged() {
+        getCapabilities { result ->
+            result.onSuccess { caps ->
+                mainHandler.post {
+                    flutterApi.onCapabilitiesChanged(handle, caps) {}
+                }
+            }
+            result.onFailure { e ->
+                Log.w("CC/Cam", "emitCapabilitiesChanged: failed to build caps — ${e.message}")
+            }
+        }
+    }
+
+    /**
+     * Reapply [pendingCropOutputSize] against the current sensor dims. Called
+     * at the end of [startCaptureSession] (after the GPU pipeline is up and
+     * `sensorStreamWidth/Height` are populated) and at the end of
+     * [setResolution] after the new session is running.
+     *
+     * Validates the stored request against the new sensor dims; if it still
+     * fits, invokes [applyOutputDims]. If the crop no longer fits (e.g. after
+     * a shrink via setResolution), clears the pending crop and emits a
+     * SETTINGS_CONFLICT error so Dart can either retry with smaller dims or
+     * drop its cached crop value.
+     */
+    private fun applyPendingCropIfAny() {
+        val pending = pendingCropOutputSize ?: return
+        val w = pending.width.toInt()
+        val h = pending.height.toInt()
+        val sw = sensorStreamWidth
+        val sh = sensorStreamHeight
+        if (sw == 0 || sh == 0) return  // no session yet — keep pending
+
+        if (w > sw || h > sh) {
+            Log.w("CC/Cam", "applyPendingCropIfAny: stored crop ${w}x${h} no longer fits stream ${sw}x${sh} — clearing")
+            pendingCropOutputSize = null
+            mainHandler.post {
+                flutterApi.onError(
+                    handle,
+                    CamError(
+                        CamErrorCode.SETTINGS_CONFLICT,
+                        "invalid_crop: stored crop ${w}x${h} exceeds new stream ${sw}x${sh}",
+                        false,
+                    ),
+                ) {}
+            }
+            return
+        }
+
+        // No-op when crop equals sensor dims.
+        if (w == sw && h == sh) {
+            pendingCropOutputSize = null
+            return
+        }
+
+        applyOutputDims(w, h)
     }
 
     /**
@@ -1777,7 +2044,12 @@ class CameraController(
         captureFailureCount = 0L
         bufferLostCount = 0L
 
-        previewWidth = streamWidth
+        sensorStreamWidth  = streamWidth
+        sensorStreamHeight = streamHeight
+        // previewWidth/Height track the POST-GPU output dims, which equal the
+        // sensor stream dims unless a crop is active. pendingCropOutputSize
+        // is applied further down (Task 6) and will overwrite these if valid.
+        previewWidth  = streamWidth
         previewHeight = streamHeight
         if (CambrianCameraConfig.debugDataFlow) {
             Log.i("CC/Cam", "Stream resolution: ${streamWidth}x${streamHeight} (4:3=${streamWidth * 3 == streamHeight * 4})")
@@ -1793,8 +2065,11 @@ class CameraController(
         }
         Log.i("CC/Cam", "streaming fmt=YUV_420_888 ${streamWidth}×${streamHeight}")
 
-        // JPEG ImageReader — pre-allocated for still capture (use streaming resolution).
-        val jpegReader = ImageReader.newInstance(streamWidth, streamHeight, ImageFormat.JPEG, 1)
+        // JPEG ImageReader — always sized at sensor stream dims so
+        // captureNaturalPicture() returns the full-sensor image regardless
+        // of any active cropOutputSize. See spec §5 (intentional FOV
+        // mismatch with captureImage).
+        val jpegReader = ImageReader.newInstance(sensorStreamWidth, sensorStreamHeight, ImageFormat.JPEG, 1)
         jpegImageReader = jpegReader
 
         // ImagePipeline is used only for sink dispatch in the GPU path.
@@ -1886,6 +2161,18 @@ class CameraController(
                             session.setRepeatingRequest(request, repeatingCaptureCallback, backgroundHandler)
                             setState(State.STREAMING)
                             emitState("streaming")
+                            // Apply any cropOutputSize that was requested before
+                            // the session became ready. If the pending crop is
+                            // valid, applyPendingCropIfAny → applyOutputDims will
+                            // emit onCapabilitiesChanged with the cropped dims.
+                            //
+                            // Intentional asymmetry with setResolution: we do NOT
+                            // call emitCapabilitiesChanged() unconditionally here.
+                            // The initial capabilities are delivered via the
+                            // getCapabilities() return path at open() time, so
+                            // Dart already has a fresh snapshot. Unlike setResolution,
+                            // no prior capabilities cache needs refreshing.
+                            applyPendingCropIfAny()
                             // Start the frame stall watchdog now that streaming is active.
                             lastCaptureResultMs = android.os.SystemClock.elapsedRealtime()
                             backgroundHandler.postDelayed(stallWatchdog, stallCheckIntervalMs)

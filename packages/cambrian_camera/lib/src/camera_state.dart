@@ -125,6 +125,8 @@ class CameraCapabilities {
     required this.rawStreamHeight,
     required this.streamWidth,
     required this.streamHeight,
+    required this.sensorStreamWidth,
+    required this.sensorStreamHeight,
   });
 
   /// Empty placeholder used during the open() factory before getCapabilities completes.
@@ -146,6 +148,8 @@ class CameraCapabilities {
         rawStreamHeight: 0,
         streamWidth: 0,
         streamHeight: 0,
+        sensorStreamWidth: 0,
+        sensorStreamHeight: 0,
       );
 
   factory CameraCapabilities.fromPigeon(CamCapabilities c) =>
@@ -169,6 +173,8 @@ class CameraCapabilities {
         rawStreamHeight: c.rawStreamHeight,
         streamWidth: c.streamWidth,
         streamHeight: c.streamHeight,
+        sensorStreamWidth: c.sensorStreamWidth,
+        sensorStreamHeight: c.sensorStreamHeight,
       );
 
   /// All supported YUV_420_888 stream resolutions, sorted descending by area.
@@ -200,6 +206,15 @@ class CameraCapabilities {
 
   /// Height of the GPU processed stream texture (pixels).
   final int streamHeight;
+
+  /// Width of the camera session's YUV stream (the actual sensor output
+  /// before any GPU crop). Unlike [streamWidth], this does NOT change when
+  /// [CamSettings.cropOutputSize] is active — it always reports the
+  /// Camera2 session's configured output dimensions.
+  final int sensorStreamWidth;
+
+  /// Height of the camera session's YUV stream. See [sensorStreamWidth].
+  final int sensorStreamHeight;
 }
 
 /// Describes a GPU texture stream ready for display.

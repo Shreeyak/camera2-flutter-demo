@@ -1,8 +1,10 @@
 package com.cambrian.camera
 
 import android.content.Context
+import android.content.SharedPreferences
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
+import android.net.Uri
 import android.os.Handler
 import android.view.Surface
 import io.flutter.view.TextureRegistry
@@ -10,6 +12,7 @@ import java.lang.reflect.Field
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -52,8 +55,23 @@ class CameraControllerGpuTest {
     fun setUp() {
         // Mock CameraManager so the cast in the CameraController constructor succeeds.
         mockCameraManager = mock()
+
+        // Mock SharedPreferences (and Editor) so SettingsStore.<init> does not NPE.
+        // With isReturnDefaultValues=true, unstubbed object-return methods return null;
+        // the non-null prefs assignment in SettingsStore throws if not stubbed here.
+        val mockEditor: SharedPreferences.Editor = mock {
+            on { putString(any(), anyOrNull()) }.thenAnswer { it.mock }
+            on { putLong(any(), any()) }.thenAnswer { it.mock }
+            on { putFloat(any(), any()) }.thenAnswer { it.mock }
+            on { putBoolean(any(), any()) }.thenAnswer { it.mock }
+            on { remove(any()) }.thenAnswer { it.mock }
+        }
+        val mockSharedPreferences: SharedPreferences = mock {
+            on { edit() }.thenReturn(mockEditor)
+        }
         val mockContext: Context = mock {
             on { getSystemService(Context.CAMERA_SERVICE) }.thenReturn(mockCameraManager)
+            on { getSharedPreferences(any(), any()) }.thenReturn(mockSharedPreferences)
         }
         mockSurfaceProducer = mock()
         mockRawSurfaceProducer = mock()
@@ -270,9 +288,20 @@ class CameraControllerGpuTest {
      */
     @Test
     fun `getCapabilities returns raw dimensions when enabled`() {
-        // Build a context that vends the shared mockCameraManager.
+        // Build a context that vends the shared mockCameraManager and a no-op SharedPreferences.
+        val rawMockEditor: SharedPreferences.Editor = mock {
+            on { putString(any(), anyOrNull()) }.thenAnswer { it.mock }
+            on { putLong(any(), any()) }.thenAnswer { it.mock }
+            on { putFloat(any(), any()) }.thenAnswer { it.mock }
+            on { putBoolean(any(), any()) }.thenAnswer { it.mock }
+            on { remove(any()) }.thenAnswer { it.mock }
+        }
+        val rawMockSharedPreferences: SharedPreferences = mock {
+            on { edit() }.thenReturn(rawMockEditor)
+        }
         val mockContext: Context = mock {
             on { getSystemService(Context.CAMERA_SERVICE) }.thenReturn(mockCameraManager)
+            on { getSharedPreferences(any(), any()) }.thenReturn(rawMockSharedPreferences)
         }
         val mockSurfaceProducer: TextureRegistry.SurfaceProducer = mock()
         val mockFlutterApi: CameraFlutterApi = mock()
@@ -355,8 +384,11 @@ class CameraControllerGpuTest {
     @Test
     fun `startRecording sets isRecording to true`() {
         val mockSurface: Surface = mock()
+        val mockUri: Uri = mock()
         whenever(mockVideoRecorder.inputSurface).thenReturn(mockSurface)
-        whenever(mockVideoRecorder.start(anyOrNull(), anyOrNull())).thenReturn("content://fake/1")
+        whenever(mockVideoRecorder.start(anyOrNull(), anyOrNull())).thenReturn(
+            VideoRecorder.RecordingResult(mockUri, "fake_video.mp4")
+        )
         videoRecorderField.set(controller, mockVideoRecorder)
 
         // Set state = STREAMING via reflection
@@ -407,5 +439,196 @@ class CameraControllerGpuTest {
 
         verify(mockVideoRecorder).stop()
         verify(mockFlutterApi).onRecordingStateChanged(eq(1L), eq("error"), any())
+    }
+
+    @Test
+    fun `updateSettings with cropOutputSize invokes gpuPipeline setCropOutput and emits capabilities change`() {
+        // Arrange: inject mock GpuPipeline; stub sensor dims to 4000x3000 and
+        // the setCropOutput call to succeed. enableRawStream=false in the
+        // test setUp, so raw dims are 0.
+        gpuPipelineField.set(controller, mockGpuPipeline)
+        whenever(mockGpuPipeline.setCropOutput(1600, 1200, 0, 0)).thenReturn(true)
+        whenever(mockGpuPipeline.isRunning).thenReturn(true)
+
+        // sensorStreamWidth/Height are private — set via reflection to simulate
+        // a running session at 4000x3000.
+        val sensorWField = CameraController::class.java.getDeclaredField("sensorStreamWidth")
+        sensorWField.isAccessible = true
+        sensorWField.setInt(controller, 4000)
+        val sensorHField = CameraController::class.java.getDeclaredField("sensorStreamHeight")
+        sensorHField.isAccessible = true
+        sensorHField.setInt(controller, 3000)
+        val previewWField = CameraController::class.java.getDeclaredField("previewWidth")
+        previewWField.isAccessible = true
+        previewWField.setInt(controller, 4000)
+        val previewHField = CameraController::class.java.getDeclaredField("previewHeight")
+        previewHField.isAccessible = true
+        previewHField.setInt(controller, 3000)
+
+        // Stub getCapabilities dependency: resolvedCameraId + camera characteristics.
+        setPrivateField("resolvedCameraId", "camera0")
+        val mockChars = makeMockCameraCharacteristics()
+        whenever(mockCameraManager.getCameraCharacteristics("camera0")).thenReturn(mockChars)
+
+        // Act
+        controller.updateSettings(CamSettings(cropOutputSize = CamSize(1600L, 1200L)))
+
+        // Assert: GPU call + preview resize + capabilities re-emit
+        verify(mockGpuPipeline).setCropOutput(1600, 1200, 0, 0)
+        verify(mockSurfaceProducer).setSize(1600, 1200)
+        argumentCaptor<CamCapabilities>().apply {
+            verify(mockFlutterApi).onCapabilitiesChanged(eq(1L), capture(), any())
+            assertEquals(1600L, firstValue.streamWidth)
+            assertEquals(1200L, firstValue.streamHeight)
+        }
+    }
+
+    @Test
+    fun `updateSettings with invalid cropOutputSize emits SETTINGS_CONFLICT error and does not touch gpu`() {
+        gpuPipelineField.set(controller, mockGpuPipeline)
+
+        val sensorWField = CameraController::class.java.getDeclaredField("sensorStreamWidth")
+        sensorWField.isAccessible = true
+        sensorWField.setInt(controller, 4000)
+        val sensorHField = CameraController::class.java.getDeclaredField("sensorStreamHeight")
+        sensorHField.isAccessible = true
+        sensorHField.setInt(controller, 3000)
+
+        // Odd width — should be rejected on the even-dim check.
+        controller.updateSettings(CamSettings(cropOutputSize = CamSize(1601L, 1200L)))
+
+        verify(mockGpuPipeline, never()).setCropOutput(any(), any(), any(), any())
+        argumentCaptor<CamError>().apply {
+            verify(mockFlutterApi).onError(eq(1L), capture(), any())
+            assertEquals(CamErrorCode.SETTINGS_CONFLICT, firstValue.code)
+        }
+    }
+
+    @Test
+    fun `updateSettings with cropOutputSize equal to sensor dims is a no-op (crop inactive)`() {
+        gpuPipelineField.set(controller, mockGpuPipeline)
+
+        val sensorWField = CameraController::class.java.getDeclaredField("sensorStreamWidth")
+        sensorWField.isAccessible = true
+        sensorWField.setInt(controller, 4000)
+        val sensorHField = CameraController::class.java.getDeclaredField("sensorStreamHeight")
+        sensorHField.isAccessible = true
+        sensorHField.setInt(controller, 3000)
+        val previewWField = CameraController::class.java.getDeclaredField("previewWidth")
+        previewWField.isAccessible = true
+        previewWField.setInt(controller, 4000)
+        val previewHField = CameraController::class.java.getDeclaredField("previewHeight")
+        previewHField.isAccessible = true
+        previewHField.setInt(controller, 3000)
+
+        controller.updateSettings(CamSettings(cropOutputSize = CamSize(4000L, 3000L)))
+
+        // No GPU call, no surface resize, no error, no capabilities re-emit.
+        verify(mockGpuPipeline, never()).setCropOutput(any(), any(), any(), any())
+        verify(mockSurfaceProducer, never()).setSize(any(), any())
+        verify(mockFlutterApi, never()).onCapabilitiesChanged(any(), any(), any())
+    }
+
+    @Test
+    fun `pendingCropOutputSize set before session is applied at session start`() {
+        // Arrange: inject mock gpuPipeline; set pendingCropOutputSize via reflection
+        // to simulate a call that arrived before the session started.
+        gpuPipelineField.set(controller, mockGpuPipeline)
+        whenever(mockGpuPipeline.setCropOutput(1600, 1200, 0, 0)).thenReturn(true)
+        whenever(mockGpuPipeline.isRunning).thenReturn(true)
+
+        val pendingField = CameraController::class.java.getDeclaredField("pendingCropOutputSize")
+        pendingField.isAccessible = true
+        pendingField.set(controller, CamSize(1600L, 1200L))
+
+        val sensorWField = CameraController::class.java.getDeclaredField("sensorStreamWidth")
+        sensorWField.isAccessible = true
+        sensorWField.setInt(controller, 4000)
+        val sensorHField = CameraController::class.java.getDeclaredField("sensorStreamHeight")
+        sensorHField.isAccessible = true
+        sensorHField.setInt(controller, 3000)
+        val previewWField = CameraController::class.java.getDeclaredField("previewWidth")
+        previewWField.isAccessible = true
+        previewWField.setInt(controller, 4000)
+        val previewHField = CameraController::class.java.getDeclaredField("previewHeight")
+        previewHField.isAccessible = true
+        previewHField.setInt(controller, 3000)
+
+        // Stub getCapabilities dependency: resolvedCameraId + camera characteristics.
+        // applyOutputDims → emitCapabilitiesChanged → getCapabilities needs these.
+        setPrivateField("resolvedCameraId", "camera0")
+        val mockChars = makeMockCameraCharacteristics()
+        whenever(mockCameraManager.getCameraCharacteristics("camera0")).thenReturn(mockChars)
+
+        // Act: call the private applyPendingCropIfAny() helper via reflection
+        // (added in Step 3 below). This simulates what startCaptureSession
+        // does after it has populated sensorStreamWidth/Height and initialized
+        // the GPU pipeline.
+        val applyMethod = CameraController::class.java.getDeclaredMethod("applyPendingCropIfAny")
+        applyMethod.isAccessible = true
+        applyMethod.invoke(controller)
+
+        // Assert
+        verify(mockGpuPipeline).setCropOutput(1600, 1200, 0, 0)
+        verify(mockSurfaceProducer).setSize(1600, 1200)
+    }
+
+    /**
+     * Verifies that [CameraController.open] propagates a [CamSettings.cropOutputSize] argument
+     * into the [pendingCropOutputSize] slot so that [applyPendingCropIfAny] picks it up at
+     * session start.
+     *
+     * The open() call short-circuits with "no_camera" (cameraIdList returns empty array),
+     * but the settings merge — and the fix's pendingCropOutputSize stash — happen BEFORE
+     * the camera-ID resolution gate, so the reflection assertion is valid.
+     */
+    @Test
+    fun `open with cropOutputSize copies it into pendingCropOutputSize`() {
+        // Stub cameraIdList to return an empty array so selectDefaultCameraId() returns null
+        // cleanly (rather than NPE on a null list). open() will then early-return with
+        // "no_camera" — but only AFTER the settings merge lines we are testing have run.
+        whenever(mockCameraManager.cameraIdList).thenReturn(emptyArray())
+
+        controller.open(
+            cameraId = null,
+            settings = CamSettings(cropOutputSize = CamSize(1600L, 1200L)),
+        ) { /* ignore result — we're testing pre-callback state */ }
+
+        val pendingField = CameraController::class.java.getDeclaredField("pendingCropOutputSize")
+        pendingField.isAccessible = true
+        val pending = pendingField.get(controller) as? CamSize
+        assertNotNull("pendingCropOutputSize should have been populated by open()", pending)
+        assertEquals(1600L, pending!!.width)
+        assertEquals(1200L, pending.height)
+    }
+
+    @Test
+    fun `pendingCropOutputSize exceeding new sensor dims after setResolution is cleared with error`() {
+        gpuPipelineField.set(controller, mockGpuPipeline)
+
+        val pendingField = CameraController::class.java.getDeclaredField("pendingCropOutputSize")
+        pendingField.isAccessible = true
+        pendingField.set(controller, CamSize(2000L, 1500L)) // valid at 4000x3000
+
+        // Simulate setResolution result: new sensor dims = 1280x960, so the
+        // pending 2000x1500 crop no longer fits.
+        val sensorWField = CameraController::class.java.getDeclaredField("sensorStreamWidth")
+        sensorWField.isAccessible = true
+        sensorWField.setInt(controller, 1280)
+        val sensorHField = CameraController::class.java.getDeclaredField("sensorStreamHeight")
+        sensorHField.isAccessible = true
+        sensorHField.setInt(controller, 960)
+
+        val applyMethod = CameraController::class.java.getDeclaredMethod("applyPendingCropIfAny")
+        applyMethod.isAccessible = true
+        applyMethod.invoke(controller)
+
+        // Pending should be cleared; GPU must NOT have been called; an error emitted.
+        assertNull(pendingField.get(controller))
+        verify(mockGpuPipeline, never()).setCropOutput(any(), any(), any(), any())
+        argumentCaptor<CamError>().apply {
+            verify(mockFlutterApi).onError(eq(1L), capture(), any())
+            assertEquals(CamErrorCode.SETTINGS_CONFLICT, firstValue.code)
+        }
     }
 }

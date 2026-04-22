@@ -660,6 +660,39 @@ Camera2 → SurfaceTexture → OES texture
 
 **Raw resources** (allocated only when `rawW_ > 0`): `rawFBO`, `rawPBOs[2]` (double-buffered readback), `rawEGLSurface` (optional preview).
 
+### GPU layer: source dims vs output dims
+
+The GPU renderer tracks two independent dimension pairs:
+
+- **Source dims** — `sourceWidth_` × `sourceHeight_` in C++, `sourceWidth` ×
+  `sourceHeight` in Kotlin. These are the camera SurfaceTexture buffer dims,
+  equal to the configured Camera2 YUV stream size. Changed only by a
+  camera-session swap via `resize()` (called from `setResolution`).
+
+- **Output dims** — `width_` × `height_` in C++, `width` × `height` in
+  Kotlin. These are the FBO / PBO / preview backing dims — what downstream
+  consumers (C++ sinks, `captureImage`, video encoder) see. Initialised
+  equal to the source dims, but shrunk by `setCropOutput()` when
+  `CamSettings.cropOutputSize` is active.
+
+When output dims ≠ source dims, the fragment shader computes:
+
+```glsl
+vec2 sx = outputSize / sourceSize;
+uCropScale  = sx;
+uCropOffset = (1 - sx) / 2;
+vec2 uv     = vTexCoord * uCropScale + uCropOffset;
+```
+
+This samples a centered sub-rectangle of the source OES texture whose
+normalized area matches the output-to-source ratio. The downstream pipeline
+sees a smaller buffer whose content is the cropped FOV, with no further
+scaling.
+
+The `jpegImageReader` used by `captureNaturalPicture()` is always allocated
+at the source dims, so the hardware JPEG path is unaffected by crop. See
+`docs/superpowers/specs/2026-04-13-gpu-crop-design.md` for the full design.
+
 ### Frame delivery (post-GPU readback)
 
 ```

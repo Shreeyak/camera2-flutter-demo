@@ -200,11 +200,13 @@ static bool waitFence(GLsync& fence, const char* label) {
 namespace cam {
 
 GpuRenderer::GpuRenderer(int width, int height, int debugLevel)
-    : debugLevel_(debugLevel), width_(width), height_(height)
+    : debugLevel_(debugLevel), width_(width), height_(height),
+      sourceWidth_(width), sourceHeight_(height)
 {
     if (height_ <= 0) {
         LOGE("GpuRenderer: invalid height %d — clamping to 1 to avoid division by zero", height_);
         height_ = 1;
+        sourceHeight_ = height_;  // keep source in sync with clamped value
     }
     // Compute tracker FBO size: fixed kTrackerHeight rows, width scaled to preserve aspect,
     // rounded to nearest even width to keep YUV chroma-plane alignment.
@@ -267,6 +269,8 @@ bool GpuRenderer::resize(int newW, int newH, int newRawW, int newRawH) {
     releaseGl();
     width_         = newW;
     height_        = (newH > 0) ? newH : 1;
+    sourceWidth_   = width_;        // resize() swaps the camera session — source = output
+    sourceHeight_  = height_;
     // Compute tracker FBO size: fixed kTrackerHeight rows, width scaled to preserve aspect,
     // rounded to nearest even width to keep YUV chroma-plane alignment.
     trackerHeight_ = kTrackerHeight;
@@ -274,6 +278,44 @@ bool GpuRenderer::resize(int newW, int newH, int newRawW, int newRawH) {
     // releaseGl() zeros rawW_/rawH_ — restore before initGl() or the raw path stays disabled.
     rawW_ = newRawW;
     rawH_ = newRawH;
+    return initGl();
+}
+
+// ---------------------------------------------------------------------------
+// Public: change output dims without touching source dims
+//
+// Called on the GL thread whenever CamSettings.cropOutputSize changes. The
+// SurfaceTexture source stays at (sourceWidth_, sourceHeight_); only the
+// output FBO / tracker FBO / raw FBO / PBOs are reallocated. drawAndReadback()
+// computes uCropScale / uCropOffset from the output-to-source ratio so the
+// shader samples a centered sub-rectangle of the source texture.
+//
+// Raw dims are passed by the caller (not recomputed here) because the caller
+// owns the raw aspect policy. releaseGl() zeros rawW_/rawH_, so we rewrite
+// them from the args before initGl() so the raw pipeline survives the resize.
+// ---------------------------------------------------------------------------
+bool GpuRenderer::setCropOutput(int outW, int outH, int newRawW, int newRawH) {
+    if (debugLevel_ >= 1) {
+        LOGI("setCropOutput: %dx%d raw=%dx%d (source %dx%d)",
+             outW, outH, newRawW, newRawH, sourceWidth_, sourceHeight_);
+    }
+    if (outW <= 0 || outH <= 0) {
+        LOGE("setCropOutput: invalid dims %dx%d", outW, outH);
+        return false;
+    }
+    if (outW > sourceWidth_ || outH > sourceHeight_) {
+        LOGE("setCropOutput: output %dx%d exceeds source %dx%d",
+             outW, outH, sourceWidth_, sourceHeight_);
+        return false;
+    }
+    releaseGl();
+    width_         = outW;
+    height_        = outH;
+    trackerHeight_ = kTrackerHeight;
+    trackerWidth_  = ((width_ * kTrackerHeight / height_) + 1) & ~1;
+    rawW_          = newRawW;   // restore after releaseGl() zeroed it
+    rawH_          = newRawH;
+    // sourceWidth_ / sourceHeight_ intentionally not touched.
     return initGl();
 }
 
@@ -330,9 +372,13 @@ void GpuRenderer::drawAndReadback(
     glUniform1f(uSaturation_,   saturation);
     glUniform3f(uBlackBalance_, blackBalance[0], blackBalance[1], blackBalance[2]);
     glUniform1f(uGamma_,        gamma);
-    // Default crop = identity (full sensor field of view)
-    glUniform2f(uCropScale_,  1.f, 1.f);
-    glUniform2f(uCropOffset_, 0.f, 0.f);
+    // Center crop: the shader samples a (width_/sourceWidth_, height_/sourceHeight_)
+    // sub-rectangle of the source texture, centered. When width_ == sourceWidth_
+    // this degenerates to identity (no crop).
+    const float sx = static_cast<float>(width_)  / static_cast<float>(sourceWidth_);
+    const float sy = static_cast<float>(height_) / static_cast<float>(sourceHeight_);
+    glUniform2f(uCropScale_,  sx, sy);
+    glUniform2f(uCropOffset_, (1.f - sx) * 0.5f, (1.f - sy) * 0.5f);
 
     // Bind the external OES texture to texture unit 0
     glActiveTexture(GL_TEXTURE0);

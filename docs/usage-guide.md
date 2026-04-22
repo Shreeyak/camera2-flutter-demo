@@ -328,6 +328,7 @@ All fields are nullable. `null` means "don't change this setting."
 | `noiseReductionMode` | `NoiseReductionMode?` | Camera2 noise reduction mode enum. Null = don't change. |
 | `edgeMode` | `EdgeMode?` | Camera2 edge enhancement mode enum. Null = don't change. |
 | `evCompensation` | `int?` | Exposure compensation in AE steps. **No effect when ISO or exposure is manual** (AE is disabled). Null = don't change. |
+| `cropOutputSize` | `CameraSize?` | Center crop output dimensions in pixels. Null = don't change the current crop. |
 
 > **ISO + Exposure coupling:** `iso` and `exposureTimeNs` share a single Camera2 flag (`CONTROL_AE_MODE`: ON = both auto, OFF = both manual).
 >
@@ -395,6 +396,48 @@ camera.updateSettings(CameraSettings(
 // Just change zoom — all other settings are preserved
 camera.updateSettings(CameraSettings(zoomRatio: 3.0));
 ```
+
+### Center crop — `cropOutputSize`
+
+The `cropOutputSize` field on `CameraSettings` requests an exact-pixel center
+crop of the GPU output. When set, every downstream consumer — preview
+surface, raw stream, 480p C++ sink, `captureImage()`, video recording — sees
+frames at the cropped dims. The camera session stays at full sensor
+resolution; no Camera2 reconfigure happens.
+
+```dart
+await camera.updateSettings(CameraSettings(
+  cropOutputSize: const CameraSize(1600, 1200),
+));
+
+// Listen for the size change — CamCapabilities reports the new output dims.
+camera.capabilitiesStream.listen((caps) {
+  print('now streaming at ${caps.streamWidth}x${caps.streamHeight}');
+});
+```
+
+**Constraints** (violations raise a `SettingsConflict` error on
+`errorStream`):
+- `0 < width  <= streamWidth`
+- `0 < height <= streamHeight`
+- both dims must be even (GPU / PBO / encoder alignment)
+- aspect ratio is NOT constrained — a 4:3 stream can be cropped to 16:9;
+  the result is a symmetric letterbox-style center crop
+
+**Clear the crop** by setting `cropOutputSize` equal to the current sensor
+stream dims in a subsequent `updateSettings` call. Passing `null` means
+"don't change the current crop" (matches the latest-value-wins semantics
+of the other `CameraSettings` fields).
+
+**Interaction with `zoomRatio`:** zoom and crop compose multiplicatively.
+Effective zoom ≈ `zoomRatio × (streamWidth / cropWidth)`.
+
+**Interaction with `captureNaturalPicture()`:** this method always returns
+the full-sensor hardware JPEG and **intentionally ignores `cropOutputSize`**.
+Use `captureImage()` if you want the cropped image. The preview and
+`captureImage()` reflect the crop; `captureNaturalPicture()` does not — this
+mismatch is by design, since "natural picture" is defined as the unprocessed
+sensor JPEG.
 
 ---
 

@@ -48,6 +48,7 @@ class CamSettings {
     this.evCompensation,
     this.enableRawStream,
     this.rawStreamHeight,
+    this.cropOutputSize,
   });
 
   /// "auto" | "manual" | null (don't change).
@@ -99,6 +100,44 @@ class CamSettings {
 
   /// Requested height of the GPU raw stream in pixels. Null = don't change. 0 = use default.
   int? rawStreamHeight;
+
+  /// Center-crop the GPU output to this exact pixel size.
+  ///
+  /// When set, the GPU fragment shader samples from the centered
+  /// sub-rectangle of the configured stream, and the output FBO/PBO/preview
+  /// buffers are resized to these dims. All downstream consumers — preview
+  /// surface, raw stream, 480p C++ sink, `captureImage()`, video recording —
+  /// receive frames at the cropped dims. The camera session stays at full
+  /// sensor resolution (no Camera2 reconfigure, no `SCALER_CROP_REGION`).
+  ///
+  /// Null = "don't change the current crop" (matches the latest-value-wins
+  /// semantics of the other CamSettings fields). To CLEAR an active crop,
+  /// send `cropOutputSize` equal to the current sensor stream dims. The
+  /// Kotlin side detects that output == source and removes the crop,
+  /// restoring full-sensor output without a Camera2 session restart.
+  /// The initial state before any crop has been set is "no crop".
+  ///
+  /// Constraints (enforced on the Kotlin side; caller receives
+  /// `FlutterError("invalid_crop", ...)` on violation):
+  ///   - `0 < width  <= streamWidth`
+  ///   - `0 < height <= streamHeight`
+  ///   - `width  % 2 == 0` (GPU/PBO/encoder alignment)
+  ///   - `height % 2 == 0`
+  ///
+  /// Aspect ratio is NOT constrained: cropping a 4160×3120 stream to
+  /// 1920×1080 is a valid request and produces a symmetric
+  /// letterbox-style center crop.
+  ///
+  /// **Interaction with `zoomRatio`:** zoom and crop compose
+  /// multiplicatively. The ISP delivers a zoomed full-resolution frame to
+  /// the GPU, which then center-crops it. Effective zoom from the caller's
+  /// perspective is approximately `zoomRatio × (streamWidth / cropWidth)`.
+  ///
+  /// **Interaction with `captureNaturalPicture()`:** that method
+  /// intentionally ignores `cropOutputSize` and always returns the
+  /// full-sensor hardware JPEG. Use `captureImage()` if you want the
+  /// cropped image.
+  CamSize? cropOutputSize;
 }
 
 class CamProcessingParams {
@@ -140,6 +179,8 @@ class CamCapabilities {
     required this.rawStreamHeight,
     required this.streamWidth,
     required this.streamHeight,
+    required this.sensorStreamWidth,
+    required this.sensorStreamHeight,
   });
 
   /// All supported YUV_420_888 stream resolutions, sorted descending by area.
@@ -171,6 +212,15 @@ class CamCapabilities {
 
   /// Height of the GPU processed stream texture (pixels).
   int streamHeight;
+
+  /// Width of the camera session's YUV stream (the actual sensor output
+  /// before any GPU crop). Unlike [streamWidth], this does NOT change when
+  /// [CamSettings.cropOutputSize] is active — it always reports the
+  /// Camera2 session's configured output size.
+  int sensorStreamWidth;
+
+  /// Height of the camera session's YUV stream. See [sensorStreamWidth].
+  int sensorStreamHeight;
 }
 
 class CamStateUpdate {
@@ -345,4 +395,10 @@ abstract class CameraFlutterApi {
   /// Called when the recording state changes.
   /// [state] is one of: "recording", "idle", "error".
   void onRecordingStateChanged(int handle, String state);
+
+  /// Called when the effective post-GPU output dimensions change — e.g.
+  /// after `cropOutputSize` is set or cleared, or after `setResolution`
+  /// resolves to a new camera stream size. Dart consumers should replace
+  /// their cached [CamCapabilities] with the new value.
+  void onCapabilitiesChanged(int handle, CamCapabilities capabilities);
 }

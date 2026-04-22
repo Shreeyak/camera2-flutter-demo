@@ -1,3 +1,4 @@
+import 'camera_state.dart' show CameraSize;
 import 'messages.g.dart';
 
 // ---------------------------------------------------------------------------
@@ -179,6 +180,7 @@ class CameraSettings {
     this.evCompensation,
     this.enableRawStream,
     this.rawStreamHeight,
+    this.cropOutputSize,
   });
 
   /// Sensor sensitivity (e.g. 100–3200).
@@ -231,6 +233,35 @@ class CameraSettings {
   /// Only meaningful when [enableRawStream] is true.
   final int? rawStreamHeight;
 
+  /// Center-crop the GPU output to this exact pixel size.
+  ///
+  /// When set, all downstream consumers — preview surface, raw stream,
+  /// 480p C++ sink, [captureImage], video recording — receive frames
+  /// at the cropped dims. The camera session stays at full sensor resolution.
+  ///
+  /// `null` = don't change the current crop (matches the latest-value-wins
+  /// semantics of the other `CameraSettings` fields). To clear an active
+  /// crop, send `cropOutputSize` equal to the current sensor stream dims.
+  /// The initial state before any crop has been set is "no crop".
+  /// Constraints:
+  ///   - `0 < width  <= streamWidth`
+  ///   - `0 < height <= streamHeight`
+  ///   - both even (GPU/PBO/encoder alignment)
+  /// Invalid dims raise a `SettingsConflict` error on the
+  /// [CambrianCamera.errorStream].
+  ///
+  /// Aspect ratio is NOT constrained — cropping a 4:3 stream to 16:9 is valid
+  /// and produces a symmetric letterbox-style center crop.
+  ///
+  /// **Interaction with `zoomRatio`:** zoom + crop compose multiplicatively.
+  /// Effective zoom ≈ `zoomRatio × (streamWidth / cropWidth)`.
+  ///
+  /// **Interaction with [CambrianCamera.captureNaturalPicture]:** that method
+  /// always returns the full-sensor hardware JPEG and intentionally ignores
+  /// this field. Use [CambrianCamera.captureImage] if you want the cropped
+  /// image.
+  final CameraSize? cropOutputSize;
+
   /// Creates a copy of this settings object with specified fields replaced.
   ///
   /// Omitted fields preserve their original values.
@@ -245,6 +276,7 @@ class CameraSettings {
     int? evCompensation,
     bool? enableRawStream,
     int? rawStreamHeight,
+    CameraSize? cropOutputSize,
   }) =>
       CameraSettings(
         iso: iso ?? this.iso,
@@ -257,6 +289,7 @@ class CameraSettings {
         evCompensation: evCompensation ?? this.evCompensation,
         enableRawStream: enableRawStream ?? this.enableRawStream,
         rawStreamHeight: rawStreamHeight ?? this.rawStreamHeight,
+        cropOutputSize: cropOutputSize ?? this.cropOutputSize,
       );
 
   /// Returns a summary string of non-null fields for diagnostic logging.
@@ -273,6 +306,7 @@ class CameraSettings {
     if (evCompensation != null) parts.add('ev=$evCompensation');
     if (enableRawStream != null) parts.add('raw=$enableRawStream');
     if (rawStreamHeight != null) parts.add('rawH=$rawStreamHeight');
+    if (cropOutputSize != null) parts.add('crop=$cropOutputSize');
     return 'CameraSettings(${parts.join(', ')})';
   }
 
@@ -357,6 +391,12 @@ class CameraSettings {
       evCompensation: evCompensation,
       enableRawStream: enableRawStream,
       rawStreamHeight: rawStreamHeight,
+      cropOutputSize: cropOutputSize == null
+          ? null
+          : CamSize(
+              width: cropOutputSize!.width,
+              height: cropOutputSize!.height,
+            ),
     );
   }
 }

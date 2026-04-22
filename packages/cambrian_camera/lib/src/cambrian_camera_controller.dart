@@ -72,7 +72,9 @@ class CambrianCamera {
        _errorController = StreamController<CameraError>.broadcast(),
        _frameResultController = StreamController<FrameResult>.broadcast(),
        _recordingStateController =
-           StreamController<RecordingState>.broadcast() {
+           StreamController<RecordingState>.broadcast(),
+       _capabilitiesController =
+           StreamController<CameraCapabilities>.broadcast() {
     // Register in the global instance map so FlutterApi callbacks can be
     // routed to the correct camera by handle.
     _instances[handle] = this;
@@ -129,6 +131,7 @@ class CambrianCamera {
   final StreamController<CameraError> _errorController;
   final StreamController<FrameResult> _frameResultController;
   final StreamController<RecordingState> _recordingStateController;
+  final StreamController<CameraCapabilities> _capabilitiesController;
   late final CameraSettingsSerializer _serializer;
 
   /// The most recent camera lifecycle state. Used as [StreamBuilder.initialData]
@@ -646,6 +649,7 @@ class CambrianCamera {
       await _errorController.close();
       await _frameResultController.close();
       await _recordingStateController.close();
+      await _capabilitiesController.close();
     }
   }
 
@@ -686,6 +690,24 @@ class CambrianCamera {
       debugPrint('CC/Dart: recordingState=$state handle=$_handle');
     _recordingStateController.add(RecordingState.fromString(state));
   }
+
+  /// Emits the latest [CameraCapabilities] whenever the effective post-GPU
+  /// output dimensions change — e.g. after [updateSettings] sets a new
+  /// `cropOutputSize` or after `setResolution` resolves to a new camera
+  /// stream size.
+  Stream<CameraCapabilities> get capabilitiesStream =>
+      _capabilitiesController.stream;
+
+  void _onCapabilitiesChanged(CamCapabilities caps) {
+    final dartCaps = CameraCapabilities.fromPigeon(caps);
+    _capabilities = dartCaps;
+    if (kDebugMode) {
+      debugPrint(
+        'CC/Dart: capabilitiesChanged stream=${dartCaps.streamWidth}x${dartCaps.streamHeight}',
+      );
+    }
+    _capabilitiesController.add(dartCaps);
+  }
 }
 
 /// Routes Kotlin→Dart callbacks to the correct [CambrianCamera] instance.
@@ -714,5 +736,10 @@ class _FlutterApiDispatcher extends CameraFlutterApi {
   @override
   void onRecordingStateChanged(int handle, String state) {
     CambrianCamera._instances[handle]?._onRecordingStateChanged(state);
+  }
+
+  @override
+  void onCapabilitiesChanged(int handle, CamCapabilities capabilities) {
+    CambrianCamera._instances[handle]?._onCapabilitiesChanged(capabilities);
   }
 }
