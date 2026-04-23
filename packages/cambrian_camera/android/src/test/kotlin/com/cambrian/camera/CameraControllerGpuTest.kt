@@ -631,4 +631,129 @@ class CameraControllerGpuTest {
             assertEquals(CamErrorCode.SETTINGS_CONFLICT, firstValue.code)
         }
     }
+
+    // ── updateSettings: ISO + exposure auto-propagation and latch rules
+    //
+    // These tests exercise the Camera2 CONTROL_AE_MODE coupling logic at the top of
+    // updateSettings(): the auto-propagation check (incoming-based, not merged-based)
+    // and the latch-from-last-AE fallback.
+    //
+    // They inspect appliedSettings after the call because captureSession is null in
+    // this test fixture — updateSettings assigns appliedSettings, then early-returns
+    // at the `session ?: return` guard before any Camera2 work runs.
+
+    /** Builds a CaptureResultSnapshot with only ISO and exposureTimeNs set; all others null. */
+    private fun makeAeSnapshot(iso: Int?, exposureTimeNs: Long?): CaptureResultSnapshot =
+        CaptureResultSnapshot(
+            iso = iso,
+            exposureTimeNs = exposureTimeNs,
+            frameDurationNs = null, sensorTimestampNs = null,
+            focalLengthMm = null, aperture = null, focusDistanceDiopters = null,
+            lensOisMode = null, lensDistortion = null,
+            wbGainR = null, wbGainG = null, wbGainB = null, colorCorrectionMode = null,
+            aeMode = null, aeState = null, afMode = null, afState = null,
+            awbMode = null, awbState = null, sceneMode = null, captureIntent = null,
+            flashMode = null, flashState = null,
+            noiseReductionMode = null, edgeMode = null, hotPixelMode = null, tonemapMode = null,
+        )
+
+    /** Reads appliedSettings via reflection so tests can assert on the merge+propagation+latch result. */
+    private fun getAppliedSettings(): CamSettings =
+        CameraController::class.java.getDeclaredField("appliedSettings")
+            .apply { isAccessible = true }
+            .get(controller) as CamSettings
+
+    /**
+     * Regression: previously the auto-propagation check inspected `merged` rather than
+     * `incoming`, so sending `{iso=manual(N)}` alone was silently reset to auto whenever
+     * `appliedSettings.exposureMode` was still "auto" — which is the fresh-open state.
+     *
+     * Correct behavior: the exposureMode in `incoming` is null ("don't change"), so the
+     * propagation rule should not fire; the latch-from-last-AE rule should seed
+     * `exposureTimeNs` from `lastCaptureSnapshot` and both fields end up manual.
+     */
+    @Test
+    fun `updateSettings lone manual ISO with base auto latches exposure from AE snapshot`() {
+        setPrivateField("appliedSettings", CamSettings(isoMode = "auto", exposureMode = "auto"))
+        setPrivateField("lastCaptureSnapshot", makeAeSnapshot(iso = 150, exposureTimeNs = 16_666_666L))
+
+        controller.updateSettings(CamSettings(isoMode = "manual", iso = 400L))
+
+        val applied = getAppliedSettings()
+        assertEquals("manual", applied.isoMode)
+        assertEquals(400L, applied.iso)
+        assertEquals("manual", applied.exposureMode)
+        assertEquals(16_666_666L, applied.exposureTimeNs)
+    }
+
+    /** Symmetric regression: lone `{exposure=manual(N)}` should latch iso from the last AE snapshot. */
+    @Test
+    fun `updateSettings lone manual exposure with base auto latches ISO from AE snapshot`() {
+        setPrivateField("appliedSettings", CamSettings(isoMode = "auto", exposureMode = "auto"))
+        setPrivateField("lastCaptureSnapshot", makeAeSnapshot(iso = 200, exposureTimeNs = 10_000_000L))
+
+        controller.updateSettings(CamSettings(exposureMode = "manual", exposureTimeNs = 8_000_000L))
+
+        val applied = getAppliedSettings()
+        assertEquals("manual", applied.isoMode)
+        assertEquals(200L, applied.iso)
+        assertEquals("manual", applied.exposureMode)
+        assertEquals(8_000_000L, applied.exposureTimeNs)
+    }
+
+    /** Auto is contagious: `{iso=auto}` alone pulls exposure to auto when base was manual. */
+    @Test
+    fun `updateSettings iso auto propagates to exposure when base was manual`() {
+        setPrivateField("appliedSettings", CamSettings(
+            isoMode = "manual", iso = 800L,
+            exposureMode = "manual", exposureTimeNs = 10_000_000L,
+        ))
+
+        controller.updateSettings(CamSettings(isoMode = "auto"))
+
+        val applied = getAppliedSettings()
+        assertEquals("auto", applied.isoMode)
+        assertNull(applied.iso)
+        assertEquals("auto", applied.exposureMode)
+        assertNull(applied.exposureTimeNs)
+    }
+
+    /** Auto wins in a mixed call: `{iso=auto, exposure=manual}` resolves to both auto. */
+    @Test
+    fun `updateSettings mixed iso auto exposure manual resolves to both auto`() {
+        setPrivateField("appliedSettings", CamSettings(
+            isoMode = "manual", iso = 800L,
+            exposureMode = "manual", exposureTimeNs = 10_000_000L,
+        ))
+
+        controller.updateSettings(CamSettings(
+            isoMode = "auto",
+            exposureMode = "manual", exposureTimeNs = 20_000_000L,
+        ))
+
+        val applied = getAppliedSettings()
+        assertEquals("auto", applied.isoMode)
+        assertEquals("auto", applied.exposureMode)
+    }
+
+    /**
+     * When the latch rule has no AE snapshot to draw from, updateSettings must reject the call
+     * with SETTINGS_CONFLICT and leave appliedSettings unchanged — the merge assignment lives
+     * after the latch return, so an aborted call must not mutate any state.
+     */
+    @Test
+    fun `updateSettings manual ISO without prior AE snapshot emits SETTINGS_CONFLICT`() {
+        val initial = CamSettings(isoMode = "auto", exposureMode = "auto")
+        setPrivateField("appliedSettings", initial)
+        setPrivateField("lastCaptureSnapshot", null)
+
+        controller.updateSettings(CamSettings(isoMode = "manual", iso = 400L))
+
+        argumentCaptor<CamError>().apply {
+            verify(mockFlutterApi).onError(eq(1L), capture(), any())
+            assertEquals(CamErrorCode.SETTINGS_CONFLICT, firstValue.code)
+        }
+        // appliedSettings untouched — aborted call must not partially commit.
+        assertEquals(initial, getAppliedSettings())
+    }
 }
