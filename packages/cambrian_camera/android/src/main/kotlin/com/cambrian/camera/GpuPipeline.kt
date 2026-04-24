@@ -54,20 +54,32 @@ open class GpuPipeline(
     private val texMatrix      = FloatArray(16)
     private val combinedMatrix = FloatArray(16)
 
-    // Fixed 90° CW UV rotation applied every frame to normalise output to landscape-right.
+    // Fixed output transform applied every frame: a 90° image rotation (the opposite
+    // UV direction from the previous "rotMatrix90CW" so image content rotates the other
+    // way) followed by a vertical flip (top↔bottom swap, v → 1 − v).
     //
-    // Camera2 JPEG formula: (sensorOrientation + targetDeviceOrientation + 360) % 360
+    // Composing "UV un-rotate 90° (opposite direction) × UV Y-flip" algebraically
+    // collapses to the simple UV swap (u, v) → (v, u) — the transpose. Corner trace:
+    //   input top-left     → output bottom-right
+    //   input top-right    → output top-right
+    //   input bottom-left  → output bottom-left
+    //   input bottom-right → output top-left
+    //
     // For PRIVATE/SurfaceTexture surfaces the camera HAL auto-applies sensorOrientation,
-    // so getTransformMatrix() already delivers portrait-correct pixels. The remaining
-    // correction is always portrait→landscape-right = 90° CW, independent of device.
+    // so getTransformMatrix() already delivers portrait-correct pixels; this matrix is
+    // then composed on top (see the Matrix.multiplyMM below) to produce the final
+    // landscape-oriented, vertically-flipped output consumed by every GPU sink
+    // (preview, video encoder surface, captureImage PBO readback, raw stream).
     //
-    // UV 90° CW: u' = v,  v' = 1 - u
+    // Does NOT affect captureNaturalPicture — that path bypasses the GPU entirely and
+    // relies on EXIF orientation tagging in CameraController.kt.
+    //
     // Column-major homogeneous form (OpenGL convention).
-    private val rotMatrix90CW = floatArrayOf(
-         0f, -1f, 0f, 0f,   // col 0
-         1f,  0f, 0f, 0f,   // col 1
-         0f,  0f, 1f, 0f,   // col 2
-         0f,  1f, 0f, 1f    // col 3
+    private val rotAndFlipMatrix = floatArrayOf(
+        0f, 1f, 0f, 0f,   // col 0
+        1f, 0f, 0f, 0f,   // col 1
+        0f, 0f, 1f, 0f,   // col 2
+        0f, 0f, 0f, 1f    // col 3
     )
 
     private var lastFrameTimeMs = 0L
@@ -398,10 +410,11 @@ open class GpuPipeline(
         st.updateTexImage()
         st.getTransformMatrix(texMatrix)
 
-        // Compose fixed 90° CW UV rotation so output is always landscape-right,
-        // independent of device orientation. combinedMatrix = texMatrix * rotMatrix90CW
-        // (rotMatrix90CW is applied first to the UV coords, then texMatrix).
-        Matrix.multiplyMM(combinedMatrix, 0, texMatrix, 0, rotMatrix90CW, 0)
+        // Compose the fixed rotate+vertical-flip UV transform so output is always
+        // landscape-oriented with a vertical flip, independent of device orientation.
+        // combinedMatrix = texMatrix * rotAndFlipMatrix
+        // (rotAndFlipMatrix is applied first to the UV coords, then texMatrix).
+        Matrix.multiplyMM(combinedMatrix, 0, texMatrix, 0, rotAndFlipMatrix, 0)
 
         // SurfaceTexture.getTimestamp() returns the frame's sensor timestamp in ns.
         val sensorTimestampNs = st.timestamp

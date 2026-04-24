@@ -247,7 +247,11 @@ StreamBuilder<CameraTextureInfo>(
 
 #### Device Rotation
 
-Handle rotation via `WidgetsBindingObserver` and `getDisplayRotation()`. Use the `quarterTurnsFromDisplayRotation()` helper to convert degrees to `RotatedBox.quarterTurns`:
+Every GPU-sourced texture stream (processed preview, raw preview, video recording, `captureImage`) is delivered in a fixed landscape orientation with a vertical flip applied — produced by the pipeline's `rotAndFlipMatrix` in `GpuPipeline.kt`. Consumers receive the same pixels in every sink, so what you see on screen matches the saved file.
+
+`captureNaturalPicture` (hardware JPEG) is not affected — it uses the Android JPEG path with EXIF orientation tagging and continues to orient itself according to the device.
+
+If you want the on-screen preview to track device orientation rather than matching the stored file, wrap the texture in your own `RotatedBox`/`Transform` using `getDisplayRotation()`. Use the `quarterTurnsFromDisplayRotation()` helper to convert degrees to `RotatedBox.quarterTurns`:
 
 ```dart
 import 'package:cambrian_camera/cambrian_camera.dart' 

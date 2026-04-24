@@ -13,7 +13,6 @@ import 'package:cambrian_camera/cambrian_camera.dart'
         FrameResult,
         ProcessingParams,
         RgbSample,
-        quarterTurnsFromDisplayRotation,
         RecordingState,
         WbGains,
         WhiteBalance,
@@ -158,9 +157,6 @@ class _CameraScreenState extends State<CameraScreen>
   /// to scale the patch square to the correct on-screen size.
   CameraTextureInfo? _latestTextureInfo;
 
-  /// Display rotation in degrees CW from portrait: 0, 90, 180, or 270.
-  int _displayRotationDeg = 0;
-
   /// Current stream resolution label (e.g. "4032x3024").
   String _currentResolutionLabel = '';
 
@@ -180,7 +176,6 @@ class _CameraScreenState extends State<CameraScreen>
       onZoomChanged: _onZoomChanged,
       onToggleAf: _toggleAf,
     );
-    _fetchRotation();
   }
 
   @override
@@ -216,18 +211,6 @@ class _CameraScreenState extends State<CameraScreen>
         break;
     }
   }
-
-  @override
-  void didChangeMetrics() {
-    _fetchRotation();
-  }
-
-  Future<void> _fetchRotation() async {
-    final deg = await CambrianCamera.getDisplayRotation();
-    if (mounted) setState(() => _displayRotationDeg = deg);
-  }
-
-  int get _quarterTurns => quarterTurnsFromDisplayRotation(_displayRotationDeg);
 
   Future<void> _openCamera() async {
     final status = await Permission.camera.request();
@@ -286,7 +269,6 @@ class _CameraScreenState extends State<CameraScreen>
           setState(() => _isRecording = false);
         }
       });
-      _fetchRotation();
     } catch (e) {
       // Camera may not be available in all environments (e.g. emulators).
       // The UI degrades gracefully to a black placeholder.
@@ -1009,13 +991,10 @@ class _CameraScreenState extends State<CameraScreen>
             _latestTextureInfo = t;
             return FittedBox(
               fit: BoxFit.contain,
-              child: RotatedBox(
-                quarterTurns: _quarterTurns,
-                child: SizedBox(
-                  width: t.width.toDouble(),
-                  height: t.height.toDouble(),
-                  child: Texture(textureId: t.textureId),
-                ),
+              child: SizedBox(
+                width: t.width.toDouble(),
+                height: t.height.toDouble(),
+                child: Texture(textureId: t.textureId),
               ),
             );
           },
@@ -1026,7 +1005,6 @@ class _CameraScreenState extends State<CameraScreen>
               target: _calibrationTarget!,
               onConfirm: () => unawaited(_onCapture()),
               textureInfo: _latestTextureInfo,
-              quarterTurns: _quarterTurns,
             ),
           ),
       ],
@@ -1046,13 +1024,10 @@ class _CameraScreenState extends State<CameraScreen>
         final t = snap.data!;
         return FittedBox(
           fit: BoxFit.contain,
-          child: RotatedBox(
-            quarterTurns: _quarterTurns,
-            child: SizedBox(
-              width: t.width.toDouble(),
-              height: t.height.toDouble(),
-              child: Texture(textureId: t.textureId),
-            ),
+          child: SizedBox(
+            width: t.width.toDouble(),
+            height: t.height.toDouble(),
+            child: Texture(textureId: t.textureId),
           ),
         );
       },

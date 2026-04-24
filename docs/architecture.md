@@ -660,6 +660,42 @@ Camera2 → SurfaceTexture → OES texture
 
 **Raw resources** (allocated only when `rawW_ > 0`): `rawFBO`, `rawPBOs[2]` (double-buffered readback), `rawEGLSurface` (optional preview).
 
+### Fixed output transform: 90° rotation + vertical flip
+
+Both shader programs (`uProgram` for processed, `rawProgram_` for raw) apply
+a uniform `mat4 uTexMatrix` to their UV lookups. Per frame the Kotlin side
+composes:
+
+```
+combinedMatrix = texMatrix × rotAndFlipMatrix
+```
+
+where `texMatrix` is `SurfaceTexture.getTransformMatrix()` (HAL orientation
+correction, which already lands the sensor pixels portrait-correct) and
+`rotAndFlipMatrix` is the constant UV swap `(u, v) → (v, u)` — algebraically
+equivalent to a 90° image rotation followed by a vertical flip
+(`v → 1 − v`). The composed matrix is uploaded as `uTexMatrix` on every
+frame.
+
+**Every GPU sink inherits this transform for free:**
+
+- Preview (window blit from `fbo_`)
+- Video encoder surface (blit from `fbo_`)
+- `captureImage` PBO readback (reads from `fbo_`)
+- Raw stream preview and sinks (`rawFbo_` rendered with the same matrix)
+
+**`captureNaturalPicture` does NOT go through this path.** It uses a
+separate hardware JPEG `ImageReader` and encodes orientation via EXIF tags
+in `CameraController.kt` (combining display rotation, sensor mount, and
+front-camera mirroring). That path stays identical to Android's default
+behavior.
+
+**Consequence for preview widgets:** consumer apps that want the preview
+to track device orientation must wrap the texture in their own
+`RotatedBox`/`Transform` using `CambrianCamera.getDisplayRotation()`. The
+plugin intentionally delivers a fixed orientation so that the same pixels
+land in the encoder, in `captureImage`, and on screen.
+
 ### GPU layer: source dims vs output dims
 
 The GPU renderer tracks two independent dimension pairs:
