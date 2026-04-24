@@ -598,14 +598,6 @@ interface CameraHostApi {
    */
   fun getPersistedProcessingParams(handle: Long): CamProcessingParams?
   /**
-   * Returns the current display rotation in degrees CW from portrait: 0, 90, 180, or 270.
-   *
-   * Used by Dart preview widgets to select the correct [RotatedBox.quarterTurns]
-   * for all four device orientations, since [MediaQuery.orientation] only
-   * distinguishes portrait from landscape.
-   */
-  fun getDisplayRotation(): Long
-  /**
    * Samples the center 96×96 pixel patch of the most recent GPU-processed
    * RGBA frame and returns the trimmed-mean R, G, B as values in [0.0, 1.0].
    *
@@ -893,21 +885,6 @@ interface CameraHostApi {
             val handleArg = args[0] as Long
             val wrapped: List<Any?> = try {
               listOf(api.getPersistedProcessingParams(handleArg))
-            } catch (exception: Throwable) {
-              wrapError(exception)
-            }
-            reply.reply(wrapped)
-          }
-        } else {
-          channel.setMessageHandler(null)
-        }
-      }
-      run {
-        val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.cambrian_camera.CameraHostApi.getDisplayRotation$separatedMessageChannelSuffix", codec)
-        if (api != null) {
-          channel.setMessageHandler { _, reply ->
-            val wrapped: List<Any?> = try {
-              listOf(api.getDisplayRotation())
             } catch (exception: Throwable) {
               wrapError(exception)
             }

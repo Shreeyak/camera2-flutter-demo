@@ -227,6 +227,17 @@ private:
     GLuint rawProgram_    = 0;
     GLuint rawFbo_        = 0;
     GLuint rawFboTexture_ = 0;
+
+    // Y-flipped readback mirror for the full-res path — always allocated alongside fbo_.
+    // A glBlitFramebuffer with inverted dst-Y writes into this FBO immediately before
+    // glReadPixels so the PBO delivers rows in image-top-down order to match the preview.
+    GLuint fullResReadbackFbo_ = 0;
+    GLuint fullResReadbackTex_ = 0;
+
+    // Y-flipped readback mirror for the raw path — only allocated when rawW_ > 0.
+    // Same role as fullResReadbackFbo_ but sized to rawW_ × rawH_.
+    GLuint rawReadbackFbo_  = 0;
+    GLuint rawReadbackTex_  = 0;
     GLuint rawPbo_[2]      = {0, 0};
     bool   rawFirstFrame_  = true;
     PboMeta rawPboMeta_[2] = {};

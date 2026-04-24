@@ -224,7 +224,9 @@ class CameraCapabilities {
 /// Texture(textureId: info.textureId)
 /// ```
 /// [width] and [height] are the native pixel dimensions of the texture.
-/// Use [CambrianCamera.getDisplayRotation] to get the rotation needed.
+/// The texture is delivered in a fixed GPU-applied orientation (rotation +
+/// vertical flip, see `GpuPipeline.rotAndFlipMatrix`); no additional wrapper
+/// rotation is required for the on-screen preview to match stored files.
 @immutable
 class CameraTextureInfo {
   const CameraTextureInfo({
@@ -238,21 +240,22 @@ class CameraTextureInfo {
   final int height;
 }
 
-/// Converts display rotation degrees to [RotatedBox.quarterTurns].
+/// Converts a display rotation in degrees (CW from portrait: 0, 90, 180, 270)
+/// to a `RotatedBox.quarterTurns` value.
 ///
-/// [displayRotationDeg] is the value returned by [CambrianCamera.getDisplayRotation]:
-/// degrees clockwise from portrait: 0, 90, 180, or 270.
-///
-/// The GPU pipeline outputs landscape-right frames (ROTATION_270 perspective).
-/// See GpuPipeline.kt: the fixed 90° CW UV rotation in the shader normalises
-/// every frame to landscape-right orientation, independent of device rotation.
-/// This function accounts for that to compute the correct number of 90° CW
-/// rotations to apply to the preview texture:
+/// The plugin no longer exposes a `getDisplayRotation` API; obtain the degrees
+/// from Flutter (`MediaQuery.orientationOf(context)`, `SystemChrome`, or your
+/// own source) if you want to re-orient the GPU-delivered preview. Note that
+/// the GPU pipeline already applies a fixed rotation + vertical flip to every
+/// stream (see `GpuPipeline.rotAndFlipMatrix`), so preview, video, and
+/// `captureImage` match one another without any `RotatedBox` wrapping. The
+/// table below is retained for consumers that re-introduce
+/// orientation-tracked previews using a non-flipped reference frame.
 ///
 ///   0°  (portrait)          → 1 turn  (90° CW)
-///   90° (landscape-left)    → 2 turns (180° — landscape-left from landscape-right)
+///   90° (landscape-left)    → 2 turns (180°)
 ///   180° (reverse-portrait) → 3 turns (90° CCW)
-///   270° (landscape-right)  → 0 turns (no rotation — matches GPU output)
+///   270° (landscape-right)  → 0 turns
 int quarterTurnsFromDisplayRotation(int displayRotationDeg) => switch (displayRotationDeg) {
   90  => 2,   // landscape-left — 180° from landscape-right GPU output
   180 => 3,   // reverse-portrait

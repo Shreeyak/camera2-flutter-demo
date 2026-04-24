@@ -196,9 +196,6 @@ class CambrianCamera {
   /// (inferred from fileName extension; default PNG), writes EXIF metadata.
   Future<String> captureImage({String? outputDirectory, String? fileName});
 
-  /// Returns display rotation in degrees CW from portrait (0/90/180/270).
-  static Future<int> getDisplayRotation();
-
   /// Native pipeline pointer for C++ consumer registration, or null if not initialized.
   Future<int?> getNativePipelineHandle();
 
@@ -314,7 +311,7 @@ class FrameResult {
 
 Defined in `packages/cambrian_camera/pigeons/camera_api.dart`. Generated outputs: `messages.g.dart` (Dart), `Messages.g.kt` (Kotlin), `Messages.g.swift` (iOS stub).
 
-**HostApi** (Dart → Kotlin): `open`, `getCapabilities`, `updateSettings`, `setResolution`, `setProcessingParams`, `captureNaturalPicture`, `captureImage`, `getNativePipelineHandle`, `startRecording`, `stopRecording`, `close`, `pause`, `resume`, `getPersistedProcessingParams`, `getDisplayRotation`, `sampleCenterPatch`
+**HostApi** (Dart → Kotlin): `open`, `getCapabilities`, `updateSettings`, `setResolution`, `setProcessingParams`, `captureNaturalPicture`, `captureImage`, `getNativePipelineHandle`, `startRecording`, `stopRecording`, `close`, `pause`, `resume`, `getPersistedProcessingParams`, `sampleCenterPatch`
 
 **FlutterApi** (Kotlin → Dart): `onStateChanged`, `onError`, `onFrameResult`, `onRecordingStateChanged`
 
@@ -659,6 +656,56 @@ Camera2 → SurfaceTexture → OES texture
 **Failure handling:** If raw init fails, `rawW_` is set to 0 and processed pipeline continues. Check `capabilities.rawStreamWidth > 0` to confirm raw is active.
 
 **Raw resources** (allocated only when `rawW_ > 0`): `rawFBO`, `rawPBOs[2]` (double-buffered readback), `rawEGLSurface` (optional preview).
+
+### Fixed output transform: 90° rotation + vertical flip
+
+Both shader programs (`uProgram` for processed, `rawProgram_` for raw) apply
+a uniform `mat4 uTexMatrix` to their UV lookups. Per frame the Kotlin side
+composes:
+
+```
+combinedMatrix = texMatrix × rotAndFlipMatrix
+```
+
+where `texMatrix` is `SurfaceTexture.getTransformMatrix()` (HAL orientation
+correction, which already lands the sensor pixels portrait-correct) and
+`rotAndFlipMatrix` is the constant UV swap `(u, v) → (v, u)` — algebraically
+equivalent to a 90° image rotation followed by a vertical flip
+(`v → 1 − v`). The composed matrix is uploaded as `uTexMatrix` on every
+frame.
+
+**Every GPU sink inherits this transform for free:**
+
+- Preview (window blit from `fbo_`)
+- Video encoder surface (blit from `fbo_`)
+- `captureImage` PBO readback (reads from `fullResReadbackFbo_`, Y-flip mirror of `fbo_`)
+- Tracker PBO readback (reads from `trackerFbo_`, populated via Y-inverted blit from `fbo_`)
+- Raw stream preview (blit from `rawFbo_`)
+- Raw CV sinks (reads from `rawReadbackFbo_`, Y-flip mirror of `rawFbo_`)
+
+**Readback-path Y-flip mirror FBOs.** The `captureImage` / tracker / raw
+`glReadPixels` paths go through dedicated mirror FBOs (`fullResReadbackFbo_`,
+`rawReadbackFbo_`) populated by a `glBlitFramebuffer` with inverted dst-Y;
+the tracker path's existing downsample blit uses inverted dst-Y directly.
+This compensates for the GL → image-encoder row-order mismatch (`glReadPixels`
+returns bottom-up while JPEG/PNG encoders and CV consumers interpret rows
+top-down) so every sink sees the same orientation as the preview. Preview and
+video encoder paths do not touch the mirrors — they blit directly from `fbo_`
+/ `rawFbo_` as before.
+
+**`captureNaturalPicture` does NOT go through this path.** It uses a
+separate hardware JPEG `ImageReader` and encodes orientation via EXIF tags
+in `CameraController.kt` (combining display rotation, sensor mount, and
+front-camera mirroring). That path stays identical to Android's default
+behavior.
+
+**Consequence for preview widgets:** the plugin intentionally delivers a
+fixed orientation so the same pixels land in the encoder, in `captureImage`,
+and on screen. Consumer apps that want the preview to track device
+orientation must read the device rotation through a Flutter-side API
+(e.g. `MediaQuery.orientationOf(context)`) and wrap the texture in their
+own `RotatedBox`/`Transform` — the plugin no longer exposes a
+`getDisplayRotation` helper.
 
 ### GPU layer: source dims vs output dims
 

@@ -1,0 +1,28 @@
+PODS:
+  - cambrian_camera (0.1.0):
+    - Flutter
+  - Flutter (1.0.0)
+  - permission_handler_apple (9.3.0):
+    - Flutter
+
+DEPENDENCIES:
+  - cambrian_camera (from `.symlinks/plugins/cambrian_camera/ios`)
+  - Flutter (from `Flutter`)
+  - permission_handler_apple (from `.symlinks/plugins/permission_handler_apple/ios`)
+
+EXTERNAL SOURCES:
+  cambrian_camera:
+    :path: ".symlinks/plugins/cambrian_camera/ios"
+  Flutter:
+    :path: Flutter
+  permission_handler_apple:
+    :path: ".symlinks/plugins/permission_handler_apple/ios"
+
+SPEC CHECKSUMS:
+  cambrian_camera: 9ce08b1bf0cbfbe5bb0b44903df19db179d9cb7c
+  Flutter: cabc95a1d2626b1b06e7179b784ebcf0c0cde467
+  permission_handler_apple: 4ed2196e43d0651e8ff7ca3483a069d469701f2d
+
+PODFILE CHECKSUM: a3b6f034f0d79a209652621b979bc9d6707da7a1
+
+COCOAPODS: 1.16.2

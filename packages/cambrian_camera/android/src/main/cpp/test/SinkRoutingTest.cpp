@@ -233,7 +233,6 @@ TEST(SinkDataTest, SinkFrameMetadataMatchesInput) {
     inMeta.sensorTimestampNs = 123456789;
     inMeta.exposureTimeNs    = 33333333;
     inMeta.iso               = 800;
-    inMeta.displayRotation   = 90;
 
     std::promise<void> done;
     cam::SinkFrame received{};
@@ -257,7 +256,6 @@ TEST(SinkDataTest, SinkFrameMetadataMatchesInput) {
     EXPECT_EQ(received.meta.sensorTimestampNs, 123456789);
     EXPECT_EQ(received.meta.exposureTimeNs, 33333333);
     EXPECT_EQ(received.meta.iso, 800);
-    EXPECT_EQ(received.meta.displayRotation, 90);
 }
 
 TEST(SinkDataTest, EmptyConsumerVectorSkipsAllocation) {

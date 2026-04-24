@@ -978,38 +978,6 @@ class CameraHostApi {
     }
   }
 
-  /// Returns the current display rotation in degrees CW from portrait: 0, 90, 180, or 270.
-  ///
-  /// Used by Dart preview widgets to select the correct [RotatedBox.quarterTurns]
-  /// for all four device orientations, since [MediaQuery.orientation] only
-  /// distinguishes portrait from landscape.
-  Future<int> getDisplayRotation() async {
-    final String pigeonVar_channelName = 'dev.flutter.pigeon.cambrian_camera.CameraHostApi.getDisplayRotation$pigeonVar_messageChannelSuffix';
-    final BasicMessageChannel<Object?> pigeonVar_channel = BasicMessageChannel<Object?>(
-      pigeonVar_channelName,
-      pigeonChannelCodec,
-      binaryMessenger: pigeonVar_binaryMessenger,
-    );
-    final List<Object?>? pigeonVar_replyList =
-        await pigeonVar_channel.send(null) as List<Object?>?;
-    if (pigeonVar_replyList == null) {
-      throw _createConnectionError(pigeonVar_channelName);
-    } else if (pigeonVar_replyList.length > 1) {
-      throw PlatformException(
-        code: pigeonVar_replyList[0]! as String,
-        message: pigeonVar_replyList[1] as String?,
-        details: pigeonVar_replyList[2],
-      );
-    } else if (pigeonVar_replyList[0] == null) {
-      throw PlatformException(
-        code: 'null-error',
-        message: 'Host platform returned null value for non-null return value.',
-      );
-    } else {
-      return (pigeonVar_replyList[0] as int?)!;
-    }
-  }
-
   /// Samples the center 96×96 pixel patch of the most recent GPU-processed
   /// RGBA frame and returns the trimmed-mean R, G, B as values in [0.0, 1.0].
   ///

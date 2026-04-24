@@ -406,36 +406,6 @@ void ImagePipeline::shutdownConsumers() {
 // Capture helpers
 // ---------------------------------------------------------------------------
 
-/// Rotates an RGBA pixel buffer 90° CW, producing a new buffer with swapped dimensions.
-///
-/// The GPU pipeline renders into a portrait-dimensioned FBO (src_w × src_h) using a
-/// 90° CW UV rotation to normalise output to landscape-right. The pixel data therefore
-/// needs a 90° CW rotation before saving to disk to produce a landscape image.
-///
-/// 90° CW formula: dst(nr, nc) = src(src_h - 1 - nc, nr)
-///   dst dimensions: new_width = src_h, new_height = src_w.
-///
-/// @return RGBA buffer of size (src_h * src_w * 4), width = src_h, height = src_w.
-static std::vector<uint8_t> rotateRgba90CW(
-        const uint8_t* src, int src_w, int src_h) {
-    const int dst_w = src_h;
-    const int dst_h = src_w;
-    std::vector<uint8_t> dst(static_cast<size_t>(dst_w) * dst_h * 4);
-    for (int nr = 0; nr < dst_h; ++nr) {
-        for (int nc = 0; nc < dst_w; ++nc) {
-            const int old_r = src_h - 1 - nc;
-            const int old_c = nr;
-            const uint8_t* sp = src + (old_r * src_w + old_c) * 4;
-            uint8_t* dp = dst.data() + (nr * dst_w + nc) * 4;
-            dp[0] = sp[0];
-            dp[1] = sp[1];
-            dp[2] = sp[2];
-            dp[3] = sp[3];
-        }
-    }
-    return dst;
-}
-
 // ---------------------------------------------------------------------------
 // On-request still capture
 // ---------------------------------------------------------------------------
@@ -499,18 +469,13 @@ bool ImagePipeline::captureToFile(const std::string& outputPath,
     }
     const bool asJpeg = (fmt == ImageFormat::JPEG);
 
-    const int w      = frame->width;
-    const int h      = frame->height;
-    const uint8_t* data = frame->data.data();
-
-    // Rotate 90° CW to convert the portrait-dimensioned GPU readback buffer
-    // into a landscape image. The GPU pipeline uses a 90° CW UV rotation so
-    // output is always landscape-right; the pixel data must be rotated the
-    // same way before encoding. Output dimensions are h × w (landscape).
-    const std::vector<uint8_t> rotated = rotateRgba90CW(data, w, h);
-    const int out_w = h;    // landscape width
-    const int out_h = w;    // landscape height
-    const uint8_t* enc_data = rotated.data();
+    // The GPU pipeline bakes its final output transform (rotation + vertical flip)
+    // into the FBO via the shader UV matrix in GpuPipeline.kt. The readback buffer
+    // is already in the final orientation that should be written to disk — no CPU
+    // post-processing required.
+    const int out_w = frame->width;
+    const int out_h = frame->height;
+    const uint8_t* enc_data = frame->data.data();
 
 #ifndef __ANDROID__
     LOGE("captureToFile: image encoding not supported in non-Android builds");
@@ -619,15 +584,11 @@ bool ImagePipeline::captureToFd(int fd, bool asJpeg, int jpegQuality,
         capturedFrame_ = nullptr;
     }
 
-    const int w      = frame->width;
-    const int h      = frame->height;
-    const uint8_t* data = frame->data.data();
-
-    // Rotate 90° CW — same reason as captureToFile.
-    const std::vector<uint8_t> rotated = rotateRgba90CW(data, w, h);
-    const int out_w = h;
-    const int out_h = w;
-    const uint8_t* enc_data = rotated.data();
+    // GPU pipeline bakes the final output transform into the FBO — same as
+    // captureToFile. No CPU rotation needed.
+    const int out_w = frame->width;
+    const int out_h = frame->height;
+    const uint8_t* enc_data = frame->data.data();
 
 #ifndef __ANDROID__
     LOGE("captureToFd: image encoding not supported in non-Android builds");

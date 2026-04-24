@@ -994,14 +994,19 @@ class CameraController(
      * [CamSettings.isoMode] and [CamSettings.exposureMode] are tied to a single
      * Camera2 flag (`CONTROL_AE_MODE`), so they must always end up in the same mode:
      *
-     * - **Auto is contagious:** setting either field to `"auto"` automatically
-     *   propagates to the other field.  You may set only one to `"auto"` in a call —
+     * - **Auto is contagious:** when the caller explicitly sets either field to `"auto"`,
+     *   the partner is pulled to `"auto"` too.  You may set only one to `"auto"` in a call;
      *   the partner is pulled along silently.
-     * - **Auto wins over manual:** if one field is `"auto"` and the other is `"manual"`
-     *   after merging, both are pulled to `"auto"`.  This handles the common UI case
-     *   where an ISO slider emits `{iso=auto, exposure=manual(lastValue)}` — the intent
-     *   is to switch to auto mode, and the stale manual value on the other slider is
-     *   correctly discarded.
+     * - **Auto wins over manual in a mixed call:** if the caller sends one field as
+     *   `"auto"` and the other as `"manual"` in the same call, both are pulled to `"auto"`.
+     *   This handles the common UI case where an ISO slider emits
+     *   `{iso=auto, exposure=manual(lastValue)}` — the intent is to switch to auto mode,
+     *   and the stale manual value on the other slider is correctly discarded.
+     *
+     *   Only the incoming fields are inspected for auto-propagation.  A `"manual"` value
+     *   in `incoming` with a null partner does NOT get pulled to auto just because
+     *   `appliedSettings` happens to have `"auto"` for the partner — that case falls
+     *   through to the latch rule below.
      * - **Manual latches from last AE values:** when only one field is set to manual
      *   (the other is null = "don't change"), the partner is automatically seeded from
      *   the last sensor values reported by Camera2 capture results
@@ -1014,18 +1019,25 @@ class CameraController(
     fun updateSettings(incoming: CamSettings) {
         // Phase 1 (merge) + auto-propagation.
         // Camera2 ties ISO and exposure to a single CONTROL_AE_MODE flag (ON = both auto,
-        // OFF = both manual).  Auto is contagious: if either field is "auto" after merging,
-        // both are pulled to auto.  This means an incoming {iso=auto, exposure=manual} pair
-        // (e.g. from a UI where the ISO slider was moved to auto while exposure retained its
-        // value) resolves correctly — auto wins and both switch to auto mode.
+        // OFF = both manual).  Auto is contagious: when the caller explicitly sets one field
+        // to "auto", the partner is pulled along too.  This also resolves mixed updates like
+        // {iso=auto, exposure=manual}: auto wins and both switch to auto.
+        //
+        // Key: we check `incoming` (what the caller explicitly sent), not `merged` (which
+        // inherits the previous state from appliedSettings).  Otherwise an incoming
+        // {iso=manual(N)} would be silently reset to auto whenever the existing exposureMode
+        // was "auto" — the partner would appear to "win" just because it hadn't been
+        // changed since the last fully-auto state.  The latch-from-last-AE logic below
+        // handles that case correctly: manual ISO with a null exposure in `incoming` falls
+        // through to the latch branch and gets a seeded exposureTimeNs.
         var merged = mergeSettings(appliedSettings, incoming)
-        val mergedIsoAuto = merged.isoMode == "auto"
-        val mergedExpAuto = merged.exposureMode == "auto"
-        if (mergedIsoAuto && !mergedExpAuto) {
-            // iso switched to auto — pull exposure along with it
+        val incomingIsoAuto = incoming.isoMode == "auto"
+        val incomingExpAuto = incoming.exposureMode == "auto"
+        if (incomingIsoAuto && !incomingExpAuto) {
+            // iso explicitly set to auto — pull exposure along with it
             merged = merged.copy(exposureMode = "auto", exposureTimeNs = null)
-        } else if (mergedExpAuto && !mergedIsoAuto) {
-            // exposure switched to auto — pull iso along with it
+        } else if (incomingExpAuto && !incomingIsoAuto) {
+            // exposure explicitly set to auto — pull iso along with it
             merged = merged.copy(isoMode = "auto", iso = null)
         }
 

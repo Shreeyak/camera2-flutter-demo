@@ -6,7 +6,6 @@ import android.content.Context
 import android.os.Build
 import android.provider.MediaStore
 import android.util.Log
-import android.view.Surface
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ProcessLifecycleOwner
@@ -403,23 +402,6 @@ class CambrianCameraPlugin : FlutterPlugin, ActivityAware, CameraHostApi {
     override fun getPersistedProcessingParams(handle: Long): CamProcessingParams? {
         val controller = sessions[handle]?.controller ?: return null
         return controller.getPersistedProcessingParams()
-    }
-
-    /**
-     * Returns the current display rotation in degrees CW from portrait: 0, 90, 180, or 270.
-     *
-     * Used by Dart preview widgets to select the correct [RotatedBox.quarterTurns] for
-     * all four device orientations. Falls back to 0 (portrait) if activity is unavailable.
-     */
-    @Suppress("DEPRECATION")
-    override fun getDisplayRotation(): Long {
-        val rot = activity?.windowManager?.defaultDisplay?.rotation ?: return 0L
-        return when (rot) {
-            Surface.ROTATION_90  ->  90L
-            Surface.ROTATION_180 -> 180L
-            Surface.ROTATION_270 -> 270L
-            else                 ->   0L
-        }
     }
 
     /**

@@ -396,15 +396,20 @@ void GpuRenderer::drawAndReadback(
     checkGlError("draw to full-res FBO");
 
     // -----------------------------------------------------------------------
-    // 3. Downscale: blit full-res FBO → tracker FBO (bilinear)
+    // 3. Downscale: blit full-res FBO → tracker FBO (bilinear) with Y-invert
+    //
+    // Swap dst Y0/Y1 so the tracker FBO holds a vertically-flipped view of
+    // fbo_. The subsequent glReadPixels(trackerFbo_) returns bottom-up rows
+    // which, combined with this flip, delivers image-top-down bytes matching
+    // what the user sees on the preview.
     // -----------------------------------------------------------------------
     glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo_);
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, trackerFbo_);
     glBlitFramebuffer(
         0, 0, width_,        height_,
-        0, 0, trackerWidth_, trackerHeight_,
+        0, trackerHeight_, trackerWidth_, 0,
         GL_COLOR_BUFFER_BIT, GL_LINEAR);
-    checkGlError("blit to tracker FBO");
+    checkGlError("blit to tracker FBO (Y-inverted)");
 
     // -----------------------------------------------------------------------
     // 4. Blit full-res FBO → EGL window surface (preview) + swap
@@ -472,8 +477,16 @@ void GpuRenderer::drawAndReadback(
 
     if (hasTimerQuery_) glBeginQuery(GL_TIME_ELAPSED_EXT, timeQuery_[writeIdx]);
 
-    // Full-res readback
+    // Full-res readback — mirror fbo_ into fullResReadbackFbo_ with dst Y inverted
+    // so the subsequent (bottom-up) glReadPixels returns rows in image-top-down order.
     glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo_);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fullResReadbackFbo_);
+    glBlitFramebuffer(0, 0, width_, height_,
+                      0, height_, width_, 0,
+                      GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    checkGlError("Y-flip blit to full-res readback mirror");
+
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, fullResReadbackFbo_);
     glBindBuffer(GL_PIXEL_PACK_BUFFER, fullResPbo_[writeIdx]);
     glReadPixels(0, 0, width_, height_, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
     if (fullResFence_[writeIdx]) glDeleteSync(fullResFence_[writeIdx]);
@@ -630,8 +643,17 @@ void GpuRenderer::drawAndReadback(
             checkGlError("raw preview blit");
         }
 
-        // Issue async PBO readback for raw frame + insert fence
+        // Issue async PBO readback for raw frame — mirror rawFbo_ into rawReadbackFbo_
+        // with dst Y inverted so the subsequent (bottom-up) glReadPixels returns rows
+        // in image-top-down order, matching the raw preview and the processed preview.
         glBindFramebuffer(GL_READ_FRAMEBUFFER, rawFbo_);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, rawReadbackFbo_);
+        glBlitFramebuffer(0, 0, rawW_, rawH_,
+                          0, rawH_, rawW_, 0,
+                          GL_COLOR_BUFFER_BIT, GL_NEAREST);
+        checkGlError("Y-flip blit to raw readback mirror");
+
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, rawReadbackFbo_);
         glBindBuffer(GL_PIXEL_PACK_BUFFER, rawPbo_[rawWriteIdx]);
         glReadPixels(0, 0, rawW_, rawH_, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
         if (rawFence_[rawWriteIdx]) glDeleteSync(rawFence_[rawWriteIdx]);
@@ -901,6 +923,26 @@ bool GpuRenderer::initGl() {
     }
     checkGlError("full-res FBO");
 
+    // --- Full-res readback mirror (Y-flipped on blit) ---
+    glGenTextures(1, &fullResReadbackTex_);
+    glBindTexture(GL_TEXTURE_2D, fullResReadbackTex_);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width_, height_, 0,
+                 GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glBindTexture(GL_TEXTURE_2D, 0);
+
+    glGenFramebuffers(1, &fullResReadbackFbo_);
+    glBindFramebuffer(GL_FRAMEBUFFER, fullResReadbackFbo_);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                           GL_TEXTURE_2D, fullResReadbackTex_, 0);
+    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+        LOGE("initGl: full-res readback mirror FBO incomplete");
+        releaseGl();
+        return false;
+    }
+    checkGlError("full-res readback mirror FBO");
+
     // --- Tracker FBO ---
     glGenTextures(1, &trackerTexture_);
     glBindTexture(GL_TEXTURE_2D, trackerTexture_);
@@ -1001,6 +1043,29 @@ bool GpuRenderer::initGl() {
                 glBindFramebuffer(GL_FRAMEBUFFER, 0);
                 checkGlError("raw FBO");
 
+                // Raw readback mirror (Y-flipped on blit)
+                glGenTextures(1, &rawReadbackTex_);
+                glBindTexture(GL_TEXTURE_2D, rawReadbackTex_);
+                glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, rawW_, rawH_, 0,
+                             GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+                glBindTexture(GL_TEXTURE_2D, 0);
+
+                glGenFramebuffers(1, &rawReadbackFbo_);
+                glBindFramebuffer(GL_FRAMEBUFFER, rawReadbackFbo_);
+                glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                                       GL_TEXTURE_2D, rawReadbackTex_, 0);
+                if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+                    LOGE("initGl: raw readback mirror FBO incomplete — disabling raw");
+                    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+                    rawW_ = 0;
+                } else {
+                    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+                    checkGlError("raw readback mirror FBO");
+                }
+            }
+            if (rawW_ > 0) {
                 // Raw PBOs (double-buffered)
                 glGenBuffers(2, rawPbo_);
                 for (int i = 0; i < 2; ++i) {
@@ -1017,10 +1082,12 @@ bool GpuRenderer::initGl() {
 
             // If any step above disabled raw, clean up partially-allocated resources
             if (rawW_ == 0) {
-                if (rawPbo_[0])        { glDeleteBuffers(2, rawPbo_);              rawPbo_[0] = rawPbo_[1] = 0; }
-                if (rawFbo_)           { glDeleteFramebuffers(1, &rawFbo_);        rawFbo_        = 0; }
-                if (rawFboTexture_)    { glDeleteTextures(1, &rawFboTexture_);     rawFboTexture_ = 0; }
-                if (rawProgram_)       { glDeleteProgram(rawProgram_);             rawProgram_    = 0; }
+                if (rawPbo_[0])        { glDeleteBuffers(2, rawPbo_);               rawPbo_[0] = rawPbo_[1] = 0; }
+                if (rawReadbackFbo_)   { glDeleteFramebuffers(1, &rawReadbackFbo_); rawReadbackFbo_ = 0; }
+                if (rawReadbackTex_)   { glDeleteTextures(1, &rawReadbackTex_);     rawReadbackTex_ = 0; }
+                if (rawFbo_)           { glDeleteFramebuffers(1, &rawFbo_);         rawFbo_        = 0; }
+                if (rawFboTexture_)    { glDeleteTextures(1, &rawFboTexture_);      rawFboTexture_ = 0; }
+                if (rawProgram_)       { glDeleteProgram(rawProgram_);              rawProgram_    = 0; }
             }
         }
     }
@@ -1051,16 +1118,20 @@ void GpuRenderer::releaseGl() {
     }
 
     // Raw stream resources
-    if (rawPbo_[0])        { glDeleteBuffers(2, rawPbo_);              rawPbo_[0] = rawPbo_[1] = 0; }
-    if (rawFbo_)           { glDeleteFramebuffers(1, &rawFbo_);        rawFbo_        = 0; }
-    if (rawFboTexture_)    { glDeleteTextures(1, &rawFboTexture_);     rawFboTexture_ = 0; }
-    if (rawProgram_)       { glDeleteProgram(rawProgram_);             rawProgram_    = 0; }
+    if (rawPbo_[0])        { glDeleteBuffers(2, rawPbo_);               rawPbo_[0] = rawPbo_[1] = 0; }
+    if (rawReadbackFbo_)   { glDeleteFramebuffers(1, &rawReadbackFbo_); rawReadbackFbo_ = 0; }
+    if (rawReadbackTex_)   { glDeleteTextures(1, &rawReadbackTex_);     rawReadbackTex_ = 0; }
+    if (rawFbo_)           { glDeleteFramebuffers(1, &rawFbo_);         rawFbo_        = 0; }
+    if (rawFboTexture_)    { glDeleteTextures(1, &rawFboTexture_);      rawFboTexture_ = 0; }
+    if (rawProgram_)       { glDeleteProgram(rawProgram_);              rawProgram_    = 0; }
 
     // Processed pipeline resources
     if (fullResPbo_[0]) { glDeleteBuffers(2, fullResPbo_); fullResPbo_[0] = fullResPbo_[1] = 0; }
     if (trackerPbo_[0]) { glDeleteBuffers(2, trackerPbo_); trackerPbo_[0] = trackerPbo_[1] = 0; }
     if (trackerFbo_)     { glDeleteFramebuffers(1, &trackerFbo_);  trackerFbo_     = 0; }
     if (trackerTexture_) { glDeleteTextures(1, &trackerTexture_);  trackerTexture_ = 0; }
+    if (fullResReadbackFbo_) { glDeleteFramebuffers(1, &fullResReadbackFbo_); fullResReadbackFbo_ = 0; }
+    if (fullResReadbackTex_) { glDeleteTextures(1, &fullResReadbackTex_);      fullResReadbackTex_ = 0; }
     if (fbo_)            { glDeleteFramebuffers(1, &fbo_);         fbo_            = 0; }
     if (fboTexture_)     { glDeleteTextures(1, &fboTexture_);      fboTexture_     = 0; }
     if (vbo_)            { glDeleteBuffers(1, &vbo_);              vbo_            = 0; }

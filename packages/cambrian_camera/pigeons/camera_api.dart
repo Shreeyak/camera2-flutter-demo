@@ -367,13 +367,6 @@ abstract class CameraHostApi {
   /// values instead of sending default zeros that would overwrite the persisted state.
   CamProcessingParams? getPersistedProcessingParams(int handle);
 
-  /// Returns the current display rotation in degrees CW from portrait: 0, 90, 180, or 270.
-  ///
-  /// Used by Dart preview widgets to select the correct [RotatedBox.quarterTurns]
-  /// for all four device orientations, since [MediaQuery.orientation] only
-  /// distinguishes portrait from landscape.
-  int getDisplayRotation();
-
   /// Samples the center 96×96 pixel patch of the most recent GPU-processed
   /// RGBA frame and returns the trimmed-mean R, G, B as values in [0.0, 1.0].
   ///

@@ -245,45 +245,13 @@ StreamBuilder<CameraTextureInfo>(
 )
 ```
 
-#### Device Rotation
+#### Fixed output orientation
 
-Handle rotation via `WidgetsBindingObserver` and `getDisplayRotation()`. Use the `quarterTurnsFromDisplayRotation()` helper to convert degrees to `RotatedBox.quarterTurns`:
+Every GPU-sourced stream (processed preview, raw preview, video recording, `captureImage`) is delivered in a fixed orientation — a 90° rotation followed by a vertical flip — produced by the pipeline's `rotAndFlipMatrix` in `GpuPipeline.kt`. Consumers receive the same pixels in every sink, so what you see on screen matches the saved file byte-for-byte.
 
-```dart
-import 'package:cambrian_camera/cambrian_camera.dart' 
-    show quarterTurnsFromDisplayRotation;
+`captureNaturalPicture` (hardware JPEG) is not affected — it uses the Android JPEG path with EXIF orientation tagging and continues to orient itself according to the device rotation at capture time.
 
-class _MyState extends State<MyWidget> with WidgetsBindingObserver {
-  int _displayRotationDeg = 0;
-
-  @override
-  void initState() {
-    super.initState();
-    WidgetsBinding.instance.addObserver(this);
-    _fetchRotation();
-  }
-
-  @override
-  void dispose() {
-    WidgetsBinding.instance.removeObserver(this);
-    super.dispose();
-  }
-
-  @override
-  void didChangeMetrics() {
-    _fetchRotation();
-  }
-
-  Future<void> _fetchRotation() async {
-    final deg = await CambrianCamera.getDisplayRotation();
-    if (mounted) setState(() => _displayRotationDeg = deg);
-  }
-
-  int get _quarterTurns => quarterTurnsFromDisplayRotation(_displayRotationDeg);
-
-  // Use _quarterTurns in RotatedBox wrapping your texture
-}
-```
+There is no longer a `getDisplayRotation()` API on the plugin. The demo app previously used it to drive a `RotatedBox` over the preview texture; that is removed so the on-screen preview matches the stored file. If your app needs the preview to track device rotation instead, read the device rotation yourself (e.g. via `MediaQuery.orientationOf(context)` or `SystemChrome`) and wrap the `Texture` in a `RotatedBox` / `Transform` of your choosing.
 
 ---
 
