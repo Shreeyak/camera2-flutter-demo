@@ -901,6 +901,26 @@ bool GpuRenderer::initGl() {
     }
     checkGlError("full-res FBO");
 
+    // --- Full-res readback mirror (Y-flipped on blit) ---
+    glGenTextures(1, &fullResReadbackTex_);
+    glBindTexture(GL_TEXTURE_2D, fullResReadbackTex_);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width_, height_, 0,
+                 GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glBindTexture(GL_TEXTURE_2D, 0);
+
+    glGenFramebuffers(1, &fullResReadbackFbo_);
+    glBindFramebuffer(GL_FRAMEBUFFER, fullResReadbackFbo_);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                           GL_TEXTURE_2D, fullResReadbackTex_, 0);
+    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+        LOGE("initGl: full-res readback mirror FBO incomplete");
+        releaseGl();
+        return false;
+    }
+    checkGlError("full-res readback mirror FBO");
+
     // --- Tracker FBO ---
     glGenTextures(1, &trackerTexture_);
     glBindTexture(GL_TEXTURE_2D, trackerTexture_);
@@ -1061,6 +1081,8 @@ void GpuRenderer::releaseGl() {
     if (trackerPbo_[0]) { glDeleteBuffers(2, trackerPbo_); trackerPbo_[0] = trackerPbo_[1] = 0; }
     if (trackerFbo_)     { glDeleteFramebuffers(1, &trackerFbo_);  trackerFbo_     = 0; }
     if (trackerTexture_) { glDeleteTextures(1, &trackerTexture_);  trackerTexture_ = 0; }
+    if (fullResReadbackFbo_) { glDeleteFramebuffers(1, &fullResReadbackFbo_); fullResReadbackFbo_ = 0; }
+    if (fullResReadbackTex_) { glDeleteTextures(1, &fullResReadbackTex_);      fullResReadbackTex_ = 0; }
     if (fbo_)            { glDeleteFramebuffers(1, &fbo_);         fbo_            = 0; }
     if (fboTexture_)     { glDeleteTextures(1, &fboTexture_);      fboTexture_     = 0; }
     if (vbo_)            { glDeleteBuffers(1, &vbo_);              vbo_            = 0; }
