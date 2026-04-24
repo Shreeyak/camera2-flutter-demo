@@ -678,8 +678,20 @@ frame.
 
 - Preview (window blit from `fbo_`)
 - Video encoder surface (blit from `fbo_`)
-- `captureImage` PBO readback (reads from `fbo_`)
-- Raw stream preview and sinks (`rawFbo_` rendered with the same matrix)
+- `captureImage` PBO readback (reads from `fullResReadbackFbo_`, Y-flip mirror of `fbo_`)
+- Tracker PBO readback (reads from `trackerFbo_`, populated via Y-inverted blit from `fbo_`)
+- Raw stream preview (blit from `rawFbo_`)
+- Raw CV sinks (reads from `rawReadbackFbo_`, Y-flip mirror of `rawFbo_`)
+
+**Readback-path Y-flip mirror FBOs.** The `captureImage` / tracker / raw
+`glReadPixels` paths go through dedicated mirror FBOs (`fullResReadbackFbo_`,
+`rawReadbackFbo_`) populated by a `glBlitFramebuffer` with inverted dst-Y;
+the tracker path's existing downsample blit uses inverted dst-Y directly.
+This compensates for the GL → image-encoder row-order mismatch (`glReadPixels`
+returns bottom-up while JPEG/PNG encoders and CV consumers interpret rows
+top-down) so every sink sees the same orientation as the preview. Preview and
+video encoder paths do not touch the mirrors — they blit directly from `fbo_`
+/ `rawFbo_` as before.
 
 **`captureNaturalPicture` does NOT go through this path.** It uses a
 separate hardware JPEG `ImageReader` and encodes orientation via EXIF tags
