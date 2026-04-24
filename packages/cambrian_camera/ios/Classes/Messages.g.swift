@@ -643,12 +643,6 @@ protocol CameraHostApi {
   /// Dart should call this after [open] to initialize slider UI with the user's last-known
   /// values instead of sending default zeros that would overwrite the persisted state.
   func getPersistedProcessingParams(handle: Int64) throws -> CamProcessingParams?
-  /// Returns the current display rotation in degrees CW from portrait: 0, 90, 180, or 270.
-  ///
-  /// Used by Dart preview widgets to select the correct [RotatedBox.quarterTurns]
-  /// for all four device orientations, since [MediaQuery.orientation] only
-  /// distinguishes portrait from landscape.
-  func getDisplayRotation() throws -> Int64
   /// Samples the center 96×96 pixel patch of the most recent GPU-processed
   /// RGBA frame and returns the trimmed-mean R, G, B as values in [0.0, 1.0].
   ///
@@ -915,24 +909,6 @@ class CameraHostApiSetup {
       }
     } else {
       getPersistedProcessingParamsChannel.setMessageHandler(nil)
-    }
-    /// Returns the current display rotation in degrees CW from portrait: 0, 90, 180, or 270.
-    ///
-    /// Used by Dart preview widgets to select the correct [RotatedBox.quarterTurns]
-    /// for all four device orientations, since [MediaQuery.orientation] only
-    /// distinguishes portrait from landscape.
-    let getDisplayRotationChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.cambrian_camera.CameraHostApi.getDisplayRotation\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
-    if let api = api {
-      getDisplayRotationChannel.setMessageHandler { _, reply in
-        do {
-          let result = try api.getDisplayRotation()
-          reply(wrapResult(result))
-        } catch {
-          reply(wrapError(error))
-        }
-      }
-    } else {
-      getDisplayRotationChannel.setMessageHandler(nil)
     }
     /// Samples the center 96×96 pixel patch of the most recent GPU-processed
     /// RGBA frame and returns the trimmed-mean R, G, B as values in [0.0, 1.0].

@@ -555,13 +555,6 @@ class CambrianCamera {
   Future<String> captureImage({String? outputDirectory, String? fileName}) =>
       _hostApi.captureImage(_handle, outputDirectory, fileName);
 
-  /// Returns the current display rotation in degrees CW from portrait: 0, 90, 180, or 270.
-  ///
-  /// This is a device-level query, not a per-camera query. Used by preview widgets
-  /// to select the correct [RotatedBox.quarterTurns] for all four device orientations.
-  static Future<int> getDisplayRotation() =>
-      CameraHostApi().getDisplayRotation();
-
   /// Starts recording to an MP4 file. Returns (contentUri, displayName).
   ///
   /// [outputDirectory] is a MediaStore RELATIVE_PATH (e.g. "Movies/MyApp/").

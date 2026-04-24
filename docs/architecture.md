@@ -196,9 +196,6 @@ class CambrianCamera {
   /// (inferred from fileName extension; default PNG), writes EXIF metadata.
   Future<String> captureImage({String? outputDirectory, String? fileName});
 
-  /// Returns display rotation in degrees CW from portrait (0/90/180/270).
-  static Future<int> getDisplayRotation();
-
   /// Native pipeline pointer for C++ consumer registration, or null if not initialized.
   Future<int?> getNativePipelineHandle();
 
@@ -314,7 +311,7 @@ class FrameResult {
 
 Defined in `packages/cambrian_camera/pigeons/camera_api.dart`. Generated outputs: `messages.g.dart` (Dart), `Messages.g.kt` (Kotlin), `Messages.g.swift` (iOS stub).
 
-**HostApi** (Dart → Kotlin): `open`, `getCapabilities`, `updateSettings`, `setResolution`, `setProcessingParams`, `captureNaturalPicture`, `captureImage`, `getNativePipelineHandle`, `startRecording`, `stopRecording`, `close`, `pause`, `resume`, `getPersistedProcessingParams`, `getDisplayRotation`, `sampleCenterPatch`
+**HostApi** (Dart → Kotlin): `open`, `getCapabilities`, `updateSettings`, `setResolution`, `setProcessingParams`, `captureNaturalPicture`, `captureImage`, `getNativePipelineHandle`, `startRecording`, `stopRecording`, `close`, `pause`, `resume`, `getPersistedProcessingParams`, `sampleCenterPatch`
 
 **FlutterApi** (Kotlin → Dart): `onStateChanged`, `onError`, `onFrameResult`, `onRecordingStateChanged`
 
@@ -690,11 +687,13 @@ in `CameraController.kt` (combining display rotation, sensor mount, and
 front-camera mirroring). That path stays identical to Android's default
 behavior.
 
-**Consequence for preview widgets:** consumer apps that want the preview
-to track device orientation must wrap the texture in their own
-`RotatedBox`/`Transform` using `CambrianCamera.getDisplayRotation()`. The
-plugin intentionally delivers a fixed orientation so that the same pixels
-land in the encoder, in `captureImage`, and on screen.
+**Consequence for preview widgets:** the plugin intentionally delivers a
+fixed orientation so the same pixels land in the encoder, in `captureImage`,
+and on screen. Consumer apps that want the preview to track device
+orientation must read the device rotation through a Flutter-side API
+(e.g. `MediaQuery.orientationOf(context)`) and wrap the texture in their
+own `RotatedBox`/`Transform` — the plugin no longer exposes a
+`getDisplayRotation` helper.
 
 ### GPU layer: source dims vs output dims
 

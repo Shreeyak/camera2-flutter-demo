@@ -224,7 +224,9 @@ class CameraCapabilities {
 /// Texture(textureId: info.textureId)
 /// ```
 /// [width] and [height] are the native pixel dimensions of the texture.
-/// Use [CambrianCamera.getDisplayRotation] to get the rotation needed.
+/// The texture is delivered in a fixed GPU-applied orientation (rotation +
+/// vertical flip, see `GpuPipeline.rotAndFlipMatrix`); no additional wrapper
+/// rotation is required for the on-screen preview to match stored files.
 @immutable
 class CameraTextureInfo {
   const CameraTextureInfo({
@@ -238,26 +240,17 @@ class CameraTextureInfo {
   final int height;
 }
 
-/// Converts display rotation degrees to [RotatedBox.quarterTurns].
+/// Converts a display rotation in degrees (CW from portrait: 0, 90, 180, 270)
+/// to a `RotatedBox.quarterTurns` value.
 ///
-/// [displayRotationDeg] is the value returned by [CambrianCamera.getDisplayRotation]:
-/// degrees clockwise from portrait: 0, 90, 180, or 270.
-///
-/// ### Caveat (post `rotAndFlipMatrix` pipeline change)
-///
-/// The GPU pipeline now applies a fixed 90° image rotation followed by a
-/// **vertical flip** (see `GpuPipeline.kt:rotAndFlipMatrix`). The flip is
-/// intentional — preview, video encoder, `captureImage`, and raw stream all
-/// receive the same pixels so what you see on screen matches what gets saved
-/// to disk. A `RotatedBox` can undo a rotation but it cannot undo a flip, so
-/// the values returned by this function rotate the preview to track device
-/// orientation but leave the Y-flip in place.
-///
-/// The table below is retained from the pre-flip pipeline (it assumed a
-/// landscape-right, non-flipped GPU output). Consumers that re-introduce
-/// orientation-tracked preview may need to re-derive the quarter-turn values
-/// for the new fixed output — or wrap the texture in both a `RotatedBox`
-/// and a `Transform` that re-flips Y if a non-flipped preview is required.
+/// The plugin no longer exposes a `getDisplayRotation` API; obtain the degrees
+/// from Flutter (`MediaQuery.orientationOf(context)`, `SystemChrome`, or your
+/// own source) if you want to re-orient the GPU-delivered preview. Note that
+/// the GPU pipeline already applies a fixed rotation + vertical flip to every
+/// stream (see `GpuPipeline.rotAndFlipMatrix`), so preview, video, and
+/// `captureImage` match one another without any `RotatedBox` wrapping. The
+/// table below is retained for consumers that re-introduce
+/// orientation-tracked previews using a non-flipped reference frame.
 ///
 ///   0°  (portrait)          → 1 turn  (90° CW)
 ///   90° (landscape-left)    → 2 turns (180°)

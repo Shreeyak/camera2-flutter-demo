@@ -17,9 +17,6 @@ struct FrameMetadata {
     int64_t sensorTimestampNs; ///< Sensor capture start time, nanoseconds
     int64_t exposureTimeNs;    ///< Actual exposure duration, nanoseconds
     int32_t iso;               ///< Sensor sensitivity (ISO equivalent)
-    int32_t displayRotation;   ///< Device display rotation in degrees CW from portrait: 0, 90, 180, 270.
-                               ///< Pixel data is always landscape-right; use this to relate it to
-                               ///< what was visible on screen at capture time.
     // Future: focus distance, WB gains, lens intrinsics, etc.
 };
 

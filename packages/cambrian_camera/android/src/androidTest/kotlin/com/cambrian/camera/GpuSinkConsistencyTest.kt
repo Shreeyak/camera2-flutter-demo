@@ -74,8 +74,7 @@ class GpuSinkConsistencyTest {
                 frameId,
                 /* sensorTimestampNs = */ frameId,
                 /* exposureTimeNs = */ 0L,
-                /* iso = */ 0,
-                /* displayRotation = */ 0
+                /* iso = */ 0
             )
 
             // 4b. Second drawAndReadback: maps PBO[1] from the first frame,
@@ -87,8 +86,7 @@ class GpuSinkConsistencyTest {
                 frameId + 1,
                 /* sensorTimestampNs = */ frameId + 1,
                 /* exposureTimeNs = */ 0L,
-                /* iso = */ 0,
-                /* displayRotation = */ 0
+                /* iso = */ 0
             )
 
             // 5. Wait for the consumer dispatch thread to invoke the sink callback.
@@ -172,8 +170,7 @@ class GpuSinkConsistencyTest {
                     (i + 1).toLong(),
                     /* sensorTimestampNs = */ (i + 1).toLong(),
                     /* exposureTimeNs = */ 0L,
-                    /* iso = */ 0,
-                    /* displayRotation = */ 0
+                    /* iso = */ 0
                 )
             }
 

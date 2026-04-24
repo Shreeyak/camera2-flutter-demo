@@ -10,7 +10,6 @@ import android.os.HandlerThread
 import android.os.SystemClock
 import android.util.Log
 import android.view.Surface
-import android.view.WindowManager
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.atomic.AtomicReference
 
@@ -419,18 +418,6 @@ open class GpuPipeline(
         // SurfaceTexture.getTimestamp() returns the frame's sensor timestamp in ns.
         val sensorTimestampNs = st.timestamp
 
-        // Read display rotation for metadata — cheap cached value, does not change per frame.
-        @Suppress("DEPRECATION")
-        val displayRotDeg = when (
-            (context.getSystemService(Context.WINDOW_SERVICE) as WindowManager)
-                .defaultDisplay.rotation
-        ) {
-            Surface.ROTATION_90  ->  90
-            Surface.ROTATION_180 -> 180
-            Surface.ROTATION_270 -> 270
-            else                 ->   0
-        }
-
         nativeGpuDrawAndReadback(
             handle, pipelineHandle,
             oesTexName,
@@ -438,8 +425,7 @@ open class GpuPipeline(
             /* frameId = */ sensorTimestampNs,   // monotonic; used as frame ID
             sensorTimestampNs,
             /* exposureTimeNs = */ 0L,
-            /* iso = */ 0,
-            displayRotDeg
+            /* iso = */ 0
         )
 
         // Poll for stale preview surface after each frame (Step 2: auto-rebind).
@@ -569,8 +555,7 @@ open class GpuPipeline(
             frameId: Long,
             sensorTimestampNs: Long,
             exposureTimeNs: Long,
-            iso: Int,
-            displayRotation: Int
+            iso: Int
         )
     }
 }

@@ -33,30 +33,12 @@ StreamBuilder<CameraTextureInfo>(
 )
 ```
 
-For device rotation, use `getDisplayRotation()` with `WidgetsBindingObserver`:
-
-```dart
-import 'package:cambrian_camera/cambrian_camera.dart' show quarterTurnsFromDisplayRotation;
-
-class _MyState extends State<MyWidget> with WidgetsBindingObserver {
-  int _displayRotationDeg = 0;
-
-  @override
-  void initState() {
-    super.initState();
-    WidgetsBinding.instance.addObserver(this);
-  }
-
-  @override
-  void didChangeMetrics() {
-    CambrianCamera.getDisplayRotation().then((deg) {
-      setState(() => _displayRotationDeg = deg);
-    });
-  }
-
-  int get quarterTurns => quarterTurnsFromDisplayRotation(_displayRotationDeg);
-}
-```
+Preview, video recording, and `captureImage` all receive the same pixels, with the fixed
+rotation + vertical flip applied inside the GPU shader (see `GpuPipeline.rotAndFlipMatrix`).
+Wrap the `Texture` widget in a `SizedBox` using the `CameraTextureInfo.width` / `height`
+dimensions and let `FittedBox` handle scaling — no additional per-orientation rotation is
+needed in the app. `captureNaturalPicture` is unaffected and continues to tag saved JPEGs
+with EXIF orientation as before.
 
 ## Device Capabilities
 
