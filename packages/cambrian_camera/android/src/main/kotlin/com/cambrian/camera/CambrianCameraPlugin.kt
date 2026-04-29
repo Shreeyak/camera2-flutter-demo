@@ -348,7 +348,7 @@ class CambrianCameraPlugin : FlutterPlugin, ActivityAware, CameraHostApi {
 
     /**
      * Captures a still JPEG image using Camera2's hardware ISP and returns its file path.
-     * Does NOT include GPU post-processing (color transforms, LUT, etc.).
+     * Does NOT include GPU post-processing (saturation, contrast, brightness, black balance, gamma).
      *
      * @param handle   The camera handle.
      * @param callback Invoked with [Result.success] containing the absolute file path.

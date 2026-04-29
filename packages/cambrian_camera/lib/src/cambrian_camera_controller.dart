@@ -524,9 +524,10 @@ class CambrianCamera {
   /// Captures a still image using Camera2's hardware ISP and returns its file path.
   ///
   /// **Important:** This method bypasses the GPU post-processing pipeline. The resulting
-  /// image reflects raw ISP output — no LUT, color transforms (saturation, contrast,
-  /// brightness, black-level, gamma) or other adjustments applied by the GPU pipeline
-  /// are present. Use this when you need the highest-fidelity hardware-encoded JPEG.
+  /// image reflects raw ISP output — none of the GPU shader transforms (saturation,
+  /// contrast, brightness, black balance, gamma) or other adjustments applied by the
+  /// GPU pipeline are present. Use this when you need the highest-fidelity
+  /// hardware-encoded JPEG.
   ///
   /// For a post-processed image matching what the user sees on screen, use [captureImage].
   ///

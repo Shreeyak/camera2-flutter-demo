@@ -1422,9 +1422,9 @@ class CameraController(
      * Captures a still JPEG image using Camera2's hardware ISP ImageReader.
      *
      * **Important:** This method bypasses the GPU post-processing pipeline. The resulting image
-     * reflects raw ISP output — no LUT, color transforms (saturation, contrast, brightness,
-     * black-level, gamma) or other adjustments applied by [GpuPipeline] are present.
-     * Use this when you need the highest-fidelity hardware-encoded JPEG.
+     * reflects raw ISP output — none of the GPU shader transforms (saturation, contrast,
+     * brightness, black balance, gamma) or other adjustments applied by [GpuPipeline] are
+     * present. Use this when you need the highest-fidelity hardware-encoded JPEG.
      *
      * For a post-processed image that matches what the user sees on screen, use [captureImage].
      *

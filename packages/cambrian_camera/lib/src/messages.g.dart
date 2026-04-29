@@ -750,7 +750,7 @@ class CameraHostApi {
   }
 
   /// Captures a still JPEG image using Camera2's hardware ISP.
-  /// Does NOT include GPU post-processing (LUT, saturation, contrast, brightness, gamma).
+  /// Does NOT include GPU post-processing (saturation, contrast, brightness, black balance, gamma).
   /// Returns the absolute file path of the saved image.
   Future<String> captureNaturalPicture(int handle) async {
     final String pigeonVar_channelName = 'dev.flutter.pigeon.cambrian_camera.CameraHostApi.captureNaturalPicture$pigeonVar_messageChannelSuffix';

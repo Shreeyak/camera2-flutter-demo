@@ -24,7 +24,7 @@ All paths are relative to `packages/cambrian_camera/android/src/main/`.
 - **No per-consumer copies.** Each `SharedFrame` buffer is allocated once on delivery and ref-counted through the pipeline; downstream dispatch is `shared_ptr` copy only.
 - **`null` = don't change.** `CameraSettings` fields that are `null` retain their previous Kotlin-side values.
 - **ISO ↔ exposure are coupled.** Setting either to `auto` propagates to the other via Camera2's single AE flag.
-- **LUT rebuilt atomically.** When `ProcessingParams` change, the 256-entry LUT is rebuilt and swapped; no partial updates visible to the frame loop.
+- **Shader uniforms are mutex-protected.** When `ProcessingParams` change, `GpuRenderer::setAdjustments()` writes the per-pixel adjustment fields (`brightness_`, `contrast_`, `saturation_`, `blackBalance_[3]`, `gamma_`) under `uniformMu_` (`GpuRenderer.cpp:695`). The GL thread reads them under the same lock before each draw, so updates land atomically — the frame loop never sees a partially-applied set.
 - **Latest-value-wins for CameraSettings.** No debounce — in-flight values are replaced, not queued.
 - **Fire-and-forget for ProcessingParams.** All color transforms are applied by the GPU shader via `GpuPipeline.setAdjustments()`. No CPU processing in `ImagePipeline`.
 - **Recording encodes GPU output directly.** MediaCodec surface receives tone-mapped FBO via EGL blit — no CPU YUV copy.
@@ -184,11 +184,12 @@ class CambrianCamera {
   /// Uses latest-value-wins serialization (see Key Invariants).
   Future<void> updateSettings(CameraSettings settings);
 
-  /// Fire-and-forget: mutex-protected struct copy in C++, next frame picks up new values.
+  /// Fire-and-forget: mutex-protected uniform write in C++ (`GpuRenderer::setAdjustments`),
+  /// next frame picks up new values.
   Future<void> setProcessingParams(ProcessingParams params);
 
   /// Hardware ISP JPEG capture. Does NOT include GPU post-processing
-  /// (LUT, saturation, contrast, brightness, gamma). Highest quality JPEG.
+  /// (saturation, contrast, brightness, black balance, gamma). Highest quality JPEG.
   Future<String> captureNaturalPicture();
 
   /// GPU post-processed frame capture. Reads the next RGBA frame from the

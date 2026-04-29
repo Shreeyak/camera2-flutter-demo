@@ -624,7 +624,7 @@ protocol CameraHostApi {
   func setResolution(handle: Int64, width: Int64, height: Int64, completion: @escaping (Result<Void, Error>) -> Void)
   func setProcessingParams(handle: Int64, params: CamProcessingParams) throws
   /// Captures a still JPEG image using Camera2's hardware ISP.
-  /// Does NOT include GPU post-processing (LUT, saturation, contrast, brightness, gamma).
+  /// Does NOT include GPU post-processing (saturation, contrast, brightness, black balance, gamma).
   /// Returns the absolute file path of the saved image.
   func captureNaturalPicture(handle: Int64, completion: @escaping (Result<String, Error>) -> Void)
   /// Captures the next GPU post-processed frame and saves it to disk.
@@ -743,7 +743,7 @@ class CameraHostApiSetup {
       setProcessingParamsChannel.setMessageHandler(nil)
     }
     /// Captures a still JPEG image using Camera2's hardware ISP.
-    /// Does NOT include GPU post-processing (LUT, saturation, contrast, brightness, gamma).
+    /// Does NOT include GPU post-processing (saturation, contrast, brightness, black balance, gamma).
     /// Returns the absolute file path of the saved image.
     let captureNaturalPictureChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.cambrian_camera.CameraHostApi.captureNaturalPicture\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
     if let api = api {

@@ -569,7 +569,7 @@ There are two capture methods with different trade-offs:
 | Method | Source | Post-processing | Format | Quality |
 |--------|--------|-----------------|--------|---------|
 | `captureNaturalPicture()` | Camera2 hardware ISP | None | JPEG | Highest (hardware encoder) |
-| `captureImage()` | GPU post-processed pipeline | Full (LUT, color, gamma…) | JPEG or PNG | Good (software encoder) |
+| `captureImage()` | GPU post-processed pipeline | Full (black balance, brightness, contrast, saturation, gamma) | JPEG or PNG | Good (software encoder) |
 
 #### `camera.captureNaturalPicture()`
 
@@ -579,7 +579,7 @@ Future<String> captureNaturalPicture()
 
 Captures a JPEG still image using Camera2's hardware ISP ImageReader. Returns the absolute file path. Does **not** interrupt the streaming pipeline.
 
-**Important:** This method bypasses the GPU post-processing pipeline. The resulting image reflects raw ISP output — no LUT, color transforms (saturation, contrast, brightness, black-level, gamma) are applied. Use this when you need the highest-fidelity hardware-encoded JPEG.
+**Important:** This method bypasses the GPU post-processing pipeline. The resulting image reflects raw ISP output — none of the GPU shader transforms (saturation, contrast, brightness, black balance, gamma) are applied. Use this when you need the highest-fidelity hardware-encoded JPEG.
 
 ```dart
 final path = await camera.captureNaturalPicture();
