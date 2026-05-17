@@ -1,0 +1,106 @@
+title: |md
+  ## cambrian_camera — Layer Architecture (L1–L6)
+  *frame data flows down ▼  •  settings flow down  •  FrameResult flows up*
+| {near: top-center}
+
+vars: {
+  d2-config: {
+    layout-engine: dagre
+    pad: 16
+  }
+}
+
+L1: "L1 — Dart public API   (lib/src/cambrian_camera_controller.dart)" {
+  grid-columns: 6
+  grid-gap: 18
+  style: {
+    fill: "#dbe4ff"
+    stroke: "#4a9eed"
+    font-size: 16
+    bold: true
+  }
+
+  facade: "CambrianCamera\n(facade)" { style: { fill: "#a5d8ff"; stroke: "#4a9eed" } }
+  updateSettings { style: { fill: "#a5d8ff"; stroke: "#4a9eed" } }
+  setProcessingParams { style: { fill: "#a5d8ff"; stroke: "#4a9eed" } }
+  captureImage { style: { fill: "#a5d8ff"; stroke: "#4a9eed" } }
+  calibrate: "calibrateWB / BB" { style: { fill: "#a5d8ff"; stroke: "#4a9eed" } }
+  streams: "4 Streams\n(toneMapped / frameResult / error / recording)" {
+    style: { fill: "#fff3bf"; stroke: "#f59e0b" }
+  }
+}
+
+L2: "L2 — Pigeon contract   (pigeons/camera_api.dart  →  messages.g.dart / Messages.g.kt)" {
+  grid-columns: 4
+  grid-gap: 18
+  style: { fill: "#e5dbff"; stroke: "#8b5cf6"; font-size: 16; bold: true }
+
+  upd: "HostApi.updateSettings" { style: { fill: "#d0bfff"; stroke: "#8b5cf6" } }
+  pp:  "HostApi.setProcessingParams" { style: { fill: "#d0bfff"; stroke: "#8b5cf6" } }
+  cap: "HostApi.captureImage" { style: { fill: "#d0bfff"; stroke: "#8b5cf6" } }
+  fr:  "FlutterApi.onFrameResult" { style: { fill: "#eebefa"; stroke: "#ec4899" } }
+}
+
+L4Camera2: "L4 — Kotlin Camera2 controller   (CameraController.kt — owns backgroundHandler)" {
+  grid-columns: 5
+  grid-gap: 18
+  style: { fill: "#d3f9d8"; stroke: "#22c55e"; font-size: 16; bold: true }
+
+  upd: "updateSettings\n(merge into appliedSettings)" { style: { fill: "#b2f2bb"; stroke: "#22c55e" } }
+  build: "buildCaptureRequest\n(CaptureRequest.Builder.set)" { style: { fill: "#b2f2bb"; stroke: "#22c55e" } }
+  cb: "repeatingCaptureCallback\n(every-10th throttle → FrameResult)" { style: { fill: "#b2f2bb"; stroke: "#22c55e" } }
+  capImg: "captureImage\n(GPU path — FULL_RES rendezvous)" { style: { fill: "#b2f2bb"; stroke: "#22c55e" } }
+  capNat: "captureNaturalPicture\n(separate hardware ISP path)" { style: { fill: "#fff3bf"; stroke: "#f59e0b" } }
+}
+
+L4GL: "L4 — Kotlin GL pipeline   (GpuPipeline.kt — HandlerThread \"GpuPipeline-GL\", owns EGL)" {
+  grid-columns: 5
+  grid-gap: 18
+  style: { fill: "#c3fae8"; stroke: "#06b6d4"; font-size: 16; bold: true }
+
+  ofa: "OnFrameAvailableListener\n(post drawAndReadback)" { style: { fill: "#c3fae8"; stroke: "#06b6d4" } }
+  rot: "rotAndFlipMatrix\n(UV: 90° + vflip)" { style: { fill: "#c3fae8"; stroke: "#06b6d4" } }
+  adj: "setAdjustments / setCropOutput\n(JNI bridge)" { style: { fill: "#c3fae8"; stroke: "#06b6d4" } }
+  enc: "setEncoderSurface\nrebindPreviewSurface" { style: { fill: "#c3fae8"; stroke: "#06b6d4" } }
+  rec: "VideoRecorder\n(MediaCodec + Muxer)" { style: { fill: "#fff3bf"; stroke: "#f59e0b" } }
+}
+
+L5: "L5 — JNI boundary   (CameraBridge.cpp)" {
+  style: { fill: "#ffd8a8"; stroke: "#f59e0b"; font-size: 16; bold: true }
+}
+
+L6: "L6 — C++ pipeline   (GpuRenderer + ImagePipeline; multi-thread: GL + dispatch + processing)" {
+  grid-columns: 1
+  grid-gap: 14
+  style: { fill: "#ffc9c9"; stroke: "#ef4444"; font-size: 16; bold: true }
+
+  workers: "" {
+    grid-columns: 4
+    grid-gap: 18
+    style.opacity: 0
+    style.stroke-width: 0
+
+    draw: "GpuRenderer::drawAndReadback\n(per frame)" { style: { fill: "#ffc9c9"; stroke: "#ef4444" } }
+    adj:  "GpuRenderer::setAdjustments\n(uniformMu_ guards)" { style: { fill: "#ffc9c9"; stroke: "#ef4444" } }
+    deliver: "ImagePipeline::deliverFullRes/Tracker/Raw\n(memcpy → SharedFrame)" { style: { fill: "#ffc9c9"; stroke: "#ef4444" } }
+    dispatch: "per-Consumer dispatch thread\n(1-slot drop-on-busy mailbox)" { style: { fill: "#ffc9c9"; stroke: "#ef4444" } }
+  }
+
+  state: "" {
+    grid-columns: 4
+    grid-gap: 18
+    style.opacity: 0
+    style.stroke-width: 0
+
+    fbos: "5 FBOs\nfbo_, fullResReadbackFbo_,\ntrackerFbo_, rawFbo_, rawReadbackFbo_" { style: { fill: "#fff3bf"; stroke: "#f59e0b" } }
+    pbos: "3 PBO pairs\nfullResPbo_[2], trackerPbo_[2], rawPbo_[2]\n+ GLsync fences" { style: { fill: "#fff3bf"; stroke: "#f59e0b" } }
+    sf:   "SharedFrame\nstd::shared_ptr<Frame>\nheap, ref-counted (moved via std::move)" { style: { fill: "#fff3bf"; stroke: "#f59e0b" } }
+    sync: "Sync primitives\nuniformMu_, captureRequested_,\ncaptureCV_, ProcessingStage cv" { style: { fill: "#fff3bf"; stroke: "#f59e0b" } }
+  }
+}
+
+L1 -> L2 { style.stroke-width: 3 }
+L2 -> L4Camera2 { style.stroke-width: 3 }
+L4Camera2 -> L4GL { style.stroke-width: 3 }
+L4GL -> L5 { style.stroke-width: 3 }
+L5 -> L6 { style.stroke-width: 3 }

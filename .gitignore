@@ -24,6 +24,7 @@ docs/superpowers
 docs/superpowers/
 
 # Miscellaneous
+.cache/
 pubspec.lock
 *.class
 *.log
