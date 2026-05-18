@@ -476,6 +476,34 @@ abstract class CameraHostApi {
   /// Throws with error code "patch_not_ready" if no frame has been rendered yet.
   @async
   CamRgbSample sampleCenterPatch(int handle);
+
+  /// Returns the current camera permission status:
+  /// "notDetermined" | "denied" | "restricted" | "authorized".
+  ///
+  /// Callers should query this before invoking [open] so they can present
+  /// a permission rationale UI rather than discovering denial as an open
+  /// failure. iOS-style four-value status; Android maps PERMISSION_GRANTED
+  /// → "authorized", PERMISSION_DENIED → "denied" (or "restricted" if
+  /// don't-ask-again was selected).
+  @async
+  String cameraPermissionStatus();
+
+  /// Triggers the system permission prompt for camera access; returns the
+  /// resulting status (same four values as [cameraPermissionStatus]).
+  ///
+  /// No-op (returns current status) if already authorized.
+  @async
+  String requestCameraPermission();
+
+  /// Status query for Photos add-only permission (iOS) or WRITE_EXTERNAL_STORAGE
+  /// (Android pre-API 29) / no-op (Android API 29+, MediaStore handles it).
+  @async
+  String photosAddPermissionStatus();
+
+  /// Trigger Photos add-only permission prompt (iOS) / WRITE_EXTERNAL_STORAGE
+  /// (Android pre-API 29) / no-op (Android API 29+).
+  @async
+  String requestPhotosAddPermission();
 }
 
 // ---------------------------------------------------------------------------

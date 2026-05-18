@@ -1,11 +1,14 @@
 // Copyright (c) 2025 Cambrian. All rights reserved.
 package com.cambrian.camera
 
+import android.Manifest
 import android.app.Activity
 import android.content.Context
+import android.content.pm.PackageManager
 import android.os.Build
 import android.provider.MediaStore
 import android.util.Log
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ProcessLifecycleOwner
@@ -535,6 +538,46 @@ class CambrianCameraPlugin : FlutterPlugin, ActivityAware, CameraHostApi {
             session.rawSurfaceProducer?.release()
             callback(result)
         }
+    }
+
+    // §5.6 permission query/request methods. Plan 1 lands real status
+    // queries; the request variants are stubs that return current status
+    // (real ActivityCompat.requestPermissions wiring lands in
+    // phase-3-android-polish — it needs an Activity-scoped permission-result
+    // listener registered through ActivityPluginBinding).
+
+    override fun cameraPermissionStatus(callback: (Result<String>) -> Unit) {
+        val status = if (ContextCompat.checkSelfPermission(applicationContext ?: return callback(Result.failure(FlutterError("not_attached", "Plugin not attached to engine", null))), Manifest.permission.CAMERA)
+                         == PackageManager.PERMISSION_GRANTED) "authorized" else "notDetermined"
+        callback(Result.success(status))
+    }
+
+    override fun requestCameraPermission(callback: (Result<String>) -> Unit) {
+        // TODO(phase-3-android-polish): wire actual ActivityCompat.requestPermissions
+        // + onRequestPermissionsResult via ActivityPluginBinding.
+        // Until then, return the current status (matching cameraPermissionStatus).
+        val currentStatus = if (ContextCompat.checkSelfPermission(applicationContext ?: return callback(Result.failure(FlutterError("not_attached", "Plugin not attached to engine", null))), Manifest.permission.CAMERA)
+                                == PackageManager.PERMISSION_GRANTED) "authorized" else "denied"
+        callback(Result.success(currentStatus))
+    }
+
+    override fun photosAddPermissionStatus(callback: (Result<String>) -> Unit) {
+        // Android API 29+ uses MediaStore which doesn't need a write permission.
+        // Pre-API 29 requires WRITE_EXTERNAL_STORAGE.
+        val sdk = Build.VERSION.SDK_INT
+        val status = if (sdk >= 29) "authorized"
+            else if (ContextCompat.checkSelfPermission(
+                      applicationContext ?: return callback(Result.failure(FlutterError("not_attached", "Plugin not attached to engine", null))),
+                      Manifest.permission.WRITE_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED)
+                  "authorized" else "notDetermined"
+        callback(Result.success(status))
+    }
+
+    override fun requestPhotosAddPermission(callback: (Result<String>) -> Unit) {
+        // TODO(phase-3-android-polish): wire the pre-API-29 prompt flow when
+        // the actual request infrastructure lands. Until then, mirror the
+        // status query.
+        photosAddPermissionStatus(callback)
     }
 
     companion object {

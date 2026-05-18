@@ -810,6 +810,26 @@ protocol CameraHostApi {
   ///
   /// Throws with error code "patch_not_ready" if no frame has been rendered yet.
   func sampleCenterPatch(handle: Int64, completion: @escaping (Result<CamRgbSample, Error>) -> Void)
+  /// Returns the current camera permission status:
+  /// "notDetermined" | "denied" | "restricted" | "authorized".
+  ///
+  /// Callers should query this before invoking [open] so they can present
+  /// a permission rationale UI rather than discovering denial as an open
+  /// failure. iOS-style four-value status; Android maps PERMISSION_GRANTED
+  /// → "authorized", PERMISSION_DENIED → "denied" (or "restricted" if
+  /// don't-ask-again was selected).
+  func cameraPermissionStatus(completion: @escaping (Result<String, Error>) -> Void)
+  /// Triggers the system permission prompt for camera access; returns the
+  /// resulting status (same four values as [cameraPermissionStatus]).
+  ///
+  /// No-op (returns current status) if already authorized.
+  func requestCameraPermission(completion: @escaping (Result<String, Error>) -> Void)
+  /// Status query for Photos add-only permission (iOS) or WRITE_EXTERNAL_STORAGE
+  /// (Android pre-API 29) / no-op (Android API 29+, MediaStore handles it).
+  func photosAddPermissionStatus(completion: @escaping (Result<String, Error>) -> Void)
+  /// Trigger Photos add-only permission prompt (iOS) / WRITE_EXTERNAL_STORAGE
+  /// (Android pre-API 29) / no-op (Android API 29+).
+  func requestPhotosAddPermission(completion: @escaping (Result<String, Error>) -> Void)
 }
 
 /// Generated setup class from Pigeon to handle messages through the `binaryMessenger`.
@@ -1104,6 +1124,82 @@ class CameraHostApiSetup {
       }
     } else {
       sampleCenterPatchChannel.setMessageHandler(nil)
+    }
+    /// Returns the current camera permission status:
+    /// "notDetermined" | "denied" | "restricted" | "authorized".
+    ///
+    /// Callers should query this before invoking [open] so they can present
+    /// a permission rationale UI rather than discovering denial as an open
+    /// failure. iOS-style four-value status; Android maps PERMISSION_GRANTED
+    /// → "authorized", PERMISSION_DENIED → "denied" (or "restricted" if
+    /// don't-ask-again was selected).
+    let cameraPermissionStatusChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.cambrian_camera.CameraHostApi.cameraPermissionStatus\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
+    if let api = api {
+      cameraPermissionStatusChannel.setMessageHandler { _, reply in
+        api.cameraPermissionStatus { result in
+          switch result {
+          case .success(let res):
+            reply(wrapResult(res))
+          case .failure(let error):
+            reply(wrapError(error))
+          }
+        }
+      }
+    } else {
+      cameraPermissionStatusChannel.setMessageHandler(nil)
+    }
+    /// Triggers the system permission prompt for camera access; returns the
+    /// resulting status (same four values as [cameraPermissionStatus]).
+    ///
+    /// No-op (returns current status) if already authorized.
+    let requestCameraPermissionChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.cambrian_camera.CameraHostApi.requestCameraPermission\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
+    if let api = api {
+      requestCameraPermissionChannel.setMessageHandler { _, reply in
+        api.requestCameraPermission { result in
+          switch result {
+          case .success(let res):
+            reply(wrapResult(res))
+          case .failure(let error):
+            reply(wrapError(error))
+          }
+        }
+      }
+    } else {
+      requestCameraPermissionChannel.setMessageHandler(nil)
+    }
+    /// Status query for Photos add-only permission (iOS) or WRITE_EXTERNAL_STORAGE
+    /// (Android pre-API 29) / no-op (Android API 29+, MediaStore handles it).
+    let photosAddPermissionStatusChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.cambrian_camera.CameraHostApi.photosAddPermissionStatus\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
+    if let api = api {
+      photosAddPermissionStatusChannel.setMessageHandler { _, reply in
+        api.photosAddPermissionStatus { result in
+          switch result {
+          case .success(let res):
+            reply(wrapResult(res))
+          case .failure(let error):
+            reply(wrapError(error))
+          }
+        }
+      }
+    } else {
+      photosAddPermissionStatusChannel.setMessageHandler(nil)
+    }
+    /// Trigger Photos add-only permission prompt (iOS) / WRITE_EXTERNAL_STORAGE
+    /// (Android pre-API 29) / no-op (Android API 29+).
+    let requestPhotosAddPermissionChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.cambrian_camera.CameraHostApi.requestPhotosAddPermission\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
+    if let api = api {
+      requestPhotosAddPermissionChannel.setMessageHandler { _, reply in
+        api.requestPhotosAddPermission { result in
+          switch result {
+          case .success(let res):
+            reply(wrapResult(res))
+          case .failure(let error):
+            reply(wrapError(error))
+          }
+        }
+      }
+    } else {
+      requestPhotosAddPermissionChannel.setMessageHandler(nil)
     }
   }
 }

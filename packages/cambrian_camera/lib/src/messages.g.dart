@@ -1177,6 +1177,130 @@ class CameraHostApi {
       return (pigeonVar_replyList[0] as CamRgbSample?)!;
     }
   }
+
+  /// Returns the current camera permission status:
+  /// "notDetermined" | "denied" | "restricted" | "authorized".
+  ///
+  /// Callers should query this before invoking [open] so they can present
+  /// a permission rationale UI rather than discovering denial as an open
+  /// failure. iOS-style four-value status; Android maps PERMISSION_GRANTED
+  /// → "authorized", PERMISSION_DENIED → "denied" (or "restricted" if
+  /// don't-ask-again was selected).
+  Future<String> cameraPermissionStatus() async {
+    final String pigeonVar_channelName = 'dev.flutter.pigeon.cambrian_camera.CameraHostApi.cameraPermissionStatus$pigeonVar_messageChannelSuffix';
+    final BasicMessageChannel<Object?> pigeonVar_channel = BasicMessageChannel<Object?>(
+      pigeonVar_channelName,
+      pigeonChannelCodec,
+      binaryMessenger: pigeonVar_binaryMessenger,
+    );
+    final List<Object?>? pigeonVar_replyList =
+        await pigeonVar_channel.send(null) as List<Object?>?;
+    if (pigeonVar_replyList == null) {
+      throw _createConnectionError(pigeonVar_channelName);
+    } else if (pigeonVar_replyList.length > 1) {
+      throw PlatformException(
+        code: pigeonVar_replyList[0]! as String,
+        message: pigeonVar_replyList[1] as String?,
+        details: pigeonVar_replyList[2],
+      );
+    } else if (pigeonVar_replyList[0] == null) {
+      throw PlatformException(
+        code: 'null-error',
+        message: 'Host platform returned null value for non-null return value.',
+      );
+    } else {
+      return (pigeonVar_replyList[0] as String?)!;
+    }
+  }
+
+  /// Triggers the system permission prompt for camera access; returns the
+  /// resulting status (same four values as [cameraPermissionStatus]).
+  ///
+  /// No-op (returns current status) if already authorized.
+  Future<String> requestCameraPermission() async {
+    final String pigeonVar_channelName = 'dev.flutter.pigeon.cambrian_camera.CameraHostApi.requestCameraPermission$pigeonVar_messageChannelSuffix';
+    final BasicMessageChannel<Object?> pigeonVar_channel = BasicMessageChannel<Object?>(
+      pigeonVar_channelName,
+      pigeonChannelCodec,
+      binaryMessenger: pigeonVar_binaryMessenger,
+    );
+    final List<Object?>? pigeonVar_replyList =
+        await pigeonVar_channel.send(null) as List<Object?>?;
+    if (pigeonVar_replyList == null) {
+      throw _createConnectionError(pigeonVar_channelName);
+    } else if (pigeonVar_replyList.length > 1) {
+      throw PlatformException(
+        code: pigeonVar_replyList[0]! as String,
+        message: pigeonVar_replyList[1] as String?,
+        details: pigeonVar_replyList[2],
+      );
+    } else if (pigeonVar_replyList[0] == null) {
+      throw PlatformException(
+        code: 'null-error',
+        message: 'Host platform returned null value for non-null return value.',
+      );
+    } else {
+      return (pigeonVar_replyList[0] as String?)!;
+    }
+  }
+
+  /// Status query for Photos add-only permission (iOS) or WRITE_EXTERNAL_STORAGE
+  /// (Android pre-API 29) / no-op (Android API 29+, MediaStore handles it).
+  Future<String> photosAddPermissionStatus() async {
+    final String pigeonVar_channelName = 'dev.flutter.pigeon.cambrian_camera.CameraHostApi.photosAddPermissionStatus$pigeonVar_messageChannelSuffix';
+    final BasicMessageChannel<Object?> pigeonVar_channel = BasicMessageChannel<Object?>(
+      pigeonVar_channelName,
+      pigeonChannelCodec,
+      binaryMessenger: pigeonVar_binaryMessenger,
+    );
+    final List<Object?>? pigeonVar_replyList =
+        await pigeonVar_channel.send(null) as List<Object?>?;
+    if (pigeonVar_replyList == null) {
+      throw _createConnectionError(pigeonVar_channelName);
+    } else if (pigeonVar_replyList.length > 1) {
+      throw PlatformException(
+        code: pigeonVar_replyList[0]! as String,
+        message: pigeonVar_replyList[1] as String?,
+        details: pigeonVar_replyList[2],
+      );
+    } else if (pigeonVar_replyList[0] == null) {
+      throw PlatformException(
+        code: 'null-error',
+        message: 'Host platform returned null value for non-null return value.',
+      );
+    } else {
+      return (pigeonVar_replyList[0] as String?)!;
+    }
+  }
+
+  /// Trigger Photos add-only permission prompt (iOS) / WRITE_EXTERNAL_STORAGE
+  /// (Android pre-API 29) / no-op (Android API 29+).
+  Future<String> requestPhotosAddPermission() async {
+    final String pigeonVar_channelName = 'dev.flutter.pigeon.cambrian_camera.CameraHostApi.requestPhotosAddPermission$pigeonVar_messageChannelSuffix';
+    final BasicMessageChannel<Object?> pigeonVar_channel = BasicMessageChannel<Object?>(
+      pigeonVar_channelName,
+      pigeonChannelCodec,
+      binaryMessenger: pigeonVar_binaryMessenger,
+    );
+    final List<Object?>? pigeonVar_replyList =
+        await pigeonVar_channel.send(null) as List<Object?>?;
+    if (pigeonVar_replyList == null) {
+      throw _createConnectionError(pigeonVar_channelName);
+    } else if (pigeonVar_replyList.length > 1) {
+      throw PlatformException(
+        code: pigeonVar_replyList[0]! as String,
+        message: pigeonVar_replyList[1] as String?,
+        details: pigeonVar_replyList[2],
+      );
+    } else if (pigeonVar_replyList[0] == null) {
+      throw PlatformException(
+        code: 'null-error',
+        message: 'Host platform returned null value for non-null return value.',
+      );
+    } else {
+      return (pigeonVar_replyList[0] as String?)!;
+    }
+  }
 }
 
 abstract class CameraFlutterApi {

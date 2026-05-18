@@ -85,6 +85,26 @@ final class CameraHostApiImpl: CameraHostApi {
         completion(.failure(notImplemented("sampleCenterPatch")))
     }
 
+    // §5.6 permission query/request methods. Real impls land in Plan 2 —
+    // route to CameraEngine.cameraPermissionStatus + requestCameraPermission
+    // (nonisolated static, per D-2P-06).
+
+    func cameraPermissionStatus(completion: @escaping (Result<String, Error>) -> Void) {
+        completion(.failure(notImplemented("cameraPermissionStatus")))
+    }
+
+    func requestCameraPermission(completion: @escaping (Result<String, Error>) -> Void) {
+        completion(.failure(notImplemented("requestCameraPermission")))
+    }
+
+    func photosAddPermissionStatus(completion: @escaping (Result<String, Error>) -> Void) {
+        completion(.failure(notImplemented("photosAddPermissionStatus")))
+    }
+
+    func requestPhotosAddPermission(completion: @escaping (Result<String, Error>) -> Void) {
+        completion(.failure(notImplemented("requestPhotosAddPermission")))
+    }
+
     private func notImplemented(_ name: String) -> PigeonError {
         PigeonError(code: "not_implemented",
                     message: "\(name) is not yet implemented in Phase 3 Plan 1.",

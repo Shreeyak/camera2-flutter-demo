@@ -777,6 +777,34 @@ interface CameraHostApi {
    * Throws with error code "patch_not_ready" if no frame has been rendered yet.
    */
   fun sampleCenterPatch(handle: Long, callback: (Result<CamRgbSample>) -> Unit)
+  /**
+   * Returns the current camera permission status:
+   * "notDetermined" | "denied" | "restricted" | "authorized".
+   *
+   * Callers should query this before invoking [open] so they can present
+   * a permission rationale UI rather than discovering denial as an open
+   * failure. iOS-style four-value status; Android maps PERMISSION_GRANTED
+   * → "authorized", PERMISSION_DENIED → "denied" (or "restricted" if
+   * don't-ask-again was selected).
+   */
+  fun cameraPermissionStatus(callback: (Result<String>) -> Unit)
+  /**
+   * Triggers the system permission prompt for camera access; returns the
+   * resulting status (same four values as [cameraPermissionStatus]).
+   *
+   * No-op (returns current status) if already authorized.
+   */
+  fun requestCameraPermission(callback: (Result<String>) -> Unit)
+  /**
+   * Status query for Photos add-only permission (iOS) or WRITE_EXTERNAL_STORAGE
+   * (Android pre-API 29) / no-op (Android API 29+, MediaStore handles it).
+   */
+  fun photosAddPermissionStatus(callback: (Result<String>) -> Unit)
+  /**
+   * Trigger Photos add-only permission prompt (iOS) / WRITE_EXTERNAL_STORAGE
+   * (Android pre-API 29) / no-op (Android API 29+).
+   */
+  fun requestPhotosAddPermission(callback: (Result<String>) -> Unit)
 
   companion object {
     /** The codec used by CameraHostApi. */
@@ -1078,6 +1106,78 @@ interface CameraHostApi {
             val args = message as List<Any?>
             val handleArg = args[0] as Long
             api.sampleCenterPatch(handleArg) { result: Result<CamRgbSample> ->
+              val error = result.exceptionOrNull()
+              if (error != null) {
+                reply.reply(wrapError(error))
+              } else {
+                val data = result.getOrNull()
+                reply.reply(wrapResult(data))
+              }
+            }
+          }
+        } else {
+          channel.setMessageHandler(null)
+        }
+      }
+      run {
+        val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.cambrian_camera.CameraHostApi.cameraPermissionStatus$separatedMessageChannelSuffix", codec)
+        if (api != null) {
+          channel.setMessageHandler { _, reply ->
+            api.cameraPermissionStatus{ result: Result<String> ->
+              val error = result.exceptionOrNull()
+              if (error != null) {
+                reply.reply(wrapError(error))
+              } else {
+                val data = result.getOrNull()
+                reply.reply(wrapResult(data))
+              }
+            }
+          }
+        } else {
+          channel.setMessageHandler(null)
+        }
+      }
+      run {
+        val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.cambrian_camera.CameraHostApi.requestCameraPermission$separatedMessageChannelSuffix", codec)
+        if (api != null) {
+          channel.setMessageHandler { _, reply ->
+            api.requestCameraPermission{ result: Result<String> ->
+              val error = result.exceptionOrNull()
+              if (error != null) {
+                reply.reply(wrapError(error))
+              } else {
+                val data = result.getOrNull()
+                reply.reply(wrapResult(data))
+              }
+            }
+          }
+        } else {
+          channel.setMessageHandler(null)
+        }
+      }
+      run {
+        val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.cambrian_camera.CameraHostApi.photosAddPermissionStatus$separatedMessageChannelSuffix", codec)
+        if (api != null) {
+          channel.setMessageHandler { _, reply ->
+            api.photosAddPermissionStatus{ result: Result<String> ->
+              val error = result.exceptionOrNull()
+              if (error != null) {
+                reply.reply(wrapError(error))
+              } else {
+                val data = result.getOrNull()
+                reply.reply(wrapResult(data))
+              }
+            }
+          }
+        } else {
+          channel.setMessageHandler(null)
+        }
+      }
+      run {
+        val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.cambrian_camera.CameraHostApi.requestPhotosAddPermission$separatedMessageChannelSuffix", codec)
+        if (api != null) {
+          channel.setMessageHandler { _, reply ->
+            api.requestPhotosAddPermission{ result: Result<String> ->
               val error = result.exceptionOrNull()
               if (error != null) {
                 reply.reply(wrapError(error))
