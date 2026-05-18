@@ -272,7 +272,7 @@ Java_com_cambrian_camera_GpuPipeline_nativeGpuResize(
 // texture matching the output aspect / size.
 //
 // Raw dims are passed in because releaseGl() zeros them; the Kotlin layer
-// computes them from the output aspect and the configured rawStreamHeight.
+// computes them from the output aspect and the configured naturalStreamHeight.
 //
 // Must be called on the GL thread.
 //

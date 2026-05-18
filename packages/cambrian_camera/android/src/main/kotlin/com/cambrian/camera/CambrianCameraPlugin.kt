@@ -239,13 +239,13 @@ class CambrianCameraPlugin : FlutterPlugin, ActivityAware, CameraHostApi {
             return
         }
 
-        val enableRawStream = settings?.enableRawStream ?: false
-        val rawStreamHeight = settings?.rawStreamHeight ?: 0L
+        val enableNaturalStream = settings?.enableNaturalStream ?: false
+        val naturalStreamHeight = settings?.naturalStreamHeight ?: 0L
         val producer = registry.createSurfaceProducer()
-        val rawSurfaceProducer = if (enableRawStream) registry.createSurfaceProducer() else null
+        val rawSurfaceProducer = if (enableNaturalStream) registry.createSurfaceProducer() else null
         val handle = producer.id()
         Log.i(TAG, "open handle=$handle cameraId=${cameraId ?: "default"}")
-        val controller = CameraController(ctx, producer, rawSurfaceProducer, enableRawStream, rawStreamHeight.toInt(), api, handle)
+        val controller = CameraController(ctx, producer, rawSurfaceProducer, enableNaturalStream, naturalStreamHeight.toInt(), api, handle)
 
         // Register the session immediately so that close() can tear it down even if open()
         // hasn't returned yet.  On failure, remove the session and release resources.

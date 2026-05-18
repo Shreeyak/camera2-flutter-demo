@@ -31,8 +31,8 @@ import 'messages.g.dart';
 ///   settings: CameraSettings(
 ///     iso: AutoValue.auto(),
 ///     focus: AutoValue.auto(),
-///     enableRawStream: true,        // Enable dual-stream preview
-///     rawStreamHeight: 720,          // Request 720p height
+///     enableNaturalStream: true,        // Enable dual-stream preview
+///     naturalStreamHeight: 720,          // Request 720p height
 ///   ),
 /// );
 /// // Listen for state changes
@@ -61,12 +61,12 @@ class CambrianCamera {
     required int handle,
     required CameraHostApi hostApi,
     required CameraCapabilities capabilities,
-    required bool enableRawStream,
+    required bool enableNaturalStream,
     CameraState initialState = CameraState.closed,
   }) : _handle = handle,
        _hostApi = hostApi,
        _capabilities = capabilities,
-       _enableRawStream = enableRawStream,
+       _enableNaturalStream = enableNaturalStream,
        _currentState = initialState,
        _stateController = StreamController<CameraState>.broadcast(),
        _errorController = StreamController<CameraError>.broadcast(),
@@ -121,7 +121,7 @@ class CambrianCamera {
   final int _handle;
 
   /// Whether the raw (pre-processing) GPU stream was requested via [open].
-  final bool _enableRawStream;
+  final bool _enableNaturalStream;
 
   final CameraHostApi _hostApi;
   // Non-final: set to CameraCapabilities.empty() at construction, then updated
@@ -150,9 +150,9 @@ class CambrianCamera {
   /// [cameraId] selects a specific device; pass null to use the default camera.
   /// [settings] apply initial ISP settings before streaming starts.
   ///
-  /// To enable the GPU raw (passthrough) preview stream, set [CameraSettings.enableRawStream]
-  /// to true in the settings. The [CameraSettings.rawStreamHeight] field controls the
-  /// requested height of the raw stream; 0 uses a default.
+  /// To enable the GPU natural (unprocessed) preview stream, set [CameraSettings.enableNaturalStream]
+  /// to true in the settings. The [CameraSettings.naturalStreamHeight] field controls the
+  /// requested height of the natural stream; 0 uses a default.
   ///
   /// Throws [PlatformException] if the camera cannot be opened (e.g. permission
   /// denied). After opening, errors are delivered via [errorStream].
@@ -164,8 +164,8 @@ class CambrianCamera {
     // Ensure Flutter→Dart callbacks are wired before we open.
     _ensureFlutterApiSetup();
 
-    // Extract raw stream settings, defaulting to false if not specified.
-    final enableRawStream = settings?.enableRawStream ?? false;
+    // Extract natural stream settings, defaulting to false if not specified.
+    final enableNaturalStream = settings?.enableNaturalStream ?? false;
 
     // The handle returned by the platform is also used as the texture ID.
     final handle = await api.open(cameraId, settings?.toCam());
@@ -176,7 +176,7 @@ class CambrianCamera {
       handle: handle,
       hostApi: api,
       capabilities: CameraCapabilities.empty(), // replaced below
-      enableRawStream: enableRawStream,
+      enableNaturalStream: enableNaturalStream,
       initialState: CameraState.streaming,
     );
 
@@ -228,7 +228,7 @@ class CambrianCamera {
   }
 
   /// Emits a [CameraTextureInfo] each time the raw (unprocessed) stream
-  /// becomes ready for display. Only emits if [enableRawStream] was true
+  /// becomes ready for display. Only emits if [enableNaturalStream] was true
   /// when [open] was called.
   ///
   /// Emits the current state immediately if already streaming, then continues
@@ -238,26 +238,26 @@ class CambrianCamera {
 
   Stream<CameraTextureInfo> _rawTextureStream() async* {
     if (_currentState == CameraState.streaming &&
-        _enableRawStream &&
-        _capabilities.rawStreamTextureId != 0) {
+        _enableNaturalStream &&
+        _capabilities.naturalStreamTextureId != 0) {
       yield CameraTextureInfo(
-        textureId: _capabilities.rawStreamTextureId,
-        width: _capabilities.rawStreamWidth,
-        height: _capabilities.rawStreamHeight,
+        textureId: _capabilities.naturalStreamTextureId,
+        width: _capabilities.naturalStreamWidth,
+        height: _capabilities.naturalStreamHeight,
       );
     }
     yield* stateStream
         .where(
           (s) =>
               s == CameraState.streaming &&
-              _enableRawStream &&
-              _capabilities.rawStreamTextureId != 0,
+              _enableNaturalStream &&
+              _capabilities.naturalStreamTextureId != 0,
         )
         .map(
           (_) => CameraTextureInfo(
-            textureId: _capabilities.rawStreamTextureId,
-            width: _capabilities.rawStreamWidth,
-            height: _capabilities.rawStreamHeight,
+            textureId: _capabilities.naturalStreamTextureId,
+            width: _capabilities.naturalStreamWidth,
+            height: _capabilities.naturalStreamHeight,
           ),
         );
   }

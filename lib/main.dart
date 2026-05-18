@@ -49,8 +49,8 @@ const _kInitialSettings = CameraSettings(
   exposureTimeNs: AutoValue<int>.auto(),
   focus: AutoValue<double>.auto(),
   whiteBalance: WhiteBalance.auto(),
-  enableRawStream: true,
-  rawStreamHeight: 720,
+  enableNaturalStream: true,
+  naturalStreamHeight: 720,
   cropOutputSize: CameraSize(1600, 1200),
 );
 

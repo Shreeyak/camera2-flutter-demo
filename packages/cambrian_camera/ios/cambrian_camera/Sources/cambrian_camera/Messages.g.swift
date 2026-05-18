@@ -151,10 +151,10 @@ struct CamSettings {
   /// NOTE: has no effect when isoMode == "manual" or exposureMode == "manual"
   /// because CONTROL_AE_MODE is set to OFF in that case.
   var evCompensation: Int64? = nil
-  /// Enable GPU raw (passthrough) stream. Null = don't change.
-  var enableRawStream: Bool? = nil
-  /// Requested height of the GPU raw stream in pixels. Null = don't change. 0 = use default.
-  var rawStreamHeight: Int64? = nil
+  /// Enable GPU natural (unprocessed/passthrough) stream. Null = don't change.
+  var enableNaturalStream: Bool? = nil
+  /// Requested height of the GPU natural stream in pixels. Null = don't change. 0 = use default.
+  var naturalStreamHeight: Int64? = nil
   /// Center-crop the GPU output to this exact pixel size.
   ///
   /// When set, the GPU fragment shader samples from the centered
@@ -210,8 +210,8 @@ struct CamSettings {
     let noiseReductionMode: Int64? = nilOrValue(pigeonVar_list[11])
     let edgeMode: Int64? = nilOrValue(pigeonVar_list[12])
     let evCompensation: Int64? = nilOrValue(pigeonVar_list[13])
-    let enableRawStream: Bool? = nilOrValue(pigeonVar_list[14])
-    let rawStreamHeight: Int64? = nilOrValue(pigeonVar_list[15])
+    let enableNaturalStream: Bool? = nilOrValue(pigeonVar_list[14])
+    let naturalStreamHeight: Int64? = nilOrValue(pigeonVar_list[15])
     let cropOutputSize: CamSize? = nilOrValue(pigeonVar_list[16])
 
     return CamSettings(
@@ -229,8 +229,8 @@ struct CamSettings {
       noiseReductionMode: noiseReductionMode,
       edgeMode: edgeMode,
       evCompensation: evCompensation,
-      enableRawStream: enableRawStream,
-      rawStreamHeight: rawStreamHeight,
+      enableNaturalStream: enableNaturalStream,
+      naturalStreamHeight: naturalStreamHeight,
       cropOutputSize: cropOutputSize
     )
   }
@@ -250,8 +250,8 @@ struct CamSettings {
       noiseReductionMode,
       edgeMode,
       evCompensation,
-      enableRawStream,
-      rawStreamHeight,
+      enableNaturalStream,
+      naturalStreamHeight,
       cropOutputSize,
     ]
   }
@@ -316,13 +316,13 @@ struct CamCapabilities {
   var evCompMin: Int64
   var evCompMax: Int64
   var evCompensationStep: Double
-  /// Flutter texture ID for the GPU raw stream (passthrough, no color adjustments).
-  /// 0 if raw stream is disabled.
-  var rawStreamTextureId: Int64
-  /// Actual computed width of the GPU raw stream (pixels). 0 if raw stream is disabled.
-  var rawStreamWidth: Int64
-  /// Requested height of the GPU raw stream (pixels). 0 if raw stream is disabled.
-  var rawStreamHeight: Int64
+  /// Flutter texture ID for the GPU natural stream (passthrough, no color adjustments).
+  /// 0 if natural stream is disabled.
+  var naturalStreamTextureId: Int64
+  /// Actual computed width of the GPU natural stream (pixels). 0 if natural stream is disabled.
+  var naturalStreamWidth: Int64
+  /// Requested height of the GPU natural stream (pixels). 0 if natural stream is disabled.
+  var naturalStreamHeight: Int64
   /// Width of the GPU processed stream texture (pixels). Matches the largest 4:3 YUV size.
   var streamWidth: Int64
   /// Height of the GPU processed stream texture (pixels).
@@ -350,9 +350,9 @@ struct CamCapabilities {
     let evCompMin = pigeonVar_list[9] as! Int64
     let evCompMax = pigeonVar_list[10] as! Int64
     let evCompensationStep = pigeonVar_list[11] as! Double
-    let rawStreamTextureId = pigeonVar_list[12] as! Int64
-    let rawStreamWidth = pigeonVar_list[13] as! Int64
-    let rawStreamHeight = pigeonVar_list[14] as! Int64
+    let naturalStreamTextureId = pigeonVar_list[12] as! Int64
+    let naturalStreamWidth = pigeonVar_list[13] as! Int64
+    let naturalStreamHeight = pigeonVar_list[14] as! Int64
     let streamWidth = pigeonVar_list[15] as! Int64
     let streamHeight = pigeonVar_list[16] as! Int64
     let sensorStreamWidth = pigeonVar_list[17] as! Int64
@@ -371,9 +371,9 @@ struct CamCapabilities {
       evCompMin: evCompMin,
       evCompMax: evCompMax,
       evCompensationStep: evCompensationStep,
-      rawStreamTextureId: rawStreamTextureId,
-      rawStreamWidth: rawStreamWidth,
-      rawStreamHeight: rawStreamHeight,
+      naturalStreamTextureId: naturalStreamTextureId,
+      naturalStreamWidth: naturalStreamWidth,
+      naturalStreamHeight: naturalStreamHeight,
       streamWidth: streamWidth,
       streamHeight: streamHeight,
       sensorStreamWidth: sensorStreamWidth,
@@ -394,9 +394,9 @@ struct CamCapabilities {
       evCompMin,
       evCompMax,
       evCompensationStep,
-      rawStreamTextureId,
-      rawStreamWidth,
-      rawStreamHeight,
+      naturalStreamTextureId,
+      naturalStreamWidth,
+      naturalStreamHeight,
       streamWidth,
       streamHeight,
       sensorStreamWidth,

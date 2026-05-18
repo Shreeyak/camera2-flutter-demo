@@ -46,8 +46,8 @@ class CamSettings {
     this.noiseReductionMode,
     this.edgeMode,
     this.evCompensation,
-    this.enableRawStream,
-    this.rawStreamHeight,
+    this.enableNaturalStream,
+    this.naturalStreamHeight,
     this.cropOutputSize,
   });
 
@@ -95,11 +95,11 @@ class CamSettings {
   /// because CONTROL_AE_MODE is set to OFF in that case.
   int? evCompensation;
 
-  /// Enable GPU raw (passthrough) stream. Null = don't change.
-  bool? enableRawStream;
+  /// Enable GPU natural (unprocessed/passthrough) stream. Null = don't change.
+  bool? enableNaturalStream;
 
-  /// Requested height of the GPU raw stream in pixels. Null = don't change. 0 = use default.
-  int? rawStreamHeight;
+  /// Requested height of the GPU natural stream in pixels. Null = don't change. 0 = use default.
+  int? naturalStreamHeight;
 
   /// Center-crop the GPU output to this exact pixel size.
   ///
@@ -174,9 +174,9 @@ class CamCapabilities {
     required this.evCompMin,
     required this.evCompMax,
     required this.evCompensationStep,
-    required this.rawStreamTextureId,
-    required this.rawStreamWidth,
-    required this.rawStreamHeight,
+    required this.naturalStreamTextureId,
+    required this.naturalStreamWidth,
+    required this.naturalStreamHeight,
     required this.streamWidth,
     required this.streamHeight,
     required this.sensorStreamWidth,
@@ -197,15 +197,15 @@ class CamCapabilities {
   int evCompMax;
   double evCompensationStep;
 
-  /// Flutter texture ID for the GPU raw stream (passthrough, no color adjustments).
-  /// 0 if raw stream is disabled.
-  int rawStreamTextureId;
+  /// Flutter texture ID for the GPU natural stream (passthrough, no color adjustments).
+  /// 0 if natural stream is disabled.
+  int naturalStreamTextureId;
 
-  /// Actual computed width of the GPU raw stream (pixels). 0 if raw stream is disabled.
-  int rawStreamWidth;
+  /// Actual computed width of the GPU natural stream (pixels). 0 if natural stream is disabled.
+  int naturalStreamWidth;
 
-  /// Requested height of the GPU raw stream (pixels). 0 if raw stream is disabled.
-  int rawStreamHeight;
+  /// Requested height of the GPU natural stream (pixels). 0 if natural stream is disabled.
+  int naturalStreamHeight;
 
   /// Width of the GPU processed stream texture (pixels). Matches the largest 4:3 YUV size.
   int streamWidth;

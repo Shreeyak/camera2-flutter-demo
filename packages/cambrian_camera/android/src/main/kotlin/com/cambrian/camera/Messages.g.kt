@@ -139,10 +139,10 @@ data class CamSettings (
    * because CONTROL_AE_MODE is set to OFF in that case.
    */
   val evCompensation: Long? = null,
-  /** Enable GPU raw (passthrough) stream. Null = don't change. */
-  val enableRawStream: Boolean? = null,
-  /** Requested height of the GPU raw stream in pixels. Null = don't change. 0 = use default. */
-  val rawStreamHeight: Long? = null,
+  /** Enable GPU natural (unprocessed/passthrough) stream. Null = don't change. */
+  val enableNaturalStream: Boolean? = null,
+  /** Requested height of the GPU natural stream in pixels. Null = don't change. 0 = use default. */
+  val naturalStreamHeight: Long? = null,
   /**
    * Center-crop the GPU output to this exact pixel size.
    *
@@ -200,10 +200,10 @@ data class CamSettings (
       val noiseReductionMode = pigeonVar_list[11] as Long?
       val edgeMode = pigeonVar_list[12] as Long?
       val evCompensation = pigeonVar_list[13] as Long?
-      val enableRawStream = pigeonVar_list[14] as Boolean?
-      val rawStreamHeight = pigeonVar_list[15] as Long?
+      val enableNaturalStream = pigeonVar_list[14] as Boolean?
+      val naturalStreamHeight = pigeonVar_list[15] as Long?
       val cropOutputSize = pigeonVar_list[16] as CamSize?
-      return CamSettings(isoMode, iso, exposureMode, exposureTimeNs, focusMode, focusDistanceDiopters, wbMode, wbGainR, wbGainG, wbGainB, zoomRatio, noiseReductionMode, edgeMode, evCompensation, enableRawStream, rawStreamHeight, cropOutputSize)
+      return CamSettings(isoMode, iso, exposureMode, exposureTimeNs, focusMode, focusDistanceDiopters, wbMode, wbGainR, wbGainG, wbGainB, zoomRatio, noiseReductionMode, edgeMode, evCompensation, enableNaturalStream, naturalStreamHeight, cropOutputSize)
     }
   }
   fun toList(): List<Any?> {
@@ -222,8 +222,8 @@ data class CamSettings (
       noiseReductionMode,
       edgeMode,
       evCompensation,
-      enableRawStream,
-      rawStreamHeight,
+      enableNaturalStream,
+      naturalStreamHeight,
       cropOutputSize,
     )
   }
@@ -281,14 +281,14 @@ data class CamCapabilities (
   val evCompMax: Long,
   val evCompensationStep: Double,
   /**
-   * Flutter texture ID for the GPU raw stream (passthrough, no color adjustments).
-   * 0 if raw stream is disabled.
+   * Flutter texture ID for the GPU natural stream (passthrough, no color adjustments).
+   * 0 if natural stream is disabled.
    */
-  val rawStreamTextureId: Long,
-  /** Actual computed width of the GPU raw stream (pixels). 0 if raw stream is disabled. */
-  val rawStreamWidth: Long,
-  /** Requested height of the GPU raw stream (pixels). 0 if raw stream is disabled. */
-  val rawStreamHeight: Long,
+  val naturalStreamTextureId: Long,
+  /** Actual computed width of the GPU natural stream (pixels). 0 if natural stream is disabled. */
+  val naturalStreamWidth: Long,
+  /** Requested height of the GPU natural stream (pixels). 0 if natural stream is disabled. */
+  val naturalStreamHeight: Long,
   /** Width of the GPU processed stream texture (pixels). Matches the largest 4:3 YUV size. */
   val streamWidth: Long,
   /** Height of the GPU processed stream texture (pixels). */
@@ -318,14 +318,14 @@ data class CamCapabilities (
       val evCompMin = pigeonVar_list[9] as Long
       val evCompMax = pigeonVar_list[10] as Long
       val evCompensationStep = pigeonVar_list[11] as Double
-      val rawStreamTextureId = pigeonVar_list[12] as Long
-      val rawStreamWidth = pigeonVar_list[13] as Long
-      val rawStreamHeight = pigeonVar_list[14] as Long
+      val naturalStreamTextureId = pigeonVar_list[12] as Long
+      val naturalStreamWidth = pigeonVar_list[13] as Long
+      val naturalStreamHeight = pigeonVar_list[14] as Long
       val streamWidth = pigeonVar_list[15] as Long
       val streamHeight = pigeonVar_list[16] as Long
       val sensorStreamWidth = pigeonVar_list[17] as Long
       val sensorStreamHeight = pigeonVar_list[18] as Long
-      return CamCapabilities(supportedSizes, isoMin, isoMax, exposureTimeMinNs, exposureTimeMaxNs, focusMin, focusMax, zoomMin, zoomMax, evCompMin, evCompMax, evCompensationStep, rawStreamTextureId, rawStreamWidth, rawStreamHeight, streamWidth, streamHeight, sensorStreamWidth, sensorStreamHeight)
+      return CamCapabilities(supportedSizes, isoMin, isoMax, exposureTimeMinNs, exposureTimeMaxNs, focusMin, focusMax, zoomMin, zoomMax, evCompMin, evCompMax, evCompensationStep, naturalStreamTextureId, naturalStreamWidth, naturalStreamHeight, streamWidth, streamHeight, sensorStreamWidth, sensorStreamHeight)
     }
   }
   fun toList(): List<Any?> {
@@ -342,9 +342,9 @@ data class CamCapabilities (
       evCompMin,
       evCompMax,
       evCompensationStep,
-      rawStreamTextureId,
-      rawStreamWidth,
-      rawStreamHeight,
+      naturalStreamTextureId,
+      naturalStreamWidth,
+      naturalStreamHeight,
       streamWidth,
       streamHeight,
       sensorStreamWidth,

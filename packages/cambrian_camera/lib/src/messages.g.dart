@@ -94,8 +94,8 @@ class CamSettings {
     this.noiseReductionMode,
     this.edgeMode,
     this.evCompensation,
-    this.enableRawStream,
-    this.rawStreamHeight,
+    this.enableNaturalStream,
+    this.naturalStreamHeight,
     this.cropOutputSize,
   });
 
@@ -143,11 +143,11 @@ class CamSettings {
   /// because CONTROL_AE_MODE is set to OFF in that case.
   int? evCompensation;
 
-  /// Enable GPU raw (passthrough) stream. Null = don't change.
-  bool? enableRawStream;
+  /// Enable GPU natural (unprocessed/passthrough) stream. Null = don't change.
+  bool? enableNaturalStream;
 
-  /// Requested height of the GPU raw stream in pixels. Null = don't change. 0 = use default.
-  int? rawStreamHeight;
+  /// Requested height of the GPU natural stream in pixels. Null = don't change. 0 = use default.
+  int? naturalStreamHeight;
 
   /// Center-crop the GPU output to this exact pixel size.
   ///
@@ -203,8 +203,8 @@ class CamSettings {
       noiseReductionMode,
       edgeMode,
       evCompensation,
-      enableRawStream,
-      rawStreamHeight,
+      enableNaturalStream,
+      naturalStreamHeight,
       cropOutputSize,
     ];
   }
@@ -226,8 +226,8 @@ class CamSettings {
       noiseReductionMode: result[11] as int?,
       edgeMode: result[12] as int?,
       evCompensation: result[13] as int?,
-      enableRawStream: result[14] as bool?,
-      rawStreamHeight: result[15] as int?,
+      enableNaturalStream: result[14] as bool?,
+      naturalStreamHeight: result[15] as int?,
       cropOutputSize: result[16] as CamSize?,
     );
   }
@@ -298,9 +298,9 @@ class CamCapabilities {
     required this.evCompMin,
     required this.evCompMax,
     required this.evCompensationStep,
-    required this.rawStreamTextureId,
-    required this.rawStreamWidth,
-    required this.rawStreamHeight,
+    required this.naturalStreamTextureId,
+    required this.naturalStreamWidth,
+    required this.naturalStreamHeight,
     required this.streamWidth,
     required this.streamHeight,
     required this.sensorStreamWidth,
@@ -332,15 +332,15 @@ class CamCapabilities {
 
   double evCompensationStep;
 
-  /// Flutter texture ID for the GPU raw stream (passthrough, no color adjustments).
-  /// 0 if raw stream is disabled.
-  int rawStreamTextureId;
+  /// Flutter texture ID for the GPU natural stream (passthrough, no color adjustments).
+  /// 0 if natural stream is disabled.
+  int naturalStreamTextureId;
 
-  /// Actual computed width of the GPU raw stream (pixels). 0 if raw stream is disabled.
-  int rawStreamWidth;
+  /// Actual computed width of the GPU natural stream (pixels). 0 if natural stream is disabled.
+  int naturalStreamWidth;
 
-  /// Requested height of the GPU raw stream (pixels). 0 if raw stream is disabled.
-  int rawStreamHeight;
+  /// Requested height of the GPU natural stream (pixels). 0 if natural stream is disabled.
+  int naturalStreamHeight;
 
   /// Width of the GPU processed stream texture (pixels). Matches the largest 4:3 YUV size.
   int streamWidth;
@@ -371,9 +371,9 @@ class CamCapabilities {
       evCompMin,
       evCompMax,
       evCompensationStep,
-      rawStreamTextureId,
-      rawStreamWidth,
-      rawStreamHeight,
+      naturalStreamTextureId,
+      naturalStreamWidth,
+      naturalStreamHeight,
       streamWidth,
       streamHeight,
       sensorStreamWidth,
@@ -396,9 +396,9 @@ class CamCapabilities {
       evCompMin: result[9]! as int,
       evCompMax: result[10]! as int,
       evCompensationStep: result[11]! as double,
-      rawStreamTextureId: result[12]! as int,
-      rawStreamWidth: result[13]! as int,
-      rawStreamHeight: result[14]! as int,
+      naturalStreamTextureId: result[12]! as int,
+      naturalStreamWidth: result[13]! as int,
+      naturalStreamHeight: result[14]! as int,
       streamWidth: result[15]! as int,
       streamHeight: result[16]! as int,
       sensorStreamWidth: result[17]! as int,
