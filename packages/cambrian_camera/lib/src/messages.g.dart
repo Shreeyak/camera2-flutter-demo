@@ -476,7 +476,20 @@ class CamStateUpdate {
     required this.state,
   });
 
-  /// One of: "closed", "opening", "streaming", "recovering", "error"
+  /// One of: "closed", "opening", "streaming", "recovering", "paused", "error",
+  /// "interrupted".
+  ///
+  /// - "paused" — pipeline gate closed (explicit `pause()` or app scenePhase
+  ///   inactive); resumes on `resume()` / scenePhase active.
+  /// - "interrupted" — iOS-only — AVCaptureSession was interrupted by a
+  ///   routine iOS event (Control Center claim, Split View / Stage Manager
+  ///   peer, phone call). Auto-resumes when the system clears the
+  ///   interruption; not an error.
+  /// - "error" — fatal or recoverable hardware/configuration error; see
+  ///   `onError` for code + isFatal.
+  ///
+  /// Android never emits "interrupted" (no equivalent route on the platform).
+  /// All other values are emitted on both platforms.
   String state;
 
   Object encode() {
