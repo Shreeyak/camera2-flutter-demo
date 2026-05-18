@@ -692,15 +692,43 @@ class CambrianCamera {
   Stream<CameraCapabilities> get capabilitiesStream =>
       _capabilitiesController.stream;
 
-  void _onCapabilitiesChanged(CamCapabilities caps) {
-    final dartCaps = CameraCapabilities.fromPigeon(caps);
-    _capabilities = dartCaps;
+  void _onStreamConfigurationChanged(CamStreamConfiguration cfg) {
+    // The lean payload carries only what changes at runtime (capture/crop
+    // sizes + texture IDs). Static capability fields (iso range, focus range,
+    // etc.) keep their cached bootstrap values, so we merge the lean delta
+    // into the cached CameraCapabilities to preserve the
+    // `capabilitiesStream` consumer contract.
+    final prev = _capabilities;
+    final newCaps = CameraCapabilities(
+      supportedSizes: prev.supportedSizes,
+      isoMin: prev.isoMin,
+      isoMax: prev.isoMax,
+      exposureTimeMinNs: prev.exposureTimeMinNs,
+      exposureTimeMaxNs: prev.exposureTimeMaxNs,
+      focusMin: prev.focusMin,
+      focusMax: prev.focusMax,
+      zoomMin: prev.zoomMin,
+      zoomMax: prev.zoomMax,
+      evCompMin: prev.evCompMin,
+      evCompMax: prev.evCompMax,
+      evCompensationStep: prev.evCompensationStep,
+      naturalStreamTextureId: cfg.naturalTextureId,
+      naturalStreamWidth: prev.naturalStreamWidth,
+      naturalStreamHeight: prev.naturalStreamHeight,
+      streamWidth: cfg.cropWidth ?? cfg.captureWidth,
+      streamHeight: cfg.cropHeight ?? cfg.captureHeight,
+      sensorStreamWidth: cfg.captureWidth,
+      sensorStreamHeight: cfg.captureHeight,
+    );
+    _capabilities = newCaps;
     if (kDebugMode) {
       debugPrint(
-        'CC/Dart: capabilitiesChanged stream=${dartCaps.streamWidth}x${dartCaps.streamHeight}',
+        'CC/Dart: streamConfigurationChanged capture=${cfg.captureWidth}x${cfg.captureHeight} '
+        'crop=${cfg.cropWidth}x${cfg.cropHeight} '
+        'natural=${cfg.naturalTextureId} preview=${cfg.previewTextureId}',
       );
     }
-    _capabilitiesController.add(dartCaps);
+    _capabilitiesController.add(newCaps);
   }
 }
 
@@ -733,7 +761,7 @@ class _FlutterApiDispatcher extends CameraFlutterApi {
   }
 
   @override
-  void onCapabilitiesChanged(int handle, CamCapabilities capabilities) {
-    CambrianCamera._instances[handle]?._onCapabilitiesChanged(capabilities);
+  void onStreamConfigurationChanged(int handle, CamStreamConfiguration configuration) {
+    CambrianCamera._instances[handle]?._onStreamConfigurationChanged(configuration);
   }
 }

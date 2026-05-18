@@ -883,7 +883,7 @@ class CameraController(
                                 // applyOutputDims, this second emit is an
                                 // idempotent duplicate (Dart's `_capabilities`
                                 // ends up at the same value).
-                                emitCapabilitiesChanged()
+                                emitStreamConfigurationChanged()
                                 lastCaptureResultMs = android.os.SystemClock.elapsedRealtime()
                                 backgroundHandler.postDelayed(stallWatchdog, stallCheckIntervalMs)
                                 mainHandler.post { callback(Result.success(Unit)) }
@@ -1258,24 +1258,32 @@ class CameraController(
             pipeline.rebindRawSurface(rawSurfaceProducer.getSurface())
         }
 
-        emitCapabilitiesChanged()
+        emitStreamConfigurationChanged()
     }
 
     /**
-     * Build a fresh [CamCapabilities] reflecting the current post-GPU output
-     * dims and push it to Dart. Called whenever the effective output size
-     * changes (cropOutputSize update, setResolution completion).
+     * Build a fresh [CamStreamConfiguration] reflecting the current active
+     * stream selection and push it to Dart. Called whenever the effective
+     * output size changes (cropOutputSize update, setResolution completion).
+     *
+     * Unlike the prior `emitCapabilitiesChanged` which round-tripped through
+     * `getCapabilities`, this builds the lean payload directly from the
+     * controller's current sensor + crop state — the texture-ID fields are
+     * stable across the open session so consumers never need a separate
+     * `getCapabilities` round-trip after a configuration change.
      */
-    private fun emitCapabilitiesChanged() {
-        getCapabilities { result ->
-            result.onSuccess { caps ->
-                mainHandler.post {
-                    flutterApi.onCapabilitiesChanged(handle, caps) {}
-                }
-            }
-            result.onFailure { e ->
-                Log.w("CC/Cam", "emitCapabilitiesChanged: failed to build caps — ${e.message}")
-            }
+    private fun emitStreamConfigurationChanged() {
+        val cropSize = pendingCropOutputSize
+        val cfg = CamStreamConfiguration(
+            captureWidth  = sensorStreamWidth.toLong(),
+            captureHeight = sensorStreamHeight.toLong(),
+            cropWidth     = cropSize?.width,
+            cropHeight    = cropSize?.height,
+            naturalTextureId = if (gpuPipeline?.isRunning == true) rawSurfaceProducer?.id() ?: 0L else 0L,
+            previewTextureId = surfaceProducer.id(),
+        )
+        mainHandler.post {
+            flutterApi.onStreamConfigurationChanged(handle, cfg) {}
         }
     }
 
@@ -2176,10 +2184,10 @@ class CameraController(
                             // Apply any cropOutputSize that was requested before
                             // the session became ready. If the pending crop is
                             // valid, applyPendingCropIfAny → applyOutputDims will
-                            // emit onCapabilitiesChanged with the cropped dims.
+                            // emit onStreamConfigurationChanged with the cropped dims.
                             //
                             // Intentional asymmetry with setResolution: we do NOT
-                            // call emitCapabilitiesChanged() unconditionally here.
+                            // call emitStreamConfigurationChanged() unconditionally here.
                             // The initial capabilities are delivered via the
                             // getCapabilities() return path at open() time, so
                             // Dart already has a fresh snapshot. Unlike setResolution,

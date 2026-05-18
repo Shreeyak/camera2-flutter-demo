@@ -405,6 +405,65 @@ struct CamCapabilities {
   }
 }
 
+/// Lean payload for the active stream-configuration change callback.
+///
+/// Emitted on the active selection changing (after [CameraHostApi.setResolution]
+/// resolves or after [CamSettings.cropOutputSize] is set/cleared) — distinct
+/// from the heavier [CamCapabilities] which is a one-time bootstrap surface
+/// retrieved via [CameraHostApi.getCapabilities].
+///
+/// The texture-ID fields ([naturalTextureId], [previewTextureId]) are stable
+/// across the open session — they are minted at [CameraHostApi.open] time and
+/// carried on every change emission so a Dart consumer never needs a
+/// separate getCapabilities round-trip after a configuration change.
+///
+/// Generated class from Pigeon that represents data sent in messages.
+struct CamStreamConfiguration {
+  /// Width of the active capture stream (sensor output before any GPU crop).
+  var captureWidth: Int64
+  /// Height of the active capture stream.
+  var captureHeight: Int64
+  /// Width of the active GPU center crop. Null = no crop (full capture).
+  var cropWidth: Int64? = nil
+  /// Height of the active GPU center crop. Null = no crop (full capture).
+  var cropHeight: Int64? = nil
+  /// Flutter texture ID for the natural-stream lane. Stable across the open session.
+  var naturalTextureId: Int64
+  /// Flutter texture ID for the processed (post-color-pipeline) preview lane.
+  /// Stable across the open session.
+  var previewTextureId: Int64
+
+
+  // swift-format-ignore: AlwaysUseLowerCamelCase
+  static func fromList(_ pigeonVar_list: [Any?]) -> CamStreamConfiguration? {
+    let captureWidth = pigeonVar_list[0] as! Int64
+    let captureHeight = pigeonVar_list[1] as! Int64
+    let cropWidth: Int64? = nilOrValue(pigeonVar_list[2])
+    let cropHeight: Int64? = nilOrValue(pigeonVar_list[3])
+    let naturalTextureId = pigeonVar_list[4] as! Int64
+    let previewTextureId = pigeonVar_list[5] as! Int64
+
+    return CamStreamConfiguration(
+      captureWidth: captureWidth,
+      captureHeight: captureHeight,
+      cropWidth: cropWidth,
+      cropHeight: cropHeight,
+      naturalTextureId: naturalTextureId,
+      previewTextureId: previewTextureId
+    )
+  }
+  func toList() -> [Any?] {
+    return [
+      captureWidth,
+      captureHeight,
+      cropWidth,
+      cropHeight,
+      naturalTextureId,
+      previewTextureId,
+    ]
+  }
+}
+
 /// Generated class from Pigeon that represents data sent in messages.
 struct CamStateUpdate {
   /// One of: "closed", "opening", "streaming", "recovering", "error"
@@ -553,12 +612,14 @@ private class MessagesPigeonCodecReader: FlutterStandardReader {
     case 133:
       return CamCapabilities.fromList(self.readValue() as! [Any?])
     case 134:
-      return CamStateUpdate.fromList(self.readValue() as! [Any?])
+      return CamStreamConfiguration.fromList(self.readValue() as! [Any?])
     case 135:
-      return CamError.fromList(self.readValue() as! [Any?])
+      return CamStateUpdate.fromList(self.readValue() as! [Any?])
     case 136:
-      return CamFrameResult.fromList(self.readValue() as! [Any?])
+      return CamError.fromList(self.readValue() as! [Any?])
     case 137:
+      return CamFrameResult.fromList(self.readValue() as! [Any?])
+    case 138:
       return CamRgbSample.fromList(self.readValue() as! [Any?])
     default:
       return super.readValue(ofType: type)
@@ -583,17 +644,20 @@ private class MessagesPigeonCodecWriter: FlutterStandardWriter {
     } else if let value = value as? CamCapabilities {
       super.writeByte(133)
       super.writeValue(value.toList())
-    } else if let value = value as? CamStateUpdate {
+    } else if let value = value as? CamStreamConfiguration {
       super.writeByte(134)
       super.writeValue(value.toList())
-    } else if let value = value as? CamError {
+    } else if let value = value as? CamStateUpdate {
       super.writeByte(135)
       super.writeValue(value.toList())
-    } else if let value = value as? CamFrameResult {
+    } else if let value = value as? CamError {
       super.writeByte(136)
       super.writeValue(value.toList())
-    } else if let value = value as? CamRgbSample {
+    } else if let value = value as? CamFrameResult {
       super.writeByte(137)
+      super.writeValue(value.toList())
+    } else if let value = value as? CamRgbSample {
+      super.writeByte(138)
       super.writeValue(value.toList())
     } else {
       super.writeValue(value)
@@ -941,11 +1005,12 @@ protocol CameraFlutterApiProtocol {
   /// Called when the recording state changes.
   /// [state] is one of: "recording", "idle", "error".
   func onRecordingStateChanged(handle handleArg: Int64, state stateArg: String, completion: @escaping (Result<Void, PigeonError>) -> Void)
-  /// Called when the effective post-GPU output dimensions change — e.g.
-  /// after `cropOutputSize` is set or cleared, or after `setResolution`
-  /// resolves to a new camera stream size. Dart consumers should replace
-  /// their cached [CamCapabilities] with the new value.
-  func onCapabilitiesChanged(handle handleArg: Int64, capabilities capabilitiesArg: CamCapabilities, completion: @escaping (Result<Void, PigeonError>) -> Void)
+  /// Called when the active stream configuration changes — after
+  /// `cropOutputSize` is set or cleared, or after `setResolution` resolves
+  /// to a new camera stream size. The payload's texture-ID fields are
+  /// stable across the open session and are repeated on every change so
+  /// Dart consumers do not need a separate `getCapabilities` round-trip.
+  func onStreamConfigurationChanged(handle handleArg: Int64, configuration configurationArg: CamStreamConfiguration, completion: @escaping (Result<Void, PigeonError>) -> Void)
 }
 class CameraFlutterApi: CameraFlutterApiProtocol {
   private let binaryMessenger: FlutterBinaryMessenger
@@ -1031,14 +1096,15 @@ class CameraFlutterApi: CameraFlutterApiProtocol {
       }
     }
   }
-  /// Called when the effective post-GPU output dimensions change — e.g.
-  /// after `cropOutputSize` is set or cleared, or after `setResolution`
-  /// resolves to a new camera stream size. Dart consumers should replace
-  /// their cached [CamCapabilities] with the new value.
-  func onCapabilitiesChanged(handle handleArg: Int64, capabilities capabilitiesArg: CamCapabilities, completion: @escaping (Result<Void, PigeonError>) -> Void) {
-    let channelName: String = "dev.flutter.pigeon.cambrian_camera.CameraFlutterApi.onCapabilitiesChanged\(messageChannelSuffix)"
+  /// Called when the active stream configuration changes — after
+  /// `cropOutputSize` is set or cleared, or after `setResolution` resolves
+  /// to a new camera stream size. The payload's texture-ID fields are
+  /// stable across the open session and are repeated on every change so
+  /// Dart consumers do not need a separate `getCapabilities` round-trip.
+  func onStreamConfigurationChanged(handle handleArg: Int64, configuration configurationArg: CamStreamConfiguration, completion: @escaping (Result<Void, PigeonError>) -> Void) {
+    let channelName: String = "dev.flutter.pigeon.cambrian_camera.CameraFlutterApi.onStreamConfigurationChanged\(messageChannelSuffix)"
     let channel = FlutterBasicMessageChannel(name: channelName, binaryMessenger: binaryMessenger, codec: codec)
-    channel.sendMessage([handleArg, capabilitiesArg] as [Any?]) { response in
+    channel.sendMessage([handleArg, configurationArg] as [Any?]) { response in
       guard let listResponse = response as? [Any?] else {
         completion(.failure(createConnectionError(withChannelName: channelName)))
         return

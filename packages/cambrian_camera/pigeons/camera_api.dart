@@ -223,6 +223,47 @@ class CamCapabilities {
   int sensorStreamHeight;
 }
 
+/// Lean payload for the active stream-configuration change callback.
+///
+/// Emitted on the active selection changing (after [CameraHostApi.setResolution]
+/// resolves or after [CamSettings.cropOutputSize] is set/cleared) — distinct
+/// from the heavier [CamCapabilities] which is a one-time bootstrap surface
+/// retrieved via [CameraHostApi.getCapabilities].
+///
+/// The texture-ID fields ([naturalTextureId], [previewTextureId]) are stable
+/// across the open session — they are minted at [CameraHostApi.open] time and
+/// carried on every change emission so a Dart consumer never needs a
+/// separate getCapabilities round-trip after a configuration change.
+class CamStreamConfiguration {
+  CamStreamConfiguration({
+    required this.captureWidth,
+    required this.captureHeight,
+    this.cropWidth,
+    this.cropHeight,
+    required this.naturalTextureId,
+    required this.previewTextureId,
+  });
+
+  /// Width of the active capture stream (sensor output before any GPU crop).
+  int captureWidth;
+
+  /// Height of the active capture stream.
+  int captureHeight;
+
+  /// Width of the active GPU center crop. Null = no crop (full capture).
+  int? cropWidth;
+
+  /// Height of the active GPU center crop. Null = no crop (full capture).
+  int? cropHeight;
+
+  /// Flutter texture ID for the natural-stream lane. Stable across the open session.
+  int naturalTextureId;
+
+  /// Flutter texture ID for the processed (post-color-pipeline) preview lane.
+  /// Stable across the open session.
+  int previewTextureId;
+}
+
 class CamStateUpdate {
   CamStateUpdate({required this.state});
 
@@ -389,9 +430,10 @@ abstract class CameraFlutterApi {
   /// [state] is one of: "recording", "idle", "error".
   void onRecordingStateChanged(int handle, String state);
 
-  /// Called when the effective post-GPU output dimensions change — e.g.
-  /// after `cropOutputSize` is set or cleared, or after `setResolution`
-  /// resolves to a new camera stream size. Dart consumers should replace
-  /// their cached [CamCapabilities] with the new value.
-  void onCapabilitiesChanged(int handle, CamCapabilities capabilities);
+  /// Called when the active stream configuration changes — after
+  /// `cropOutputSize` is set or cleared, or after `setResolution` resolves
+  /// to a new camera stream size. The payload's texture-ID fields are
+  /// stable across the open session and are repeated on every change so
+  /// Dart consumers do not need a separate `getCapabilities` round-trip.
+  void onStreamConfigurationChanged(int handle, CamStreamConfiguration configuration);
 }

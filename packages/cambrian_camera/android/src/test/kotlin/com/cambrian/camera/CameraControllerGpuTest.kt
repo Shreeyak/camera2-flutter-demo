@@ -473,13 +473,14 @@ class CameraControllerGpuTest {
         // Act
         controller.updateSettings(CamSettings(cropOutputSize = CamSize(1600L, 1200L)))
 
-        // Assert: GPU call + preview resize + capabilities re-emit
+        // Assert: GPU call + preview resize + streamConfiguration re-emit
         verify(mockGpuPipeline).setCropOutput(1600, 1200, 0, 0)
         verify(mockSurfaceProducer).setSize(1600, 1200)
-        argumentCaptor<CamCapabilities>().apply {
-            verify(mockFlutterApi).onCapabilitiesChanged(eq(1L), capture(), any())
-            assertEquals(1600L, firstValue.streamWidth)
-            assertEquals(1200L, firstValue.streamHeight)
+        argumentCaptor<CamStreamConfiguration>().apply {
+            verify(mockFlutterApi).onStreamConfigurationChanged(eq(1L), capture(), any())
+            // Crop populated; preview-effective dims match the crop request.
+            assertEquals(1600L, firstValue.cropWidth)
+            assertEquals(1200L, firstValue.cropHeight)
         }
     }
 
@@ -526,7 +527,7 @@ class CameraControllerGpuTest {
         // No GPU call, no surface resize, no error, no capabilities re-emit.
         verify(mockGpuPipeline, never()).setCropOutput(any(), any(), any(), any())
         verify(mockSurfaceProducer, never()).setSize(any(), any())
-        verify(mockFlutterApi, never()).onCapabilitiesChanged(any(), any(), any())
+        verify(mockFlutterApi, never()).onStreamConfigurationChanged(any(), any(), any())
     }
 
     @Test

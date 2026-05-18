@@ -407,6 +407,70 @@ class CamCapabilities {
   }
 }
 
+/// Lean payload for the active stream-configuration change callback.
+///
+/// Emitted on the active selection changing (after [CameraHostApi.setResolution]
+/// resolves or after [CamSettings.cropOutputSize] is set/cleared) — distinct
+/// from the heavier [CamCapabilities] which is a one-time bootstrap surface
+/// retrieved via [CameraHostApi.getCapabilities].
+///
+/// The texture-ID fields ([naturalTextureId], [previewTextureId]) are stable
+/// across the open session — they are minted at [CameraHostApi.open] time and
+/// carried on every change emission so a Dart consumer never needs a
+/// separate getCapabilities round-trip after a configuration change.
+class CamStreamConfiguration {
+  CamStreamConfiguration({
+    required this.captureWidth,
+    required this.captureHeight,
+    this.cropWidth,
+    this.cropHeight,
+    required this.naturalTextureId,
+    required this.previewTextureId,
+  });
+
+  /// Width of the active capture stream (sensor output before any GPU crop).
+  int captureWidth;
+
+  /// Height of the active capture stream.
+  int captureHeight;
+
+  /// Width of the active GPU center crop. Null = no crop (full capture).
+  int? cropWidth;
+
+  /// Height of the active GPU center crop. Null = no crop (full capture).
+  int? cropHeight;
+
+  /// Flutter texture ID for the natural-stream lane. Stable across the open session.
+  int naturalTextureId;
+
+  /// Flutter texture ID for the processed (post-color-pipeline) preview lane.
+  /// Stable across the open session.
+  int previewTextureId;
+
+  Object encode() {
+    return <Object?>[
+      captureWidth,
+      captureHeight,
+      cropWidth,
+      cropHeight,
+      naturalTextureId,
+      previewTextureId,
+    ];
+  }
+
+  static CamStreamConfiguration decode(Object result) {
+    result as List<Object?>;
+    return CamStreamConfiguration(
+      captureWidth: result[0]! as int,
+      captureHeight: result[1]! as int,
+      cropWidth: result[2] as int?,
+      cropHeight: result[3] as int?,
+      naturalTextureId: result[4]! as int,
+      previewTextureId: result[5]! as int,
+    );
+  }
+}
+
 class CamStateUpdate {
   CamStateUpdate({
     required this.state,
@@ -571,17 +635,20 @@ class _PigeonCodec extends StandardMessageCodec {
     }    else if (value is CamCapabilities) {
       buffer.putUint8(133);
       writeValue(buffer, value.encode());
-    }    else if (value is CamStateUpdate) {
+    }    else if (value is CamStreamConfiguration) {
       buffer.putUint8(134);
       writeValue(buffer, value.encode());
-    }    else if (value is CamError) {
+    }    else if (value is CamStateUpdate) {
       buffer.putUint8(135);
       writeValue(buffer, value.encode());
-    }    else if (value is CamFrameResult) {
+    }    else if (value is CamError) {
       buffer.putUint8(136);
       writeValue(buffer, value.encode());
-    }    else if (value is CamRgbSample) {
+    }    else if (value is CamFrameResult) {
       buffer.putUint8(137);
+      writeValue(buffer, value.encode());
+    }    else if (value is CamRgbSample) {
+      buffer.putUint8(138);
       writeValue(buffer, value.encode());
     } else {
       super.writeValue(buffer, value);
@@ -603,12 +670,14 @@ class _PigeonCodec extends StandardMessageCodec {
       case 133: 
         return CamCapabilities.decode(readValue(buffer)!);
       case 134: 
-        return CamStateUpdate.decode(readValue(buffer)!);
+        return CamStreamConfiguration.decode(readValue(buffer)!);
       case 135: 
-        return CamError.decode(readValue(buffer)!);
+        return CamStateUpdate.decode(readValue(buffer)!);
       case 136: 
-        return CamFrameResult.decode(readValue(buffer)!);
+        return CamError.decode(readValue(buffer)!);
       case 137: 
+        return CamFrameResult.decode(readValue(buffer)!);
+      case 138: 
         return CamRgbSample.decode(readValue(buffer)!);
       default:
         return super.readValueOfType(type, buffer);
@@ -1023,11 +1092,12 @@ abstract class CameraFlutterApi {
   /// [state] is one of: "recording", "idle", "error".
   void onRecordingStateChanged(int handle, String state);
 
-  /// Called when the effective post-GPU output dimensions change — e.g.
-  /// after `cropOutputSize` is set or cleared, or after `setResolution`
-  /// resolves to a new camera stream size. Dart consumers should replace
-  /// their cached [CamCapabilities] with the new value.
-  void onCapabilitiesChanged(int handle, CamCapabilities capabilities);
+  /// Called when the active stream configuration changes — after
+  /// `cropOutputSize` is set or cleared, or after `setResolution` resolves
+  /// to a new camera stream size. The payload's texture-ID fields are
+  /// stable across the open session and are repeated on every change so
+  /// Dart consumers do not need a separate `getCapabilities` round-trip.
+  void onStreamConfigurationChanged(int handle, CamStreamConfiguration configuration);
 
   static void setUp(CameraFlutterApi? api, {BinaryMessenger? binaryMessenger, String messageChannelSuffix = '',}) {
     messageChannelSuffix = messageChannelSuffix.isNotEmpty ? '.$messageChannelSuffix' : '';
@@ -1145,23 +1215,23 @@ abstract class CameraFlutterApi {
     }
     {
       final BasicMessageChannel<Object?> pigeonVar_channel = BasicMessageChannel<Object?>(
-          'dev.flutter.pigeon.cambrian_camera.CameraFlutterApi.onCapabilitiesChanged$messageChannelSuffix', pigeonChannelCodec,
+          'dev.flutter.pigeon.cambrian_camera.CameraFlutterApi.onStreamConfigurationChanged$messageChannelSuffix', pigeonChannelCodec,
           binaryMessenger: binaryMessenger);
       if (api == null) {
         pigeonVar_channel.setMessageHandler(null);
       } else {
         pigeonVar_channel.setMessageHandler((Object? message) async {
           assert(message != null,
-          'Argument for dev.flutter.pigeon.cambrian_camera.CameraFlutterApi.onCapabilitiesChanged was null.');
+          'Argument for dev.flutter.pigeon.cambrian_camera.CameraFlutterApi.onStreamConfigurationChanged was null.');
           final List<Object?> args = (message as List<Object?>?)!;
           final int? arg_handle = (args[0] as int?);
           assert(arg_handle != null,
-              'Argument for dev.flutter.pigeon.cambrian_camera.CameraFlutterApi.onCapabilitiesChanged was null, expected non-null int.');
-          final CamCapabilities? arg_capabilities = (args[1] as CamCapabilities?);
-          assert(arg_capabilities != null,
-              'Argument for dev.flutter.pigeon.cambrian_camera.CameraFlutterApi.onCapabilitiesChanged was null, expected non-null CamCapabilities.');
+              'Argument for dev.flutter.pigeon.cambrian_camera.CameraFlutterApi.onStreamConfigurationChanged was null, expected non-null int.');
+          final CamStreamConfiguration? arg_configuration = (args[1] as CamStreamConfiguration?);
+          assert(arg_configuration != null,
+              'Argument for dev.flutter.pigeon.cambrian_camera.CameraFlutterApi.onStreamConfigurationChanged was null, expected non-null CamStreamConfiguration.');
           try {
-            api.onCapabilitiesChanged(arg_handle!, arg_capabilities!);
+            api.onStreamConfigurationChanged(arg_handle!, arg_configuration!);
             return wrapResponse(empty: true);
           } on PlatformException catch (e) {
             return wrapResponse(error: e);

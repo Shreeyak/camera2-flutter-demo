@@ -353,6 +353,62 @@ data class CamCapabilities (
   }
 }
 
+/**
+ * Lean payload for the active stream-configuration change callback.
+ *
+ * Emitted on the active selection changing (after [CameraHostApi.setResolution]
+ * resolves or after [CamSettings.cropOutputSize] is set/cleared) — distinct
+ * from the heavier [CamCapabilities] which is a one-time bootstrap surface
+ * retrieved via [CameraHostApi.getCapabilities].
+ *
+ * The texture-ID fields ([naturalTextureId], [previewTextureId]) are stable
+ * across the open session — they are minted at [CameraHostApi.open] time and
+ * carried on every change emission so a Dart consumer never needs a
+ * separate getCapabilities round-trip after a configuration change.
+ *
+ * Generated class from Pigeon that represents data sent in messages.
+ */
+data class CamStreamConfiguration (
+  /** Width of the active capture stream (sensor output before any GPU crop). */
+  val captureWidth: Long,
+  /** Height of the active capture stream. */
+  val captureHeight: Long,
+  /** Width of the active GPU center crop. Null = no crop (full capture). */
+  val cropWidth: Long? = null,
+  /** Height of the active GPU center crop. Null = no crop (full capture). */
+  val cropHeight: Long? = null,
+  /** Flutter texture ID for the natural-stream lane. Stable across the open session. */
+  val naturalTextureId: Long,
+  /**
+   * Flutter texture ID for the processed (post-color-pipeline) preview lane.
+   * Stable across the open session.
+   */
+  val previewTextureId: Long
+)
+ {
+  companion object {
+    fun fromList(pigeonVar_list: List<Any?>): CamStreamConfiguration {
+      val captureWidth = pigeonVar_list[0] as Long
+      val captureHeight = pigeonVar_list[1] as Long
+      val cropWidth = pigeonVar_list[2] as Long?
+      val cropHeight = pigeonVar_list[3] as Long?
+      val naturalTextureId = pigeonVar_list[4] as Long
+      val previewTextureId = pigeonVar_list[5] as Long
+      return CamStreamConfiguration(captureWidth, captureHeight, cropWidth, cropHeight, naturalTextureId, previewTextureId)
+    }
+  }
+  fun toList(): List<Any?> {
+    return listOf(
+      captureWidth,
+      captureHeight,
+      cropWidth,
+      cropHeight,
+      naturalTextureId,
+      previewTextureId,
+    )
+  }
+}
+
 /** Generated class from Pigeon that represents data sent in messages. */
 data class CamStateUpdate (
   /** One of: "closed", "opening", "streaming", "recovering", "error" */
@@ -499,20 +555,25 @@ private open class MessagesPigeonCodec : StandardMessageCodec() {
       }
       134.toByte() -> {
         return (readValue(buffer) as? List<Any?>)?.let {
-          CamStateUpdate.fromList(it)
+          CamStreamConfiguration.fromList(it)
         }
       }
       135.toByte() -> {
         return (readValue(buffer) as? List<Any?>)?.let {
-          CamError.fromList(it)
+          CamStateUpdate.fromList(it)
         }
       }
       136.toByte() -> {
         return (readValue(buffer) as? List<Any?>)?.let {
-          CamFrameResult.fromList(it)
+          CamError.fromList(it)
         }
       }
       137.toByte() -> {
+        return (readValue(buffer) as? List<Any?>)?.let {
+          CamFrameResult.fromList(it)
+        }
+      }
+      138.toByte() -> {
         return (readValue(buffer) as? List<Any?>)?.let {
           CamRgbSample.fromList(it)
         }
@@ -542,20 +603,24 @@ private open class MessagesPigeonCodec : StandardMessageCodec() {
         stream.write(133)
         writeValue(stream, value.toList())
       }
-      is CamStateUpdate -> {
+      is CamStreamConfiguration -> {
         stream.write(134)
         writeValue(stream, value.toList())
       }
-      is CamError -> {
+      is CamStateUpdate -> {
         stream.write(135)
         writeValue(stream, value.toList())
       }
-      is CamFrameResult -> {
+      is CamError -> {
         stream.write(136)
         writeValue(stream, value.toList())
       }
-      is CamRgbSample -> {
+      is CamFrameResult -> {
         stream.write(137)
+        writeValue(stream, value.toList())
+      }
+      is CamRgbSample -> {
+        stream.write(138)
         writeValue(stream, value.toList())
       }
       else -> super.writeValue(stream, value)
@@ -998,17 +1063,18 @@ class CameraFlutterApi(private val binaryMessenger: BinaryMessenger, private val
     }
   }
   /**
-   * Called when the effective post-GPU output dimensions change — e.g.
-   * after `cropOutputSize` is set or cleared, or after `setResolution`
-   * resolves to a new camera stream size. Dart consumers should replace
-   * their cached [CamCapabilities] with the new value.
+   * Called when the active stream configuration changes — after
+   * `cropOutputSize` is set or cleared, or after `setResolution` resolves
+   * to a new camera stream size. The payload's texture-ID fields are
+   * stable across the open session and are repeated on every change so
+   * Dart consumers do not need a separate `getCapabilities` round-trip.
    */
-  fun onCapabilitiesChanged(handleArg: Long, capabilitiesArg: CamCapabilities, callback: (Result<Unit>) -> Unit)
+  fun onStreamConfigurationChanged(handleArg: Long, configurationArg: CamStreamConfiguration, callback: (Result<Unit>) -> Unit)
 {
     val separatedMessageChannelSuffix = if (messageChannelSuffix.isNotEmpty()) ".$messageChannelSuffix" else ""
-    val channelName = "dev.flutter.pigeon.cambrian_camera.CameraFlutterApi.onCapabilitiesChanged$separatedMessageChannelSuffix"
+    val channelName = "dev.flutter.pigeon.cambrian_camera.CameraFlutterApi.onStreamConfigurationChanged$separatedMessageChannelSuffix"
     val channel = BasicMessageChannel<Any?>(binaryMessenger, channelName, codec)
-    channel.send(listOf(handleArg, capabilitiesArg)) {
+    channel.send(listOf(handleArg, configurationArg)) {
       if (it is List<*>) {
         if (it.size > 1) {
           callback(Result.failure(FlutterError(it[0] as String, it[1] as String?, it[2] as String?)))
