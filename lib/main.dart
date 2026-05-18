@@ -694,7 +694,8 @@ class _CameraScreenState extends State<CameraScreen>
     final camera = _camera;
     if (camera == null) return;
     try {
-      final path = await camera.captureImage();
+      final result = await camera.captureImage();
+      final path = result.filePath ?? '<PhotoLibrary asset ${result.phAssetLocalId}>';
       if (mounted) {
         ScaffoldMessenger.of(context)
           ..clearSnackBars()

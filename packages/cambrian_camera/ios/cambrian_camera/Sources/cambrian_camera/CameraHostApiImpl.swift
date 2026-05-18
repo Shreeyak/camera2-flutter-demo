@@ -33,13 +33,15 @@ final class CameraHostApiImpl: CameraHostApi {
         throw notImplemented("setProcessingParams")
     }
 
-    func captureNaturalPicture(handle: Int64,
-                               completion: @escaping (Result<String, Error>) -> Void) {
+    func captureNaturalPicture(handle: Int64, outputDirectory: String?, fileName: String?,
+                               destination: CamPhotosDestination?,
+                               completion: @escaping (Result<CamCaptureResult, Error>) -> Void) {
         completion(.failure(notImplemented("captureNaturalPicture")))
     }
 
     func captureImage(handle: Int64, outputDirectory: String?, fileName: String?,
-                      completion: @escaping (Result<String, Error>) -> Void) {
+                      destination: CamPhotosDestination?,
+                      completion: @escaping (Result<CamCaptureResult, Error>) -> Void) {
         completion(.failure(notImplemented("captureImage")))
     }
 

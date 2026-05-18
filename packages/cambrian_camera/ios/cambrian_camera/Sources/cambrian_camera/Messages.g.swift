@@ -594,6 +594,73 @@ struct CamRgbSample {
   }
 }
 
+/// Destination for image-capture output on iOS Photos / Android MediaStore.
+///
+/// When [saveToLibrary] is true: iOS writes through PHPhotoLibrary and yields
+/// a PHAsset local identifier (no filesystem path); Android writes through
+/// MediaStore and yields a content URI / file path. When false: both
+/// platforms write to filesystem at the [CameraHostApi.captureImage]
+/// `outputDirectory` + `fileName` arguments and yield the filesystem path.
+///
+/// Generated class from Pigeon that represents data sent in messages.
+struct CamPhotosDestination {
+  /// Optional album name on iOS Photos. Ignored on Android.
+  var albumName: String? = nil
+  /// If true, save to the platform photo library (Photos / MediaStore).
+  /// If false, write to filesystem at the host method's outputDirectory + fileName.
+  var saveToLibrary: Bool
+
+
+  // swift-format-ignore: AlwaysUseLowerCamelCase
+  static func fromList(_ pigeonVar_list: [Any?]) -> CamPhotosDestination? {
+    let albumName: String? = nilOrValue(pigeonVar_list[0])
+    let saveToLibrary = pigeonVar_list[1] as! Bool
+
+    return CamPhotosDestination(
+      albumName: albumName,
+      saveToLibrary: saveToLibrary
+    )
+  }
+  func toList() -> [Any?] {
+    return [
+      albumName,
+      saveToLibrary,
+    ]
+  }
+}
+
+/// Result of an image capture.
+///
+/// One of [filePath] / [phAssetLocalId] is non-null depending on the
+/// [CamPhotosDestination.saveToLibrary] flag and platform:
+/// - iOS + saveToLibrary == true: [phAssetLocalId] populated; [filePath] null.
+/// - iOS + saveToLibrary == false (or null destination): [filePath] populated.
+/// - Android (any destination): [filePath] populated; [phAssetLocalId] null.
+///
+/// Generated class from Pigeon that represents data sent in messages.
+struct CamCaptureResult {
+  var filePath: String? = nil
+  var phAssetLocalId: String? = nil
+
+
+  // swift-format-ignore: AlwaysUseLowerCamelCase
+  static func fromList(_ pigeonVar_list: [Any?]) -> CamCaptureResult? {
+    let filePath: String? = nilOrValue(pigeonVar_list[0])
+    let phAssetLocalId: String? = nilOrValue(pigeonVar_list[1])
+
+    return CamCaptureResult(
+      filePath: filePath,
+      phAssetLocalId: phAssetLocalId
+    )
+  }
+  func toList() -> [Any?] {
+    return [
+      filePath,
+      phAssetLocalId,
+    ]
+  }
+}
+
 private class MessagesPigeonCodecReader: FlutterStandardReader {
   override func readValue(ofType type: UInt8) -> Any? {
     switch type {
@@ -621,6 +688,10 @@ private class MessagesPigeonCodecReader: FlutterStandardReader {
       return CamFrameResult.fromList(self.readValue() as! [Any?])
     case 138:
       return CamRgbSample.fromList(self.readValue() as! [Any?])
+    case 139:
+      return CamPhotosDestination.fromList(self.readValue() as! [Any?])
+    case 140:
+      return CamCaptureResult.fromList(self.readValue() as! [Any?])
     default:
       return super.readValue(ofType: type)
     }
@@ -659,6 +730,12 @@ private class MessagesPigeonCodecWriter: FlutterStandardWriter {
     } else if let value = value as? CamRgbSample {
       super.writeByte(138)
       super.writeValue(value.toList())
+    } else if let value = value as? CamPhotosDestination {
+      super.writeByte(139)
+      super.writeValue(value.toList())
+    } else if let value = value as? CamCaptureResult {
+      super.writeByte(140)
+      super.writeValue(value.toList())
     } else {
       super.writeValue(value)
     }
@@ -687,15 +764,23 @@ protocol CameraHostApi {
   func updateSettings(handle: Int64, settings: CamSettings) throws
   func setResolution(handle: Int64, width: Int64, height: Int64, completion: @escaping (Result<Void, Error>) -> Void)
   func setProcessingParams(handle: Int64, params: CamProcessingParams) throws
-  /// Captures a still JPEG image using Camera2's hardware ISP.
-  /// Does NOT include GPU post-processing (saturation, contrast, brightness, black balance, gamma).
-  /// Returns the absolute file path of the saved image.
-  func captureNaturalPicture(handle: Int64, completion: @escaping (Result<String, Error>) -> Void)
-  /// Captures the next GPU post-processed frame and saves it to disk.
+  /// Captures a still JPEG image using Camera2's hardware ISP (Android) or
+  /// the natural-lane tap (iOS). Does NOT include GPU post-processing
+  /// (saturation, contrast, brightness, black balance, gamma).
+  ///
+  /// Returns a [CamCaptureResult] whose populated field depends on
+  /// [destination] and platform — see [CamPhotosDestination] /
+  /// [CamCaptureResult] for the per-platform semantics.
+  func captureNaturalPicture(handle: Int64, outputDirectory: String?, fileName: String?, destination: CamPhotosDestination?, completion: @escaping (Result<CamCaptureResult, Error>) -> Void)
+  /// Captures the next GPU post-processed frame and saves it.
   /// Format is inferred from [fileName] extension: .jpg/.jpeg → JPEG (quality 90),
-  /// .png or absent extension → PNG. [outputDirectory] null = system gallery under Pictures/CambrianCamera (via MediaStore).
-  /// Returns the absolute file path of the saved image.
-  func captureImage(handle: Int64, outputDirectory: String?, fileName: String?, completion: @escaping (Result<String, Error>) -> Void)
+  /// .png or absent extension → PNG. [outputDirectory] null = system gallery
+  /// under Pictures/CambrianCamera (via MediaStore on Android).
+  ///
+  /// Returns a [CamCaptureResult] whose populated field depends on
+  /// [destination] and platform — see [CamPhotosDestination] /
+  /// [CamCaptureResult] for the per-platform semantics.
+  func captureImage(handle: Int64, outputDirectory: String?, fileName: String?, destination: CamPhotosDestination?, completion: @escaping (Result<CamCaptureResult, Error>) -> Void)
   func getNativePipelineHandle(handle: Int64, completion: @escaping (Result<Int64?, Error>) -> Void)
   func startRecording(handle: Int64, outputDirectory: String?, fileName: String?, bitrate: Int64?, fps: Int64?, completion: @escaping (Result<String, Error>) -> Void)
   func stopRecording(handle: Int64, completion: @escaping (Result<String, Error>) -> Void)
@@ -806,15 +891,22 @@ class CameraHostApiSetup {
     } else {
       setProcessingParamsChannel.setMessageHandler(nil)
     }
-    /// Captures a still JPEG image using Camera2's hardware ISP.
-    /// Does NOT include GPU post-processing (saturation, contrast, brightness, black balance, gamma).
-    /// Returns the absolute file path of the saved image.
+    /// Captures a still JPEG image using Camera2's hardware ISP (Android) or
+    /// the natural-lane tap (iOS). Does NOT include GPU post-processing
+    /// (saturation, contrast, brightness, black balance, gamma).
+    ///
+    /// Returns a [CamCaptureResult] whose populated field depends on
+    /// [destination] and platform — see [CamPhotosDestination] /
+    /// [CamCaptureResult] for the per-platform semantics.
     let captureNaturalPictureChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.cambrian_camera.CameraHostApi.captureNaturalPicture\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
     if let api = api {
       captureNaturalPictureChannel.setMessageHandler { message, reply in
         let args = message as! [Any?]
         let handleArg = args[0] as! Int64
-        api.captureNaturalPicture(handle: handleArg) { result in
+        let outputDirectoryArg: String? = nilOrValue(args[1])
+        let fileNameArg: String? = nilOrValue(args[2])
+        let destinationArg: CamPhotosDestination? = nilOrValue(args[3])
+        api.captureNaturalPicture(handle: handleArg, outputDirectory: outputDirectoryArg, fileName: fileNameArg, destination: destinationArg) { result in
           switch result {
           case .success(let res):
             reply(wrapResult(res))
@@ -826,10 +918,14 @@ class CameraHostApiSetup {
     } else {
       captureNaturalPictureChannel.setMessageHandler(nil)
     }
-    /// Captures the next GPU post-processed frame and saves it to disk.
+    /// Captures the next GPU post-processed frame and saves it.
     /// Format is inferred from [fileName] extension: .jpg/.jpeg → JPEG (quality 90),
-    /// .png or absent extension → PNG. [outputDirectory] null = system gallery under Pictures/CambrianCamera (via MediaStore).
-    /// Returns the absolute file path of the saved image.
+    /// .png or absent extension → PNG. [outputDirectory] null = system gallery
+    /// under Pictures/CambrianCamera (via MediaStore on Android).
+    ///
+    /// Returns a [CamCaptureResult] whose populated field depends on
+    /// [destination] and platform — see [CamPhotosDestination] /
+    /// [CamCaptureResult] for the per-platform semantics.
     let captureImageChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.cambrian_camera.CameraHostApi.captureImage\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
     if let api = api {
       captureImageChannel.setMessageHandler { message, reply in
@@ -837,7 +933,8 @@ class CameraHostApiSetup {
         let handleArg = args[0] as! Int64
         let outputDirectoryArg: String? = nilOrValue(args[1])
         let fileNameArg: String? = nilOrValue(args[2])
-        api.captureImage(handle: handleArg, outputDirectory: outputDirectoryArg, fileName: fileNameArg) { result in
+        let destinationArg: CamPhotosDestination? = nilOrValue(args[3])
+        api.captureImage(handle: handleArg, outputDirectory: outputDirectoryArg, fileName: fileNameArg, destination: destinationArg) { result in
           switch result {
           case .success(let res):
             reply(wrapResult(res))

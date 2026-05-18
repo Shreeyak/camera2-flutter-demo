@@ -346,6 +346,37 @@ class CamRgbSample {
   double b;
 }
 
+/// Destination for image-capture output on iOS Photos / Android MediaStore.
+///
+/// When [saveToLibrary] is true: iOS writes through PHPhotoLibrary and yields
+/// a PHAsset local identifier (no filesystem path); Android writes through
+/// MediaStore and yields a content URI / file path. When false: both
+/// platforms write to filesystem at the [CameraHostApi.captureImage]
+/// `outputDirectory` + `fileName` arguments and yield the filesystem path.
+class CamPhotosDestination {
+  CamPhotosDestination({this.albumName, required this.saveToLibrary});
+
+  /// Optional album name on iOS Photos. Ignored on Android.
+  String? albumName;
+
+  /// If true, save to the platform photo library (Photos / MediaStore).
+  /// If false, write to filesystem at the host method's outputDirectory + fileName.
+  bool saveToLibrary;
+}
+
+/// Result of an image capture.
+///
+/// One of [filePath] / [phAssetLocalId] is non-null depending on the
+/// [CamPhotosDestination.saveToLibrary] flag and platform:
+/// - iOS + saveToLibrary == true: [phAssetLocalId] populated; [filePath] null.
+/// - iOS + saveToLibrary == false (or null destination): [filePath] populated.
+/// - Android (any destination): [filePath] populated; [phAssetLocalId] null.
+class CamCaptureResult {
+  CamCaptureResult({this.filePath, this.phAssetLocalId});
+  String? filePath;
+  String? phAssetLocalId;
+}
+
 // ---------------------------------------------------------------------------
 // Host API  (Dart → Kotlin)
 // ---------------------------------------------------------------------------
@@ -365,18 +396,36 @@ abstract class CameraHostApi {
 
   void setProcessingParams(int handle, CamProcessingParams params);
 
-  /// Captures a still JPEG image using Camera2's hardware ISP.
-  /// Does NOT include GPU post-processing (saturation, contrast, brightness, black balance, gamma).
-  /// Returns the absolute file path of the saved image.
+  /// Captures a still JPEG image using Camera2's hardware ISP (Android) or
+  /// the natural-lane tap (iOS). Does NOT include GPU post-processing
+  /// (saturation, contrast, brightness, black balance, gamma).
+  ///
+  /// Returns a [CamCaptureResult] whose populated field depends on
+  /// [destination] and platform — see [CamPhotosDestination] /
+  /// [CamCaptureResult] for the per-platform semantics.
   @async
-  String captureNaturalPicture(int handle);
+  CamCaptureResult captureNaturalPicture(
+    int handle,
+    String? outputDirectory,
+    String? fileName,
+    CamPhotosDestination? destination,
+  );
 
-  /// Captures the next GPU post-processed frame and saves it to disk.
+  /// Captures the next GPU post-processed frame and saves it.
   /// Format is inferred from [fileName] extension: .jpg/.jpeg → JPEG (quality 90),
-  /// .png or absent extension → PNG. [outputDirectory] null = system gallery under Pictures/CambrianCamera (via MediaStore).
-  /// Returns the absolute file path of the saved image.
+  /// .png or absent extension → PNG. [outputDirectory] null = system gallery
+  /// under Pictures/CambrianCamera (via MediaStore on Android).
+  ///
+  /// Returns a [CamCaptureResult] whose populated field depends on
+  /// [destination] and platform — see [CamPhotosDestination] /
+  /// [CamCaptureResult] for the per-platform semantics.
   @async
-  String captureImage(int handle, String? outputDirectory, String? fileName);
+  CamCaptureResult captureImage(
+    int handle,
+    String? outputDirectory,
+    String? fileName,
+    CamPhotosDestination? destination,
+  );
 
   @async
   int? getNativePipelineHandle(int handle);

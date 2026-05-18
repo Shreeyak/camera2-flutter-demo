@@ -347,41 +347,70 @@ class CambrianCameraPlugin : FlutterPlugin, ActivityAware, CameraHostApi {
     }
 
     /**
-     * Captures a still JPEG image using Camera2's hardware ISP and returns its file path.
+     * Captures a still JPEG image using Camera2's hardware ISP and returns a
+     * [CamCaptureResult] (filePath populated on success).
      * Does NOT include GPU post-processing (saturation, contrast, brightness, black balance, gamma).
      *
-     * @param handle   The camera handle.
-     * @param callback Invoked with [Result.success] containing the absolute file path.
-     */
-    override fun captureNaturalPicture(handle: Long, callback: (Result<String>) -> Unit) {
-        val controller = sessions[handle]?.controller
-        if (controller == null) {
-            callback(Result.failure(FlutterError("invalid_handle", "No session for handle $handle", null)))
-            return
-        }
-        controller.captureNaturalPicture(callback)
-    }
-
-    /**
-     * Captures the next GPU post-processed frame from the C++ pipeline and saves to disk.
-     *
      * @param handle          The camera handle.
-     * @param outputDirectory Absolute path to the target directory, or null for the default.
-     * @param fileName        Filename including extension, or null for a timestamped default.
-     * @param callback        Invoked with [Result.success] containing the absolute file path.
+     * @param outputDirectory Absolute path to the target directory, or null for the default. Currently used only for the filesystem path; MediaStore branch (saveToLibrary == true) is TODO.
+     * @param fileName        Filename including extension, or null for a timestamped default. Same scope as outputDirectory.
+     * @param destination     Per-platform destination selector. Plan 1 honors only the filesystem branch on Android (destination == null OR saveToLibrary == false). The MediaStore branch is left as a TODO and currently behaves the same as the filesystem branch.
+     * @param callback        Invoked with [Result.success] containing the [CamCaptureResult].
      */
-    override fun captureImage(
+    override fun captureNaturalPicture(
         handle: Long,
         outputDirectory: String?,
         fileName: String?,
-        callback: (Result<String>) -> Unit,
+        destination: CamPhotosDestination?,
+        callback: (Result<CamCaptureResult>) -> Unit,
     ) {
         val controller = sessions[handle]?.controller
         if (controller == null) {
             callback(Result.failure(FlutterError("invalid_handle", "No session for handle $handle", null)))
             return
         }
-        controller.captureImage(outputDirectory, fileName, callback)
+        // TODO(phase-3-android-polish): honor outputDirectory/fileName/destination.
+        // Plan 1 lands the wire-contract reshape; the existing controller path
+        // writes to its built-in default location and returns the absolute
+        // path. Android MediaStore branch (destination?.saveToLibrary == true)
+        // ships alongside iOS Photos library impl in Plan 2.
+        controller.captureNaturalPicture { stringResult ->
+            callback(stringResult.fold(
+                onSuccess = { path -> Result.success(CamCaptureResult(filePath = path, phAssetLocalId = null)) },
+                onFailure = { e -> Result.failure(e) },
+            ))
+        }
+    }
+
+    /**
+     * Captures the next GPU post-processed frame from the C++ pipeline and saves it, returning a [CamCaptureResult].
+     *
+     * @param handle          The camera handle.
+     * @param outputDirectory Absolute path to the target directory, or null for the default.
+     * @param fileName        Filename including extension, or null for a timestamped default.
+     * @param destination     Per-platform destination selector. See [captureNaturalPicture] for Plan 1's scope.
+     * @param callback        Invoked with [Result.success] containing the [CamCaptureResult].
+     */
+    override fun captureImage(
+        handle: Long,
+        outputDirectory: String?,
+        fileName: String?,
+        destination: CamPhotosDestination?,
+        callback: (Result<CamCaptureResult>) -> Unit,
+    ) {
+        val controller = sessions[handle]?.controller
+        if (controller == null) {
+            callback(Result.failure(FlutterError("invalid_handle", "No session for handle $handle", null)))
+            return
+        }
+        // TODO(phase-3-android-polish): honor destination?.saveToLibrary == true
+        // via MediaStore (see captureNaturalPicture).
+        controller.captureImage(outputDirectory, fileName) { stringResult ->
+            callback(stringResult.fold(
+                onSuccess = { path -> Result.success(CamCaptureResult(filePath = path, phAssetLocalId = null)) },
+                onFailure = { e -> Result.failure(e) },
+            ))
+        }
     }
 
     /**

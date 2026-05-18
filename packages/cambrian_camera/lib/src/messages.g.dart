@@ -612,6 +612,75 @@ class CamRgbSample {
   }
 }
 
+/// Destination for image-capture output on iOS Photos / Android MediaStore.
+///
+/// When [saveToLibrary] is true: iOS writes through PHPhotoLibrary and yields
+/// a PHAsset local identifier (no filesystem path); Android writes through
+/// MediaStore and yields a content URI / file path. When false: both
+/// platforms write to filesystem at the [CameraHostApi.captureImage]
+/// `outputDirectory` + `fileName` arguments and yield the filesystem path.
+class CamPhotosDestination {
+  CamPhotosDestination({
+    this.albumName,
+    required this.saveToLibrary,
+  });
+
+  /// Optional album name on iOS Photos. Ignored on Android.
+  String? albumName;
+
+  /// If true, save to the platform photo library (Photos / MediaStore).
+  /// If false, write to filesystem at the host method's outputDirectory + fileName.
+  bool saveToLibrary;
+
+  Object encode() {
+    return <Object?>[
+      albumName,
+      saveToLibrary,
+    ];
+  }
+
+  static CamPhotosDestination decode(Object result) {
+    result as List<Object?>;
+    return CamPhotosDestination(
+      albumName: result[0] as String?,
+      saveToLibrary: result[1]! as bool,
+    );
+  }
+}
+
+/// Result of an image capture.
+///
+/// One of [filePath] / [phAssetLocalId] is non-null depending on the
+/// [CamPhotosDestination.saveToLibrary] flag and platform:
+/// - iOS + saveToLibrary == true: [phAssetLocalId] populated; [filePath] null.
+/// - iOS + saveToLibrary == false (or null destination): [filePath] populated.
+/// - Android (any destination): [filePath] populated; [phAssetLocalId] null.
+class CamCaptureResult {
+  CamCaptureResult({
+    this.filePath,
+    this.phAssetLocalId,
+  });
+
+  String? filePath;
+
+  String? phAssetLocalId;
+
+  Object encode() {
+    return <Object?>[
+      filePath,
+      phAssetLocalId,
+    ];
+  }
+
+  static CamCaptureResult decode(Object result) {
+    result as List<Object?>;
+    return CamCaptureResult(
+      filePath: result[0] as String?,
+      phAssetLocalId: result[1] as String?,
+    );
+  }
+}
+
 
 class _PigeonCodec extends StandardMessageCodec {
   const _PigeonCodec();
@@ -650,6 +719,12 @@ class _PigeonCodec extends StandardMessageCodec {
     }    else if (value is CamRgbSample) {
       buffer.putUint8(138);
       writeValue(buffer, value.encode());
+    }    else if (value is CamPhotosDestination) {
+      buffer.putUint8(139);
+      writeValue(buffer, value.encode());
+    }    else if (value is CamCaptureResult) {
+      buffer.putUint8(140);
+      writeValue(buffer, value.encode());
     } else {
       super.writeValue(buffer, value);
     }
@@ -679,6 +754,10 @@ class _PigeonCodec extends StandardMessageCodec {
         return CamFrameResult.decode(readValue(buffer)!);
       case 138: 
         return CamRgbSample.decode(readValue(buffer)!);
+      case 139: 
+        return CamPhotosDestination.decode(readValue(buffer)!);
+      case 140: 
+        return CamCaptureResult.decode(readValue(buffer)!);
       default:
         return super.readValueOfType(type, buffer);
     }
@@ -818,10 +897,14 @@ class CameraHostApi {
     }
   }
 
-  /// Captures a still JPEG image using Camera2's hardware ISP.
-  /// Does NOT include GPU post-processing (saturation, contrast, brightness, black balance, gamma).
-  /// Returns the absolute file path of the saved image.
-  Future<String> captureNaturalPicture(int handle) async {
+  /// Captures a still JPEG image using Camera2's hardware ISP (Android) or
+  /// the natural-lane tap (iOS). Does NOT include GPU post-processing
+  /// (saturation, contrast, brightness, black balance, gamma).
+  ///
+  /// Returns a [CamCaptureResult] whose populated field depends on
+  /// [destination] and platform — see [CamPhotosDestination] /
+  /// [CamCaptureResult] for the per-platform semantics.
+  Future<CamCaptureResult> captureNaturalPicture(int handle, String? outputDirectory, String? fileName, CamPhotosDestination? destination) async {
     final String pigeonVar_channelName = 'dev.flutter.pigeon.cambrian_camera.CameraHostApi.captureNaturalPicture$pigeonVar_messageChannelSuffix';
     final BasicMessageChannel<Object?> pigeonVar_channel = BasicMessageChannel<Object?>(
       pigeonVar_channelName,
@@ -829,7 +912,7 @@ class CameraHostApi {
       binaryMessenger: pigeonVar_binaryMessenger,
     );
     final List<Object?>? pigeonVar_replyList =
-        await pigeonVar_channel.send(<Object?>[handle]) as List<Object?>?;
+        await pigeonVar_channel.send(<Object?>[handle, outputDirectory, fileName, destination]) as List<Object?>?;
     if (pigeonVar_replyList == null) {
       throw _createConnectionError(pigeonVar_channelName);
     } else if (pigeonVar_replyList.length > 1) {
@@ -844,15 +927,19 @@ class CameraHostApi {
         message: 'Host platform returned null value for non-null return value.',
       );
     } else {
-      return (pigeonVar_replyList[0] as String?)!;
+      return (pigeonVar_replyList[0] as CamCaptureResult?)!;
     }
   }
 
-  /// Captures the next GPU post-processed frame and saves it to disk.
+  /// Captures the next GPU post-processed frame and saves it.
   /// Format is inferred from [fileName] extension: .jpg/.jpeg → JPEG (quality 90),
-  /// .png or absent extension → PNG. [outputDirectory] null = system gallery under Pictures/CambrianCamera (via MediaStore).
-  /// Returns the absolute file path of the saved image.
-  Future<String> captureImage(int handle, String? outputDirectory, String? fileName) async {
+  /// .png or absent extension → PNG. [outputDirectory] null = system gallery
+  /// under Pictures/CambrianCamera (via MediaStore on Android).
+  ///
+  /// Returns a [CamCaptureResult] whose populated field depends on
+  /// [destination] and platform — see [CamPhotosDestination] /
+  /// [CamCaptureResult] for the per-platform semantics.
+  Future<CamCaptureResult> captureImage(int handle, String? outputDirectory, String? fileName, CamPhotosDestination? destination) async {
     final String pigeonVar_channelName = 'dev.flutter.pigeon.cambrian_camera.CameraHostApi.captureImage$pigeonVar_messageChannelSuffix';
     final BasicMessageChannel<Object?> pigeonVar_channel = BasicMessageChannel<Object?>(
       pigeonVar_channelName,
@@ -860,7 +947,7 @@ class CameraHostApi {
       binaryMessenger: pigeonVar_binaryMessenger,
     );
     final List<Object?>? pigeonVar_replyList =
-        await pigeonVar_channel.send(<Object?>[handle, outputDirectory, fileName]) as List<Object?>?;
+        await pigeonVar_channel.send(<Object?>[handle, outputDirectory, fileName, destination]) as List<Object?>?;
     if (pigeonVar_replyList == null) {
       throw _createConnectionError(pigeonVar_channelName);
     } else if (pigeonVar_replyList.length > 1) {
@@ -875,7 +962,7 @@ class CameraHostApi {
         message: 'Host platform returned null value for non-null return value.',
       );
     } else {
-      return (pigeonVar_replyList[0] as String?)!;
+      return (pigeonVar_replyList[0] as CamCaptureResult?)!;
     }
   }
 

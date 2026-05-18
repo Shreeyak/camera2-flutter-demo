@@ -525,6 +525,73 @@ data class CamRgbSample (
     )
   }
 }
+
+/**
+ * Destination for image-capture output on iOS Photos / Android MediaStore.
+ *
+ * When [saveToLibrary] is true: iOS writes through PHPhotoLibrary and yields
+ * a PHAsset local identifier (no filesystem path); Android writes through
+ * MediaStore and yields a content URI / file path. When false: both
+ * platforms write to filesystem at the [CameraHostApi.captureImage]
+ * `outputDirectory` + `fileName` arguments and yield the filesystem path.
+ *
+ * Generated class from Pigeon that represents data sent in messages.
+ */
+data class CamPhotosDestination (
+  /** Optional album name on iOS Photos. Ignored on Android. */
+  val albumName: String? = null,
+  /**
+   * If true, save to the platform photo library (Photos / MediaStore).
+   * If false, write to filesystem at the host method's outputDirectory + fileName.
+   */
+  val saveToLibrary: Boolean
+)
+ {
+  companion object {
+    fun fromList(pigeonVar_list: List<Any?>): CamPhotosDestination {
+      val albumName = pigeonVar_list[0] as String?
+      val saveToLibrary = pigeonVar_list[1] as Boolean
+      return CamPhotosDestination(albumName, saveToLibrary)
+    }
+  }
+  fun toList(): List<Any?> {
+    return listOf(
+      albumName,
+      saveToLibrary,
+    )
+  }
+}
+
+/**
+ * Result of an image capture.
+ *
+ * One of [filePath] / [phAssetLocalId] is non-null depending on the
+ * [CamPhotosDestination.saveToLibrary] flag and platform:
+ * - iOS + saveToLibrary == true: [phAssetLocalId] populated; [filePath] null.
+ * - iOS + saveToLibrary == false (or null destination): [filePath] populated.
+ * - Android (any destination): [filePath] populated; [phAssetLocalId] null.
+ *
+ * Generated class from Pigeon that represents data sent in messages.
+ */
+data class CamCaptureResult (
+  val filePath: String? = null,
+  val phAssetLocalId: String? = null
+)
+ {
+  companion object {
+    fun fromList(pigeonVar_list: List<Any?>): CamCaptureResult {
+      val filePath = pigeonVar_list[0] as String?
+      val phAssetLocalId = pigeonVar_list[1] as String?
+      return CamCaptureResult(filePath, phAssetLocalId)
+    }
+  }
+  fun toList(): List<Any?> {
+    return listOf(
+      filePath,
+      phAssetLocalId,
+    )
+  }
+}
 private open class MessagesPigeonCodec : StandardMessageCodec() {
   override fun readValueOfType(type: Byte, buffer: ByteBuffer): Any? {
     return when (type) {
@@ -578,6 +645,16 @@ private open class MessagesPigeonCodec : StandardMessageCodec() {
           CamRgbSample.fromList(it)
         }
       }
+      139.toByte() -> {
+        return (readValue(buffer) as? List<Any?>)?.let {
+          CamPhotosDestination.fromList(it)
+        }
+      }
+      140.toByte() -> {
+        return (readValue(buffer) as? List<Any?>)?.let {
+          CamCaptureResult.fromList(it)
+        }
+      }
       else -> super.readValueOfType(type, buffer)
     }
   }
@@ -623,6 +700,14 @@ private open class MessagesPigeonCodec : StandardMessageCodec() {
         stream.write(138)
         writeValue(stream, value.toList())
       }
+      is CamPhotosDestination -> {
+        stream.write(139)
+        writeValue(stream, value.toList())
+      }
+      is CamCaptureResult -> {
+        stream.write(140)
+        writeValue(stream, value.toList())
+      }
       else -> super.writeValue(stream, value)
     }
   }
@@ -637,18 +722,26 @@ interface CameraHostApi {
   fun setResolution(handle: Long, width: Long, height: Long, callback: (Result<Unit>) -> Unit)
   fun setProcessingParams(handle: Long, params: CamProcessingParams)
   /**
-   * Captures a still JPEG image using Camera2's hardware ISP.
-   * Does NOT include GPU post-processing (saturation, contrast, brightness, black balance, gamma).
-   * Returns the absolute file path of the saved image.
+   * Captures a still JPEG image using Camera2's hardware ISP (Android) or
+   * the natural-lane tap (iOS). Does NOT include GPU post-processing
+   * (saturation, contrast, brightness, black balance, gamma).
+   *
+   * Returns a [CamCaptureResult] whose populated field depends on
+   * [destination] and platform — see [CamPhotosDestination] /
+   * [CamCaptureResult] for the per-platform semantics.
    */
-  fun captureNaturalPicture(handle: Long, callback: (Result<String>) -> Unit)
+  fun captureNaturalPicture(handle: Long, outputDirectory: String?, fileName: String?, destination: CamPhotosDestination?, callback: (Result<CamCaptureResult>) -> Unit)
   /**
-   * Captures the next GPU post-processed frame and saves it to disk.
+   * Captures the next GPU post-processed frame and saves it.
    * Format is inferred from [fileName] extension: .jpg/.jpeg → JPEG (quality 90),
-   * .png or absent extension → PNG. [outputDirectory] null = system gallery under Pictures/CambrianCamera (via MediaStore).
-   * Returns the absolute file path of the saved image.
+   * .png or absent extension → PNG. [outputDirectory] null = system gallery
+   * under Pictures/CambrianCamera (via MediaStore on Android).
+   *
+   * Returns a [CamCaptureResult] whose populated field depends on
+   * [destination] and platform — see [CamPhotosDestination] /
+   * [CamCaptureResult] for the per-platform semantics.
    */
-  fun captureImage(handle: Long, outputDirectory: String?, fileName: String?, callback: (Result<String>) -> Unit)
+  fun captureImage(handle: Long, outputDirectory: String?, fileName: String?, destination: CamPhotosDestination?, callback: (Result<CamCaptureResult>) -> Unit)
   fun getNativePipelineHandle(handle: Long, callback: (Result<Long?>) -> Unit)
   fun startRecording(handle: Long, outputDirectory: String?, fileName: String?, bitrate: Long?, fps: Long?, callback: (Result<String>) -> Unit)
   fun stopRecording(handle: Long, callback: (Result<String>) -> Unit)
@@ -785,7 +878,10 @@ interface CameraHostApi {
           channel.setMessageHandler { message, reply ->
             val args = message as List<Any?>
             val handleArg = args[0] as Long
-            api.captureNaturalPicture(handleArg) { result: Result<String> ->
+            val outputDirectoryArg = args[1] as String?
+            val fileNameArg = args[2] as String?
+            val destinationArg = args[3] as CamPhotosDestination?
+            api.captureNaturalPicture(handleArg, outputDirectoryArg, fileNameArg, destinationArg) { result: Result<CamCaptureResult> ->
               val error = result.exceptionOrNull()
               if (error != null) {
                 reply.reply(wrapError(error))
@@ -807,7 +903,8 @@ interface CameraHostApi {
             val handleArg = args[0] as Long
             val outputDirectoryArg = args[1] as String?
             val fileNameArg = args[2] as String?
-            api.captureImage(handleArg, outputDirectoryArg, fileNameArg) { result: Result<String> ->
+            val destinationArg = args[3] as CamPhotosDestination?
+            api.captureImage(handleArg, outputDirectoryArg, fileNameArg, destinationArg) { result: Result<CamCaptureResult> ->
               val error = result.exceptionOrNull()
               if (error != null) {
                 reply.reply(wrapError(error))

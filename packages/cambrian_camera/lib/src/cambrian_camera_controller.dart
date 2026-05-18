@@ -533,7 +533,15 @@ class CambrianCamera {
   ///
   /// Uses a dedicated JPEG ImageReader pre-allocated at session setup time.
   /// Does not interrupt the streaming pipeline.
-  Future<String> captureNaturalPicture() => _hostApi.captureNaturalPicture(_handle);
+  ///
+  /// Returns a [CamCaptureResult] whose populated field depends on
+  /// [destination] and platform (see [CamPhotosDestination] /
+  /// [CamCaptureResult]).
+  Future<CamCaptureResult> captureNaturalPicture({
+    String? outputDirectory,
+    String? fileName,
+    CamPhotosDestination? destination,
+  }) => _hostApi.captureNaturalPicture(_handle, outputDirectory, fileName, destination);
 
   /// Captures the GPU post-processed frame (what the user sees on screen) and saves to disk.
   ///
@@ -552,9 +560,14 @@ class CambrianCamera {
   /// **EXIF metadata** (ISO, exposure time, focal length, aperture, white-balance gains,
   /// orientation, and capture timestamp) is written automatically.
   ///
-  /// Returns the absolute file path of the saved image.
-  Future<String> captureImage({String? outputDirectory, String? fileName}) =>
-      _hostApi.captureImage(_handle, outputDirectory, fileName);
+  /// Returns a [CamCaptureResult] whose populated field depends on
+  /// [destination] and platform (see [CamPhotosDestination] /
+  /// [CamCaptureResult]).
+  Future<CamCaptureResult> captureImage({
+    String? outputDirectory,
+    String? fileName,
+    CamPhotosDestination? destination,
+  }) => _hostApi.captureImage(_handle, outputDirectory, fileName, destination);
 
   /// Starts recording to an MP4 file. Returns (contentUri, displayName).
   ///
