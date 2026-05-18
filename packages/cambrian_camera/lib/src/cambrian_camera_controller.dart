@@ -732,6 +732,7 @@ class CambrianCamera {
       streamHeight: cfg.cropHeight ?? cfg.captureHeight,
       sensorStreamWidth: cfg.captureWidth,
       sensorStreamHeight: cfg.captureHeight,
+      streamPixelFormat: prev.streamPixelFormat,
     );
     _capabilities = newCaps;
     if (kDebugMode) {

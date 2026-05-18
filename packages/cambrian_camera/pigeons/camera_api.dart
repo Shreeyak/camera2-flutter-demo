@@ -181,6 +181,7 @@ class CamCapabilities {
     required this.streamHeight,
     required this.sensorStreamWidth,
     required this.sensorStreamHeight,
+    required this.streamPixelFormat,
   });
 
   /// All supported YUV_420_888 stream resolutions, sorted descending by area.
@@ -221,6 +222,13 @@ class CamCapabilities {
 
   /// Height of the camera session's YUV stream. See [sensorStreamWidth].
   int sensorStreamHeight;
+
+  /// Pixel format of the lane buffers exposed via the texture bridge.
+  /// Values: "BGRA8" (iOS default + Android post-D-2P-09 swizzle),
+  /// "RGBA16F" (iOS opt-out via OpenConfiguration.lanesEightBit: false),
+  /// "RGBA8" (Android pre-D-2P-09 — should not be observed in shipped builds).
+  /// Informational for non-Texture-widget consumers that read buffers raw.
+  String streamPixelFormat;
 }
 
 /// Lean payload for the active stream-configuration change callback.

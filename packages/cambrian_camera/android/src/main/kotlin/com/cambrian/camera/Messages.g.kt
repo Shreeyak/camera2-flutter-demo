@@ -301,7 +301,15 @@ data class CamCapabilities (
    */
   val sensorStreamWidth: Long,
   /** Height of the camera session's YUV stream. See [sensorStreamWidth]. */
-  val sensorStreamHeight: Long
+  val sensorStreamHeight: Long,
+  /**
+   * Pixel format of the lane buffers exposed via the texture bridge.
+   * Values: "BGRA8" (iOS default + Android post-D-2P-09 swizzle),
+   * "RGBA16F" (iOS opt-out via OpenConfiguration.lanesEightBit: false),
+   * "RGBA8" (Android pre-D-2P-09 — should not be observed in shipped builds).
+   * Informational for non-Texture-widget consumers that read buffers raw.
+   */
+  val streamPixelFormat: String
 )
  {
   companion object {
@@ -325,7 +333,8 @@ data class CamCapabilities (
       val streamHeight = pigeonVar_list[16] as Long
       val sensorStreamWidth = pigeonVar_list[17] as Long
       val sensorStreamHeight = pigeonVar_list[18] as Long
-      return CamCapabilities(supportedSizes, isoMin, isoMax, exposureTimeMinNs, exposureTimeMaxNs, focusMin, focusMax, zoomMin, zoomMax, evCompMin, evCompMax, evCompensationStep, naturalStreamTextureId, naturalStreamWidth, naturalStreamHeight, streamWidth, streamHeight, sensorStreamWidth, sensorStreamHeight)
+      val streamPixelFormat = pigeonVar_list[19] as String
+      return CamCapabilities(supportedSizes, isoMin, isoMax, exposureTimeMinNs, exposureTimeMaxNs, focusMin, focusMax, zoomMin, zoomMax, evCompMin, evCompMax, evCompensationStep, naturalStreamTextureId, naturalStreamWidth, naturalStreamHeight, streamWidth, streamHeight, sensorStreamWidth, sensorStreamHeight, streamPixelFormat)
     }
   }
   fun toList(): List<Any?> {
@@ -349,6 +358,7 @@ data class CamCapabilities (
       streamHeight,
       sensorStreamWidth,
       sensorStreamHeight,
+      streamPixelFormat,
     )
   }
 }

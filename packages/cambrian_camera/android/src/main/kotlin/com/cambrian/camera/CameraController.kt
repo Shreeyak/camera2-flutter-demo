@@ -972,6 +972,12 @@ class CameraController(
                     // correct "clear crop" size back via cropOutputSize.
                     sensorStreamWidth = sensorStreamWidth.toLong(),
                     sensorStreamHeight = sensorStreamHeight.toLong(),
+                    // §5.7: post-D-2P-09 the GPU swizzles to BGRA8 to match
+                    // iOS's default lane format. The runtime swizzle in
+                    // GpuRenderer.cpp that makes this value byte-accurate
+                    // lands separately (phase-3-android-polish); declaring
+                    // "BGRA8" here is the wire-contract goal.
+                    streamPixelFormat = "BGRA8",
                 )
             callback(Result.success(caps))
         } catch (e: CameraAccessException) {

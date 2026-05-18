@@ -127,6 +127,7 @@ class CameraCapabilities {
     required this.streamHeight,
     required this.sensorStreamWidth,
     required this.sensorStreamHeight,
+    required this.streamPixelFormat,
   });
 
   /// Empty placeholder used during the open() factory before getCapabilities completes.
@@ -150,6 +151,7 @@ class CameraCapabilities {
         streamHeight: 0,
         sensorStreamWidth: 0,
         sensorStreamHeight: 0,
+        streamPixelFormat: '',
       );
 
   factory CameraCapabilities.fromPigeon(CamCapabilities c) =>
@@ -175,6 +177,7 @@ class CameraCapabilities {
         streamHeight: c.streamHeight,
         sensorStreamWidth: c.sensorStreamWidth,
         sensorStreamHeight: c.sensorStreamHeight,
+        streamPixelFormat: c.streamPixelFormat,
       );
 
   /// All supported YUV_420_888 stream resolutions, sorted descending by area.
@@ -215,6 +218,12 @@ class CameraCapabilities {
 
   /// Height of the camera session's YUV stream. See [sensorStreamWidth].
   final int sensorStreamHeight;
+
+  /// Pixel format of the lane buffers exposed via the texture bridge —
+  /// "BGRA8" | "RGBA16F" | "RGBA8". See pigeons/camera_api.dart for the
+  /// per-value semantics. Informational for non-Texture-widget consumers
+  /// that read buffers raw.
+  final String streamPixelFormat;
 }
 
 /// Describes a GPU texture stream ready for display.
