@@ -16,7 +16,7 @@ import 'package:pigeon/pigeon.dart'
     dartOptions: DartOptions(),
     kotlinOut: 'android/src/main/kotlin/com/cambrian/camera/Messages.g.kt',
     kotlinOptions: KotlinOptions(package: 'com.cambrian.camera'),
-    swiftOut: 'ios/Classes/Messages.g.swift',
+    swiftOut: 'ios/cambrian_camera/Sources/cambrian_camera/Messages.g.swift',
     swiftOptions: SwiftOptions(),
     copyrightHeader: 'pigeons/copyright.txt',
   ),
