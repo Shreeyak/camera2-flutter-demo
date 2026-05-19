@@ -1,4 +1,17 @@
 // ignore_for_file: one_member_abstracts
+//
+// Cross-platform Pigeon contract for the cambrian_camera plugin.
+//
+// Platform-specific surfaces live in sibling files:
+//   - pigeons/camera_api_ios.dart      — iOS-only methods (e.g. calibration).
+//   - pigeons/camera_api_android.dart  — Android-only methods (future; see
+//                                        docs/plans/2026-05-19-pigeon-cross-
+//                                        platform-cleanup.md).
+//
+// Fields here are intended to map cleanly onto both AVFoundation (iOS) and
+// Camera2 (Android). Where the platforms diverge, each per-field doc names
+// the asymmetry and the platform-side conversion lives in the plugin layer
+// (PigeonValueMapping.swift on iOS; CameraController.kt on Android).
 import 'package:pigeon/pigeon.dart'
     show
         ConfigurePigeon,
