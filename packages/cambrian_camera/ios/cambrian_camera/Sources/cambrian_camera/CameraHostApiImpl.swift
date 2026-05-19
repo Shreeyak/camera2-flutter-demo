@@ -641,6 +641,122 @@ final class CameraHostApiImpl: CameraHostApi {
         }
     }
 
+    /// Runs the engine's single-shot gray-world white-balance calibration
+    /// and returns the engine's `CalibrationResult` adapted into the
+    /// Pigeon `CamCalibrationResult`, with the committed gains read from
+    /// `engine.currentSettingsSnapshot()` so Dart consumers can re-apply
+    /// them to manual mode without losing the calibration.
+    ///
+    /// Phase-3 spec §6 fallback shape — the iOS-only Pigeon-file
+    /// approach was abandoned after Pigeon 22's per-file Swift output
+    /// produced unavoidable module-level `PigeonError` / `CamRgbSample`
+    /// redeclarations; the methods now live on the shared `CameraHostApi`,
+    /// with the Android Kotlin plugin throwing `not_implemented`.
+    ///
+    /// ## Two-await snapshot read
+    ///
+    /// The calibration call and the snapshot read are separate actor
+    /// hops. Between them another caller could in principle invoke
+    /// `updateSettings(wbMode: .auto)` and clear the just-committed
+    /// gains; the snapshot would then report nil, and the Dart-side
+    /// `?? 1.0` fallback would surface as a silent calibration miss.
+    /// In practice every caller `await`s the calibration before
+    /// issuing the next host call, so the window is unreachable. If a
+    /// concurrent caller is ever added, return both values from a
+    /// single engine entry point instead of reading two snapshots.
+    func calibrateWhiteBalance(
+        handle: Int64,
+        completion: @escaping (Result<CamCalibrationResult, Error>) -> Void
+    ) {
+        guard let state = resolveState(for: handle) else {
+            completion(.failure(Self.handleNotFound(handle)))
+            return
+        }
+        Task {
+            do {
+                let result = try await state.engine.calibrateWhiteBalance()
+                // Read the gains the engine just committed so the Dart
+                // caller can populate `WbCalibrationResult.gains` and
+                // re-apply them via `WhiteBalance.manual(...)` without
+                // overwriting them with sentinels. See engine field
+                // `currentSettings` (CameraEngine.swift §"currentSettingsSnapshot()").
+                let snapshot = await state.engine.currentSettingsSnapshot()
+                completion(.success(CamCalibrationResult(
+                    before: PigeonValueMapping.toCamRgbSample(result.before),
+                    after: PigeonValueMapping.toCamRgbSample(result.after),
+                    converged: result.converged,
+                    iterations: Int64(result.iterations),
+                    gainR: snapshot?.wbGainR,
+                    gainG: snapshot?.wbGainG,
+                    gainB: snapshot?.wbGainB,
+                    blackR: nil,
+                    blackG: nil,
+                    blackB: nil
+                )))
+            } catch is CancellationError {
+                completion(.failure(PigeonError(
+                    code: "cancelled",
+                    message: "Calibration cancelled",
+                    details: nil
+                )))
+            } catch let e as EngineError {
+                completion(.failure(Self.mapEngineError(e)))
+            } catch {
+                completion(.failure(PigeonError(
+                    code: "unknown",
+                    message: error.localizedDescription,
+                    details: nil
+                )))
+            }
+        }
+    }
+
+    /// Runs the engine's single-shot black-balance calibration and
+    /// returns the result with the committed black-level offsets read
+    /// from `engine.currentProcessingParametersSnapshot()` (symmetric
+    /// with `calibrateWhiteBalance` above).
+    func calibrateBlackBalance(
+        handle: Int64,
+        completion: @escaping (Result<CamCalibrationResult, Error>) -> Void
+    ) {
+        guard let state = resolveState(for: handle) else {
+            completion(.failure(Self.handleNotFound(handle)))
+            return
+        }
+        Task {
+            do {
+                let result = try await state.engine.calibrateBlackBalance()
+                let snapshot = await state.engine.currentProcessingParametersSnapshot()
+                completion(.success(CamCalibrationResult(
+                    before: PigeonValueMapping.toCamRgbSample(result.before),
+                    after: PigeonValueMapping.toCamRgbSample(result.after),
+                    converged: result.converged,
+                    iterations: Int64(result.iterations),
+                    gainR: nil,
+                    gainG: nil,
+                    gainB: nil,
+                    blackR: snapshot?.blackR,
+                    blackG: snapshot?.blackG,
+                    blackB: snapshot?.blackB
+                )))
+            } catch is CancellationError {
+                completion(.failure(PigeonError(
+                    code: "cancelled",
+                    message: "Calibration cancelled",
+                    details: nil
+                )))
+            } catch let e as EngineError {
+                completion(.failure(Self.mapEngineError(e)))
+            } catch {
+                completion(.failure(PigeonError(
+                    code: "unknown",
+                    message: error.localizedDescription,
+                    details: nil
+                )))
+            }
+        }
+    }
+
     /// §5.6 — Camera permission status. Routes to the engine's
     /// `nonisolated static` helper so the Dart side can query before an
     /// engine handle exists.

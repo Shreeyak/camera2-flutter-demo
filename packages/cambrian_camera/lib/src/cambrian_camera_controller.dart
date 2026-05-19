@@ -1,6 +1,7 @@
 import 'dart:async';
 
-import 'package:flutter/foundation.dart' show debugPrint, kDebugMode;
+import 'package:flutter/foundation.dart'
+    show TargetPlatform, debugPrint, defaultTargetPlatform, kDebugMode;
 import 'package:flutter/widgets.dart';
 
 import 'calibration.dart'
@@ -154,6 +155,38 @@ class CambrianCamera {
   /// to true in the settings. The [CameraSettings.naturalStreamHeight] field controls the
   /// requested height of the natural stream; 0 uses a default.
   ///
+  /// Current camera permission status, without prompting the user.
+  ///
+  /// Returns one of: `"notDetermined"`, `"denied"`, `"restricted"`,
+  /// `"authorized"`. Call this before [requestCameraPermission] to decide
+  /// whether to show a rationale UI, or before [open] to short-circuit
+  /// if the permission is denied.
+  ///
+  /// Internally routes to the iOS engine's `AVCaptureDevice.authorizationStatus(for: .video)`
+  /// (or Android's `ContextCompat.checkSelfPermission(CAMERA)`).
+  static Future<String> cameraPermissionStatus() =>
+      CameraHostApi().cameraPermissionStatus();
+
+  /// Triggers the system camera-permission prompt and returns the
+  /// resulting status (same four values as [cameraPermissionStatus]).
+  ///
+  /// On iOS, calls `AVCaptureDevice.requestAccess(for: .video)` directly
+  /// — no `permission_handler` round-trip. The prompt only fires when
+  /// the current status is `"notDetermined"`; for `"denied"` or
+  /// `"restricted"` the call returns the current status without
+  /// showing UI (iOS will not override a prior decision).
+  static Future<String> requestCameraPermission() =>
+      CameraHostApi().requestCameraPermission();
+
+  /// Photos add-only permission status. iOS-only; returns
+  /// `"authorized"` on Android API 29+ (MediaStore handles it).
+  static Future<String> photosAddPermissionStatus() =>
+      CameraHostApi().photosAddPermissionStatus();
+
+  /// Triggers the system Photos add-only prompt.
+  static Future<String> requestPhotosAddPermission() =>
+      CameraHostApi().requestPhotosAddPermission();
+
   /// Throws [PlatformException] if the camera cannot be opened (e.g. permission
   /// denied). After opening, errors are delivered via [errorStream].
   static Future<CambrianCamera> open({
@@ -386,17 +419,25 @@ class CambrianCamera {
     return (r: cam.r, g: cam.g, b: cam.b);
   }
 
-  /// Runs the iterative white balance calibration loop.
+  /// Runs the white balance calibration.
   ///
-  /// Samples the trimmed-mean RGB of a 96×96 pixel patch at the center of the
-  /// processed frame. Takes a snapshot before any corrections ([patchBefore]) and
-  /// another after convergence ([patchAfter]) — useful for before/after display in
-  /// the UI. Between samples, applies proportional R/G/B gain corrections via
-  /// [updateSettings] until the patch error falls below [kWbTolerance] or
-  /// [kWbMaxIterations] is reached.
+  /// **Platform behavior:**
+  /// - **Android** — runs the iterative Dart loop documented below: samples
+  ///   the 96×96 trimmed-mean center patch, applies proportional R/G/B
+  ///   gain corrections via [updateSettings], and repeats until the patch
+  ///   error falls below [kWbTolerance] or [kWbMaxIterations] is reached.
+  ///   `gains` in the result is the converged value the loop reached.
+  /// - **iOS** — delegates to the engine's single-shot gray-world
+  ///   calibration via the platform channel
+  ///   ([CameraHostApi.calibrateWhiteBalance]). The engine commits manual
+  ///   gains internally; `gains` in the result carries those committed
+  ///   values so the caller can immediately re-apply them via
+  ///   [WhiteBalance.manual]. [initialGainR]/[initialGainG]/[initialGainB]
+  ///   are ignored on iOS — the engine starts from auto.
   ///
-  /// The app does not need to call [sampleCenterPatch] directly — this method
-  /// owns both patch reads and returns them in [WbCalibrationResult].
+  /// The app does not need to call [sampleCenterPatch] directly — this
+  /// method owns both patch reads and returns them in
+  /// [WbCalibrationResult].
   ///
   /// [initialGainR], [initialGainG], [initialGainB] seed the first loop
   /// iteration. Pass the current AWB values from [FrameResult] when available;
@@ -406,6 +447,26 @@ class CambrianCamera {
     double initialGainG = 1.0,
     double initialGainB = 1.0,
   }) async {
+    // iOS routes to the engine's single-shot path (Phase-3 spec §6).
+    // The engine has already committed manual gains by the time the call
+    // resolves; `result.gainR/G/B` carries them so the caller can re-apply
+    // via [WhiteBalance.manual] without overwriting the calibration.
+    if (defaultTargetPlatform == TargetPlatform.iOS) {
+      final result = await _hostApi.calibrateWhiteBalance(_handle);
+      // Engine guarantees gainR/G/B are populated for WB results; fall
+      // back to 1.0 only as a defensive identity gain on the (impossible
+      // in practice) wire-level null path.
+      return (
+        gains: (
+          r: result.gainR ?? 1.0,
+          g: result.gainG ?? 1.0,
+          b: result.gainB ?? 1.0,
+        ),
+        patchBefore: (r: result.before.r, g: result.before.g, b: result.before.b),
+        patchAfter: (r: result.after.r, g: result.after.g, b: result.after.b),
+      );
+    }
+
     var gainR = initialGainR;
     final gainG = initialGainG;
     var gainB = initialGainB;
@@ -467,23 +528,46 @@ class CambrianCamera {
     );
   }
 
-  /// Runs the iterative black balance calibration loop.
+  /// Runs the black balance calibration.
   ///
-  /// Samples the trimmed-mean RGB of a 96×96 pixel patch at the center of the
-  /// processed frame. Takes a snapshot before any corrections ([patchBefore]) and
-  /// another after convergence ([patchAfter]) — useful for before/after display in
-  /// the UI. Between samples, accumulates per-channel black-level offsets and applies
-  /// them via [setProcessingParams] until the patch error falls below
-  /// [kBbTolerance] or [kBbMaxIterations] is reached.
+  /// **Platform behavior:**
+  /// - **Android** — runs the iterative Dart loop documented below:
+  ///   samples the 96×96 trimmed-mean center patch and accumulates
+  ///   per-channel black-level offsets via [setProcessingParams] until
+  ///   the patch error falls below [kBbTolerance] or [kBbMaxIterations]
+  ///   is reached. `offsets` in the result carries the converged
+  ///   accumulated offsets.
+  /// - **iOS** — delegates to the engine's single-shot calibration via
+  ///   the platform channel ([CameraHostApi.calibrateBlackBalance]). The
+  ///   engine writes the committed offsets to its
+  ///   [ProcessingParameters.blackR/G/B] internally; `offsets` in the
+  ///   result carries those values so the caller can re-apply via
+  ///   [ProcessingParams.copyWith]. [params] is ignored on iOS — the
+  ///   engine owns the full processing-parameters state.
   ///
-  /// The app does not need to call [sampleCenterPatch] directly — this method
-  /// owns both patch reads and returns them in [BbCalibrationResult].
+  /// The app does not need to call [sampleCenterPatch] directly — this
+  /// method owns both patch reads and returns them in
+  /// [BbCalibrationResult].
   ///
   /// [params] is the current [ProcessingParams]; non-black fields are preserved
   /// across each iteration's [setProcessingParams] call.
   Future<BbCalibrationResult> calibrateBlackBalance({
     required ProcessingParams params,
   }) async {
+    // iOS routes to the engine's single-shot path (Phase-3 spec §6).
+    if (defaultTargetPlatform == TargetPlatform.iOS) {
+      final result = await _hostApi.calibrateBlackBalance(_handle);
+      return (
+        offsets: (
+          r: result.blackR ?? 0.0,
+          g: result.blackG ?? 0.0,
+          b: result.blackB ?? 0.0,
+        ),
+        patchBefore: (r: result.before.r, g: result.before.g, b: result.before.b),
+        patchAfter: (r: result.after.r, g: result.after.g, b: result.after.b),
+      );
+    }
+
     var accR = 0.0, accG = 0.0, accB = 0.0;
 
     // Snapshot the caller-supplied params so the original black offsets can be

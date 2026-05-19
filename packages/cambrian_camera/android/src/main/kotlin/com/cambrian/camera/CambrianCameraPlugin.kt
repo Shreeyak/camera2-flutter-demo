@@ -350,6 +350,31 @@ class CambrianCameraPlugin : FlutterPlugin, ActivityAware, CameraHostApi {
     }
 
     /**
+     * iOS-only — see KDoc on [CameraHostApi.calibrateWhiteBalance]. The
+     * Android plugin throws `not_implemented`; [CambrianCamera] in Dart
+     * branches on `Platform.isIOS` before invoking, so this stub is
+     * unreachable in normal use. Phase-3 spec §6 fallback shape.
+     */
+    override fun calibrateWhiteBalance(handle: Long, callback: (Result<CamCalibrationResult>) -> Unit) {
+        callback(Result.failure(FlutterError(
+            "not_implemented",
+            "calibrateWhiteBalance is iOS-only; Android uses the Dart iterative loop",
+            null
+        )))
+    }
+
+    /**
+     * iOS-only — symmetric with [calibrateWhiteBalance] above.
+     */
+    override fun calibrateBlackBalance(handle: Long, callback: (Result<CamCalibrationResult>) -> Unit) {
+        callback(Result.failure(FlutterError(
+            "not_implemented",
+            "calibrateBlackBalance is iOS-only; Android uses the Dart iterative loop",
+            null
+        )))
+    }
+
+    /**
      * Captures a still JPEG image using Camera2's hardware ISP and returns a
      * [CamCaptureResult] (filePath populated on success).
      * Does NOT include GPU post-processing (saturation, contrast, brightness, black balance, gamma).

@@ -18,7 +18,6 @@ import 'package:cambrian_camera/cambrian_camera.dart'
         WhiteBalance,
         WbAuto;
 import 'package:flutter/material.dart';
-import 'package:permission_handler/permission_handler.dart';
 import 'camera/camera_callbacks.dart';
 import 'camera/camera_settings_values.dart';
 import 'theme/material_theme.dart';
@@ -213,9 +212,15 @@ class _CameraScreenState extends State<CameraScreen>
   }
 
   Future<void> _openCamera() async {
-    final status = await Permission.camera.request();
-    if (!status.isGranted) {
-      debugPrint('Camera permission denied: $status');
+    // Use cambrian_camera's native permission API instead of permission_handler.
+    // On iOS this calls AVCaptureDevice.requestAccess(for: .video) directly,
+    // ensuring the system dialog fires when status is "notDetermined".
+    final preStatus = await CambrianCamera.cameraPermissionStatus();
+    debugPrint('Camera permission status (pre-request): $preStatus');
+    final status = await CambrianCamera.requestCameraPermission();
+    debugPrint('Camera permission status (post-request): $status');
+    if (status != 'authorized') {
+      debugPrint('Camera permission not granted: $status');
       return;
     }
     try {

@@ -4,6 +4,14 @@
 <dict>
 	<key>CADisableMinimumFrameDurationOnPhone</key>
 	<true/>
+	<key>NSCameraUsageDescription</key>
+	<string>Camera2 Flutter Demo uses the camera to capture frames for live preview, photo capture, video recording, and calibration.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Camera2 Flutter Demo uses the microphone when recording video so the audio track matches the captured video.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Camera2 Flutter Demo saves captured photos and videos to your Photos library when you ask it to.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Camera2 Flutter Demo uses the local network to allow Flutter debugging tools to connect over Wi-Fi during development.</string>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>

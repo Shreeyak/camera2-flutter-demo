@@ -19,6 +19,24 @@ dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^5.0.0
+  flutter_launcher_icons: ^0.14.4
 
 flutter:
   uses-material-design: true
+
+# Generates iOS + Android launcher icons from a single source PNG.
+# Regenerate after editing the source image:
+#   dart run flutter_launcher_icons
+flutter_launcher_icons:
+  android: true
+  ios: true
+  image_path: "assets/icon/app_icon.png"
+  # iOS App Store icons must NOT have an alpha channel — the source PNG is
+  # transparent, so we composite onto a white background here.
+  remove_alpha_ios: true
+  background_color_ios: "#FFFFFF"
+  # Android adaptive icons (API 26+) use a foreground/background pair; the
+  # foreground reuses the same camera artwork against a white background
+  # so the launcher can apply its own mask/shape.
+  adaptive_icon_background: "#FFFFFF"
+  adaptive_icon_foreground: "assets/icon/app_icon.png"

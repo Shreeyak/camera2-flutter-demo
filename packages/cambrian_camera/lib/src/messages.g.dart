@@ -635,6 +635,111 @@ class CamRgbSample {
   }
 }
 
+/// Result of an iOS-engine calibration call ([CameraHostApi.calibrateWhiteBalance]
+/// / [CameraHostApi.calibrateBlackBalance]).
+///
+/// Spec source: `docs/superpowers/specs/2026-05-18-phase-3-design.md`
+/// §6.1 + CameraKit/DECISIONS.md D-2P-02. The four required fields
+/// (`before`, `after`, `converged`, `iterations`) mirror the iOS
+/// engine's `CalibrationResult`; for the Phase-2 single-shot iOS
+/// algorithm `converged` is always true and `iterations` is always 1.
+///
+/// The six optional fields below carry the engine's *committed* values
+/// so the Dart-side caller can populate the existing
+/// `WbCalibrationResult.gains` / `BbCalibrationResult.offsets` records.
+/// Dart consumers immediately re-apply those values to the camera
+/// after calibration (see example app in
+/// `lib/main.dart:_runWbCalibration` / `_runBbCalibration`), so they
+/// must be the *real* committed values, not sentinels. The iOS adapter
+/// reads them from `CameraEngine.currentSettingsSnapshot()` /
+/// `currentProcessingParametersSnapshot()` immediately after the
+/// engine's calibration call returns.
+///
+/// Field nullability mirrors which method produced the result:
+///   - `calibrateWhiteBalance` populates `gainR/G/B`; black fields null.
+///   - `calibrateBlackBalance` populates `blackR/G/B`; gain fields null.
+///
+/// Android does not invoke these methods — the Kotlin plugin's stubs
+/// throw `FlutterError("not_implemented", ...)`. The Dart-side
+/// `CambrianCamera.calibrateWhiteBalance` / `calibrateBlackBalance`
+/// branches on `Platform.isIOS` before invoking, so on Android these
+/// methods are unreachable.
+class CamCalibrationResult {
+  CamCalibrationResult({
+    required this.before,
+    required this.after,
+    required this.converged,
+    required this.iterations,
+    this.gainR,
+    this.gainG,
+    this.gainB,
+    this.blackR,
+    this.blackG,
+    this.blackB,
+  });
+
+  /// RGB sample of the center patch before the calibration was applied.
+  CamRgbSample before;
+
+  /// RGB sample of the center patch after the calibration was applied.
+  CamRgbSample after;
+
+  /// Whether the algorithm converged. Always true for the Phase-2 single-shot iOS path.
+  bool converged;
+
+  /// Iteration count. Always 1 for the Phase-2 single-shot iOS path.
+  int iterations;
+
+  /// WB-only — committed red-channel gain after `calibrateWhiteBalance`. Null for BB.
+  double? gainR;
+
+  /// WB-only — committed green-channel gain after `calibrateWhiteBalance`. Null for BB.
+  double? gainG;
+
+  /// WB-only — committed blue-channel gain after `calibrateWhiteBalance`. Null for BB.
+  double? gainB;
+
+  /// BB-only — committed red-channel black-level offset after `calibrateBlackBalance`. Null for WB.
+  double? blackR;
+
+  /// BB-only — committed green-channel black-level offset after `calibrateBlackBalance`. Null for WB.
+  double? blackG;
+
+  /// BB-only — committed blue-channel black-level offset after `calibrateBlackBalance`. Null for WB.
+  double? blackB;
+
+  Object encode() {
+    return <Object?>[
+      before,
+      after,
+      converged,
+      iterations,
+      gainR,
+      gainG,
+      gainB,
+      blackR,
+      blackG,
+      blackB,
+    ];
+  }
+
+  static CamCalibrationResult decode(Object result) {
+    result as List<Object?>;
+    return CamCalibrationResult(
+      before: result[0]! as CamRgbSample,
+      after: result[1]! as CamRgbSample,
+      converged: result[2]! as bool,
+      iterations: result[3]! as int,
+      gainR: result[4] as double?,
+      gainG: result[5] as double?,
+      gainB: result[6] as double?,
+      blackR: result[7] as double?,
+      blackG: result[8] as double?,
+      blackB: result[9] as double?,
+    );
+  }
+}
+
 /// Destination for image-capture output on iOS Photos / Android MediaStore.
 ///
 /// When [saveToLibrary] is true: iOS writes through PHPhotoLibrary and yields
@@ -742,11 +847,14 @@ class _PigeonCodec extends StandardMessageCodec {
     }    else if (value is CamRgbSample) {
       buffer.putUint8(138);
       writeValue(buffer, value.encode());
-    }    else if (value is CamPhotosDestination) {
+    }    else if (value is CamCalibrationResult) {
       buffer.putUint8(139);
       writeValue(buffer, value.encode());
-    }    else if (value is CamCaptureResult) {
+    }    else if (value is CamPhotosDestination) {
       buffer.putUint8(140);
+      writeValue(buffer, value.encode());
+    }    else if (value is CamCaptureResult) {
+      buffer.putUint8(141);
       writeValue(buffer, value.encode());
     } else {
       super.writeValue(buffer, value);
@@ -778,8 +886,10 @@ class _PigeonCodec extends StandardMessageCodec {
       case 138: 
         return CamRgbSample.decode(readValue(buffer)!);
       case 139: 
-        return CamPhotosDestination.decode(readValue(buffer)!);
+        return CamCalibrationResult.decode(readValue(buffer)!);
       case 140: 
+        return CamPhotosDestination.decode(readValue(buffer)!);
+      case 141: 
         return CamCaptureResult.decode(readValue(buffer)!);
       default:
         return super.readValueOfType(type, buffer);
@@ -1185,6 +1295,82 @@ class CameraHostApi {
       );
     } else {
       return (pigeonVar_replyList[0] as CamRgbSample?)!;
+    }
+  }
+
+  /// **iOS-only.** Runs the iOS engine's single-shot gray-world
+  /// white-balance calibration. Wraps `CameraEngine.calibrateWhiteBalance()` —
+  /// CameraKit/DECISIONS.md D-2P-03, D-2P-05, D-2P-08.
+  ///
+  /// On Android this throws `FlutterError("not_implemented", ...)` —
+  /// the Dart-side `CambrianCamera.calibrateWhiteBalance` controller
+  /// method branches on `Platform.isIOS` BEFORE invoking, so the
+  /// Android stub is unreachable in normal use.
+  ///
+  /// Throws `PigeonError(code: "calibration_in_progress", ...)` if a
+  /// calibration is already in flight. Throws
+  /// `PigeonError(code: "cancelled", ...)` if the in-flight task is
+  /// cancelled by a lifecycle transition (close / interrupt). Throws
+  /// `PigeonError(code: "handle_not_found", ...)` if `handle` is not
+  /// currently registered.
+  Future<CamCalibrationResult> calibrateWhiteBalance(int handle) async {
+    final String pigeonVar_channelName = 'dev.flutter.pigeon.cambrian_camera.CameraHostApi.calibrateWhiteBalance$pigeonVar_messageChannelSuffix';
+    final BasicMessageChannel<Object?> pigeonVar_channel = BasicMessageChannel<Object?>(
+      pigeonVar_channelName,
+      pigeonChannelCodec,
+      binaryMessenger: pigeonVar_binaryMessenger,
+    );
+    final List<Object?>? pigeonVar_replyList =
+        await pigeonVar_channel.send(<Object?>[handle]) as List<Object?>?;
+    if (pigeonVar_replyList == null) {
+      throw _createConnectionError(pigeonVar_channelName);
+    } else if (pigeonVar_replyList.length > 1) {
+      throw PlatformException(
+        code: pigeonVar_replyList[0]! as String,
+        message: pigeonVar_replyList[1] as String?,
+        details: pigeonVar_replyList[2],
+      );
+    } else if (pigeonVar_replyList[0] == null) {
+      throw PlatformException(
+        code: 'null-error',
+        message: 'Host platform returned null value for non-null return value.',
+      );
+    } else {
+      return (pigeonVar_replyList[0] as CamCalibrationResult?)!;
+    }
+  }
+
+  /// **iOS-only.** Runs the iOS engine's single-shot black-balance
+  /// calibration. Wraps `CameraEngine.calibrateBlackBalance()` —
+  /// CameraKit/DECISIONS.md D-2P-03, D-2P-05, D-2P-08.
+  ///
+  /// On Android this throws `FlutterError("not_implemented", ...)`.
+  /// Throws the same set of `PigeonError` codes as
+  /// [calibrateWhiteBalance].
+  Future<CamCalibrationResult> calibrateBlackBalance(int handle) async {
+    final String pigeonVar_channelName = 'dev.flutter.pigeon.cambrian_camera.CameraHostApi.calibrateBlackBalance$pigeonVar_messageChannelSuffix';
+    final BasicMessageChannel<Object?> pigeonVar_channel = BasicMessageChannel<Object?>(
+      pigeonVar_channelName,
+      pigeonChannelCodec,
+      binaryMessenger: pigeonVar_binaryMessenger,
+    );
+    final List<Object?>? pigeonVar_replyList =
+        await pigeonVar_channel.send(<Object?>[handle]) as List<Object?>?;
+    if (pigeonVar_replyList == null) {
+      throw _createConnectionError(pigeonVar_channelName);
+    } else if (pigeonVar_replyList.length > 1) {
+      throw PlatformException(
+        code: pigeonVar_replyList[0]! as String,
+        message: pigeonVar_replyList[1] as String?,
+        details: pigeonVar_replyList[2],
+      );
+    } else if (pigeonVar_replyList[0] == null) {
+      throw PlatformException(
+        code: 'null-error',
+        message: 'Host platform returned null value for non-null return value.',
+      );
+    } else {
+      return (pigeonVar_replyList[0] as CamCalibrationResult?)!;
     }
   }
 
