@@ -616,6 +616,102 @@ struct CamRgbSample {
   }
 }
 
+/// Result of an iOS-engine calibration call ([CameraHostApi.calibrateWhiteBalance]
+/// / [CameraHostApi.calibrateBlackBalance]).
+///
+/// Spec source: `docs/superpowers/specs/2026-05-18-phase-3-design.md`
+/// §6.1 + CameraKit/DECISIONS.md D-2P-02. The four required fields
+/// (`before`, `after`, `converged`, `iterations`) mirror the iOS
+/// engine's `CalibrationResult`; for the Phase-2 single-shot iOS
+/// algorithm `converged` is always true and `iterations` is always 1.
+///
+/// The six optional fields below carry the engine's *committed* values
+/// so the Dart-side caller can populate the existing
+/// `WbCalibrationResult.gains` / `BbCalibrationResult.offsets` records.
+/// Dart consumers immediately re-apply those values to the camera
+/// after calibration (see example app in
+/// `lib/main.dart:_runWbCalibration` / `_runBbCalibration`), so they
+/// must be the *real* committed values, not sentinels. The iOS adapter
+/// reads them from `CameraEngine.currentSettingsSnapshot()` /
+/// `currentProcessingParametersSnapshot()` immediately after the
+/// engine's calibration call returns.
+///
+/// Field nullability mirrors which method produced the result:
+///   - `calibrateWhiteBalance` populates `gainR/G/B`; black fields null.
+///   - `calibrateBlackBalance` populates `blackR/G/B`; gain fields null.
+///
+/// Android does not invoke these methods — the Kotlin plugin's stubs
+/// throw `FlutterError("not_implemented", ...)`. The Dart-side
+/// `CambrianCamera.calibrateWhiteBalance` / `calibrateBlackBalance`
+/// branches on `Platform.isIOS` before invoking, so on Android these
+/// methods are unreachable.
+///
+/// Generated class from Pigeon that represents data sent in messages.
+struct CamCalibrationResult {
+  /// RGB sample of the center patch before the calibration was applied.
+  var before: CamRgbSample
+  /// RGB sample of the center patch after the calibration was applied.
+  var after: CamRgbSample
+  /// Whether the algorithm converged. Always true for the Phase-2 single-shot iOS path.
+  var converged: Bool
+  /// Iteration count. Always 1 for the Phase-2 single-shot iOS path.
+  var iterations: Int64
+  /// WB-only — committed red-channel gain after `calibrateWhiteBalance`. Null for BB.
+  var gainR: Double? = nil
+  /// WB-only — committed green-channel gain after `calibrateWhiteBalance`. Null for BB.
+  var gainG: Double? = nil
+  /// WB-only — committed blue-channel gain after `calibrateWhiteBalance`. Null for BB.
+  var gainB: Double? = nil
+  /// BB-only — committed red-channel black-level offset after `calibrateBlackBalance`. Null for WB.
+  var blackR: Double? = nil
+  /// BB-only — committed green-channel black-level offset after `calibrateBlackBalance`. Null for WB.
+  var blackG: Double? = nil
+  /// BB-only — committed blue-channel black-level offset after `calibrateBlackBalance`. Null for WB.
+  var blackB: Double? = nil
+
+
+  // swift-format-ignore: AlwaysUseLowerCamelCase
+  static func fromList(_ pigeonVar_list: [Any?]) -> CamCalibrationResult? {
+    let before = pigeonVar_list[0] as! CamRgbSample
+    let after = pigeonVar_list[1] as! CamRgbSample
+    let converged = pigeonVar_list[2] as! Bool
+    let iterations = pigeonVar_list[3] as! Int64
+    let gainR: Double? = nilOrValue(pigeonVar_list[4])
+    let gainG: Double? = nilOrValue(pigeonVar_list[5])
+    let gainB: Double? = nilOrValue(pigeonVar_list[6])
+    let blackR: Double? = nilOrValue(pigeonVar_list[7])
+    let blackG: Double? = nilOrValue(pigeonVar_list[8])
+    let blackB: Double? = nilOrValue(pigeonVar_list[9])
+
+    return CamCalibrationResult(
+      before: before,
+      after: after,
+      converged: converged,
+      iterations: iterations,
+      gainR: gainR,
+      gainG: gainG,
+      gainB: gainB,
+      blackR: blackR,
+      blackG: blackG,
+      blackB: blackB
+    )
+  }
+  func toList() -> [Any?] {
+    return [
+      before,
+      after,
+      converged,
+      iterations,
+      gainR,
+      gainG,
+      gainB,
+      blackR,
+      blackG,
+      blackB,
+    ]
+  }
+}
+
 /// Destination for image-capture output on iOS Photos / Android MediaStore.
 ///
 /// When [saveToLibrary] is true: iOS writes through PHPhotoLibrary and yields
@@ -711,8 +807,10 @@ private class MessagesPigeonCodecReader: FlutterStandardReader {
     case 138:
       return CamRgbSample.fromList(self.readValue() as! [Any?])
     case 139:
-      return CamPhotosDestination.fromList(self.readValue() as! [Any?])
+      return CamCalibrationResult.fromList(self.readValue() as! [Any?])
     case 140:
+      return CamPhotosDestination.fromList(self.readValue() as! [Any?])
+    case 141:
       return CamCaptureResult.fromList(self.readValue() as! [Any?])
     default:
       return super.readValue(ofType: type)
@@ -752,11 +850,14 @@ private class MessagesPigeonCodecWriter: FlutterStandardWriter {
     } else if let value = value as? CamRgbSample {
       super.writeByte(138)
       super.writeValue(value.toList())
-    } else if let value = value as? CamPhotosDestination {
+    } else if let value = value as? CamCalibrationResult {
       super.writeByte(139)
       super.writeValue(value.toList())
-    } else if let value = value as? CamCaptureResult {
+    } else if let value = value as? CamPhotosDestination {
       super.writeByte(140)
+      super.writeValue(value.toList())
+    } else if let value = value as? CamCaptureResult {
+      super.writeByte(141)
       super.writeValue(value.toList())
     } else {
       super.writeValue(value)
@@ -819,6 +920,30 @@ protocol CameraHostApi {
   ///
   /// Throws with error code "patch_not_ready" if no frame has been rendered yet.
   func sampleCenterPatch(handle: Int64, completion: @escaping (Result<CamRgbSample, Error>) -> Void)
+  /// **iOS-only.** Runs the iOS engine's single-shot gray-world
+  /// white-balance calibration. Wraps `CameraEngine.calibrateWhiteBalance()` —
+  /// CameraKit/DECISIONS.md D-2P-03, D-2P-05, D-2P-08.
+  ///
+  /// On Android this throws `FlutterError("not_implemented", ...)` —
+  /// the Dart-side `CambrianCamera.calibrateWhiteBalance` controller
+  /// method branches on `Platform.isIOS` BEFORE invoking, so the
+  /// Android stub is unreachable in normal use.
+  ///
+  /// Throws `PigeonError(code: "calibration_in_progress", ...)` if a
+  /// calibration is already in flight. Throws
+  /// `PigeonError(code: "cancelled", ...)` if the in-flight task is
+  /// cancelled by a lifecycle transition (close / interrupt). Throws
+  /// `PigeonError(code: "handle_not_found", ...)` if `handle` is not
+  /// currently registered.
+  func calibrateWhiteBalance(handle: Int64, completion: @escaping (Result<CamCalibrationResult, Error>) -> Void)
+  /// **iOS-only.** Runs the iOS engine's single-shot black-balance
+  /// calibration. Wraps `CameraEngine.calibrateBlackBalance()` —
+  /// CameraKit/DECISIONS.md D-2P-03, D-2P-05, D-2P-08.
+  ///
+  /// On Android this throws `FlutterError("not_implemented", ...)`.
+  /// Throws the same set of `PigeonError` codes as
+  /// [calibrateWhiteBalance].
+  func calibrateBlackBalance(handle: Int64, completion: @escaping (Result<CamCalibrationResult, Error>) -> Void)
   /// Returns the current camera permission status:
   /// "notDetermined" | "denied" | "restricted" | "authorized".
   ///
@@ -1133,6 +1258,62 @@ class CameraHostApiSetup {
       }
     } else {
       sampleCenterPatchChannel.setMessageHandler(nil)
+    }
+    /// **iOS-only.** Runs the iOS engine's single-shot gray-world
+    /// white-balance calibration. Wraps `CameraEngine.calibrateWhiteBalance()` —
+    /// CameraKit/DECISIONS.md D-2P-03, D-2P-05, D-2P-08.
+    ///
+    /// On Android this throws `FlutterError("not_implemented", ...)` —
+    /// the Dart-side `CambrianCamera.calibrateWhiteBalance` controller
+    /// method branches on `Platform.isIOS` BEFORE invoking, so the
+    /// Android stub is unreachable in normal use.
+    ///
+    /// Throws `PigeonError(code: "calibration_in_progress", ...)` if a
+    /// calibration is already in flight. Throws
+    /// `PigeonError(code: "cancelled", ...)` if the in-flight task is
+    /// cancelled by a lifecycle transition (close / interrupt). Throws
+    /// `PigeonError(code: "handle_not_found", ...)` if `handle` is not
+    /// currently registered.
+    let calibrateWhiteBalanceChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.cambrian_camera.CameraHostApi.calibrateWhiteBalance\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
+    if let api = api {
+      calibrateWhiteBalanceChannel.setMessageHandler { message, reply in
+        let args = message as! [Any?]
+        let handleArg = args[0] as! Int64
+        api.calibrateWhiteBalance(handle: handleArg) { result in
+          switch result {
+          case .success(let res):
+            reply(wrapResult(res))
+          case .failure(let error):
+            reply(wrapError(error))
+          }
+        }
+      }
+    } else {
+      calibrateWhiteBalanceChannel.setMessageHandler(nil)
+    }
+    /// **iOS-only.** Runs the iOS engine's single-shot black-balance
+    /// calibration. Wraps `CameraEngine.calibrateBlackBalance()` —
+    /// CameraKit/DECISIONS.md D-2P-03, D-2P-05, D-2P-08.
+    ///
+    /// On Android this throws `FlutterError("not_implemented", ...)`.
+    /// Throws the same set of `PigeonError` codes as
+    /// [calibrateWhiteBalance].
+    let calibrateBlackBalanceChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.cambrian_camera.CameraHostApi.calibrateBlackBalance\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
+    if let api = api {
+      calibrateBlackBalanceChannel.setMessageHandler { message, reply in
+        let args = message as! [Any?]
+        let handleArg = args[0] as! Int64
+        api.calibrateBlackBalance(handle: handleArg) { result in
+          switch result {
+          case .success(let res):
+            reply(wrapResult(res))
+          case .failure(let error):
+            reply(wrapError(error))
+          }
+        }
+      }
+    } else {
+      calibrateBlackBalanceChannel.setMessageHandler(nil)
     }
     /// Returns the current camera permission status:
     /// "notDetermined" | "denied" | "restricted" | "authorized".
