@@ -48,7 +48,7 @@ class HitlScreen extends StatefulWidget {
   State<HitlScreen> createState() => _HitlScreenState();
 }
 
-class _HitlScreenState extends State<HitlScreen> {
+class _HitlScreenState extends State<HitlScreen> with WidgetsBindingObserver {
   CambrianCamera? _camera;
 
   // ── Latest values from the FlutterApi streams ──────────────────────────────
@@ -75,7 +75,37 @@ class _HitlScreenState extends State<HitlScreen> {
   StreamSubscription<CameraTextureInfo>? _naturalTexSub;
 
   @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Standard Flutter pattern: pause on background, resume on foreground.
+    // On Android this releases Camera2 cleanly. On iOS the engine ALSO observes
+    // scene phase itself, so this Dart pause is redundant there — and it does
+    // NOT prevent a separate engine-side FSM crash on background (off-map
+    // SessionState transitions; see
+    // measurements/phase-3-hitl/2026-05-20/notes.md "Engine bugs" §1).
+    switch (state) {
+      case AppLifecycleState.paused:
+      case AppLifecycleState.hidden:
+        _camera?.pause().catchError((Object e) {
+          debugPrint('HITL: pause on background failed: $e');
+        });
+      case AppLifecycleState.resumed:
+        _camera?.resume().catchError((Object e) {
+          debugPrint('HITL: resume on foreground failed: $e');
+        });
+      default:
+        break;
+    }
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     // Mirror the repo-root CameraScreen teardown: cancel every subscription,
     // then close the native session in a catchError so a late failure cannot
     // throw out of dispose(). Clean disposal is what makes the hot-restart
@@ -272,6 +302,15 @@ class _HitlScreenState extends State<HitlScreen> {
                           ),
                         ),
                       ), enabled: open),
+                  _btn('updateSettings: manual ISO+exp (one call)', () => _run(
+                        'updateSettings ISO+exp',
+                        () => _camera!.updateSettings(
+                          const CameraSettings(
+                            iso: AutoValue.manual(400),
+                            exposureTimeNs: AutoValue.manual(10000000),
+                          ),
+                        ),
+                      ), enabled: open),
                   _btn('updateSettings: manual WB', () => _run(
                         'updateSettings WB',
                         () => _camera!.updateSettings(
@@ -407,9 +446,10 @@ class _HitlScreenState extends State<HitlScreen> {
             color: Colors.amber.shade900,
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
             child: const Text(
-              'Preview may be blank pending the iOS texture-bridge fix — '
-              'non-preview buttons still exercise their host methods. '
-              'See docs/plans/2026-05-20-ios-texture-bridge-blank-preview-debug.md',
+              'iOS: processed (left) lane renders; raw (right) lane shows '
+              'nothing — the engine does not allocate a texture for it. '
+              'Backgrounding the app currently crashes the engine (FSM bug). '
+              'Non-preview buttons exercise their host methods.',
               style: TextStyle(fontSize: 11, color: Colors.white),
             ),
           ),
