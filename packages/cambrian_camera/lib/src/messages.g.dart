@@ -94,8 +94,8 @@ class CamSettings {
     this.noiseReductionMode,
     this.edgeMode,
     this.evCompensation,
-    this.enableRawStream,
-    this.rawStreamHeight,
+    this.enableNaturalStream,
+    this.naturalStreamHeight,
     this.cropOutputSize,
   });
 
@@ -143,11 +143,11 @@ class CamSettings {
   /// because CONTROL_AE_MODE is set to OFF in that case.
   int? evCompensation;
 
-  /// Enable GPU raw (passthrough) stream. Null = don't change.
-  bool? enableRawStream;
+  /// Enable GPU natural (unprocessed/passthrough) stream. Null = don't change.
+  bool? enableNaturalStream;
 
-  /// Requested height of the GPU raw stream in pixels. Null = don't change. 0 = use default.
-  int? rawStreamHeight;
+  /// Requested height of the GPU natural stream in pixels. Null = don't change. 0 = use default.
+  int? naturalStreamHeight;
 
   /// Center-crop the GPU output to this exact pixel size.
   ///
@@ -203,8 +203,8 @@ class CamSettings {
       noiseReductionMode,
       edgeMode,
       evCompensation,
-      enableRawStream,
-      rawStreamHeight,
+      enableNaturalStream,
+      naturalStreamHeight,
       cropOutputSize,
     ];
   }
@@ -226,8 +226,8 @@ class CamSettings {
       noiseReductionMode: result[11] as int?,
       edgeMode: result[12] as int?,
       evCompensation: result[13] as int?,
-      enableRawStream: result[14] as bool?,
-      rawStreamHeight: result[15] as int?,
+      enableNaturalStream: result[14] as bool?,
+      naturalStreamHeight: result[15] as int?,
       cropOutputSize: result[16] as CamSize?,
     );
   }
@@ -298,13 +298,14 @@ class CamCapabilities {
     required this.evCompMin,
     required this.evCompMax,
     required this.evCompensationStep,
-    required this.rawStreamTextureId,
-    required this.rawStreamWidth,
-    required this.rawStreamHeight,
+    required this.naturalStreamTextureId,
+    required this.naturalStreamWidth,
+    required this.naturalStreamHeight,
     required this.streamWidth,
     required this.streamHeight,
     required this.sensorStreamWidth,
     required this.sensorStreamHeight,
+    required this.streamPixelFormat,
   });
 
   /// All supported YUV_420_888 stream resolutions, sorted descending by area.
@@ -332,15 +333,15 @@ class CamCapabilities {
 
   double evCompensationStep;
 
-  /// Flutter texture ID for the GPU raw stream (passthrough, no color adjustments).
-  /// 0 if raw stream is disabled.
-  int rawStreamTextureId;
+  /// Flutter texture ID for the GPU natural stream (passthrough, no color adjustments).
+  /// 0 if natural stream is disabled.
+  int naturalStreamTextureId;
 
-  /// Actual computed width of the GPU raw stream (pixels). 0 if raw stream is disabled.
-  int rawStreamWidth;
+  /// Actual computed width of the GPU natural stream (pixels). 0 if natural stream is disabled.
+  int naturalStreamWidth;
 
-  /// Requested height of the GPU raw stream (pixels). 0 if raw stream is disabled.
-  int rawStreamHeight;
+  /// Requested height of the GPU natural stream (pixels). 0 if natural stream is disabled.
+  int naturalStreamHeight;
 
   /// Width of the GPU processed stream texture (pixels). Matches the largest 4:3 YUV size.
   int streamWidth;
@@ -357,6 +358,13 @@ class CamCapabilities {
   /// Height of the camera session's YUV stream. See [sensorStreamWidth].
   int sensorStreamHeight;
 
+  /// Pixel format of the lane buffers exposed via the texture bridge.
+  /// Values: "BGRA8" (iOS default + Android post-D-2P-09 swizzle),
+  /// "RGBA16F" (iOS opt-out via OpenConfiguration.lanesEightBit: false),
+  /// "RGBA8" (Android pre-D-2P-09 — should not be observed in shipped builds).
+  /// Informational for non-Texture-widget consumers that read buffers raw.
+  String streamPixelFormat;
+
   Object encode() {
     return <Object?>[
       supportedSizes,
@@ -371,13 +379,14 @@ class CamCapabilities {
       evCompMin,
       evCompMax,
       evCompensationStep,
-      rawStreamTextureId,
-      rawStreamWidth,
-      rawStreamHeight,
+      naturalStreamTextureId,
+      naturalStreamWidth,
+      naturalStreamHeight,
       streamWidth,
       streamHeight,
       sensorStreamWidth,
       sensorStreamHeight,
+      streamPixelFormat,
     ];
   }
 
@@ -396,13 +405,78 @@ class CamCapabilities {
       evCompMin: result[9]! as int,
       evCompMax: result[10]! as int,
       evCompensationStep: result[11]! as double,
-      rawStreamTextureId: result[12]! as int,
-      rawStreamWidth: result[13]! as int,
-      rawStreamHeight: result[14]! as int,
+      naturalStreamTextureId: result[12]! as int,
+      naturalStreamWidth: result[13]! as int,
+      naturalStreamHeight: result[14]! as int,
       streamWidth: result[15]! as int,
       streamHeight: result[16]! as int,
       sensorStreamWidth: result[17]! as int,
       sensorStreamHeight: result[18]! as int,
+      streamPixelFormat: result[19]! as String,
+    );
+  }
+}
+
+/// Lean payload for the active stream-configuration change callback.
+///
+/// Emitted on the active selection changing (after [CameraHostApi.setResolution]
+/// resolves or after [CamSettings.cropOutputSize] is set/cleared) — distinct
+/// from the heavier [CamCapabilities] which is a one-time bootstrap surface
+/// retrieved via [CameraHostApi.getCapabilities].
+///
+/// The texture-ID fields ([naturalTextureId], [previewTextureId]) are stable
+/// across the open session — they are minted at [CameraHostApi.open] time and
+/// carried on every change emission so a Dart consumer never needs a
+/// separate getCapabilities round-trip after a configuration change.
+class CamStreamConfiguration {
+  CamStreamConfiguration({
+    required this.captureWidth,
+    required this.captureHeight,
+    this.cropWidth,
+    this.cropHeight,
+    required this.naturalTextureId,
+    required this.previewTextureId,
+  });
+
+  /// Width of the active capture stream (sensor output before any GPU crop).
+  int captureWidth;
+
+  /// Height of the active capture stream.
+  int captureHeight;
+
+  /// Width of the active GPU center crop. Null = no crop (full capture).
+  int? cropWidth;
+
+  /// Height of the active GPU center crop. Null = no crop (full capture).
+  int? cropHeight;
+
+  /// Flutter texture ID for the natural-stream lane. Stable across the open session.
+  int naturalTextureId;
+
+  /// Flutter texture ID for the processed (post-color-pipeline) preview lane.
+  /// Stable across the open session.
+  int previewTextureId;
+
+  Object encode() {
+    return <Object?>[
+      captureWidth,
+      captureHeight,
+      cropWidth,
+      cropHeight,
+      naturalTextureId,
+      previewTextureId,
+    ];
+  }
+
+  static CamStreamConfiguration decode(Object result) {
+    result as List<Object?>;
+    return CamStreamConfiguration(
+      captureWidth: result[0]! as int,
+      captureHeight: result[1]! as int,
+      cropWidth: result[2] as int?,
+      cropHeight: result[3] as int?,
+      naturalTextureId: result[4]! as int,
+      previewTextureId: result[5]! as int,
     );
   }
 }
@@ -412,7 +486,20 @@ class CamStateUpdate {
     required this.state,
   });
 
-  /// One of: "closed", "opening", "streaming", "recovering", "error"
+  /// One of: "closed", "opening", "streaming", "recovering", "paused", "error",
+  /// "interrupted".
+  ///
+  /// - "paused" — pipeline gate closed (explicit `pause()` or app scenePhase
+  ///   inactive); resumes on `resume()` / scenePhase active.
+  /// - "interrupted" — iOS-only — AVCaptureSession was interrupted by a
+  ///   routine iOS event (Control Center claim, Split View / Stage Manager
+  ///   peer, phone call). Auto-resumes when the system clears the
+  ///   interruption; not an error.
+  /// - "error" — fatal or recoverable hardware/configuration error; see
+  ///   `onError` for code + isFatal.
+  ///
+  /// Android never emits "interrupted" (no equivalent route on the platform).
+  /// All other values are emitted on both platforms.
   String state;
 
   Object encode() {
@@ -548,6 +635,75 @@ class CamRgbSample {
   }
 }
 
+/// Destination for image-capture output on iOS Photos / Android MediaStore.
+///
+/// When [saveToLibrary] is true: iOS writes through PHPhotoLibrary and yields
+/// a PHAsset local identifier (no filesystem path); Android writes through
+/// MediaStore and yields a content URI / file path. When false: both
+/// platforms write to filesystem at the [CameraHostApi.captureImage]
+/// `outputDirectory` + `fileName` arguments and yield the filesystem path.
+class CamPhotosDestination {
+  CamPhotosDestination({
+    this.albumName,
+    required this.saveToLibrary,
+  });
+
+  /// Optional album name on iOS Photos. Ignored on Android.
+  String? albumName;
+
+  /// If true, save to the platform photo library (Photos / MediaStore).
+  /// If false, write to filesystem at the host method's outputDirectory + fileName.
+  bool saveToLibrary;
+
+  Object encode() {
+    return <Object?>[
+      albumName,
+      saveToLibrary,
+    ];
+  }
+
+  static CamPhotosDestination decode(Object result) {
+    result as List<Object?>;
+    return CamPhotosDestination(
+      albumName: result[0] as String?,
+      saveToLibrary: result[1]! as bool,
+    );
+  }
+}
+
+/// Result of an image capture.
+///
+/// One of [filePath] / [phAssetLocalId] is non-null depending on the
+/// [CamPhotosDestination.saveToLibrary] flag and platform:
+/// - iOS + saveToLibrary == true: [phAssetLocalId] populated; [filePath] null.
+/// - iOS + saveToLibrary == false (or null destination): [filePath] populated.
+/// - Android (any destination): [filePath] populated; [phAssetLocalId] null.
+class CamCaptureResult {
+  CamCaptureResult({
+    this.filePath,
+    this.phAssetLocalId,
+  });
+
+  String? filePath;
+
+  String? phAssetLocalId;
+
+  Object encode() {
+    return <Object?>[
+      filePath,
+      phAssetLocalId,
+    ];
+  }
+
+  static CamCaptureResult decode(Object result) {
+    result as List<Object?>;
+    return CamCaptureResult(
+      filePath: result[0] as String?,
+      phAssetLocalId: result[1] as String?,
+    );
+  }
+}
+
 
 class _PigeonCodec extends StandardMessageCodec {
   const _PigeonCodec();
@@ -571,17 +727,26 @@ class _PigeonCodec extends StandardMessageCodec {
     }    else if (value is CamCapabilities) {
       buffer.putUint8(133);
       writeValue(buffer, value.encode());
-    }    else if (value is CamStateUpdate) {
+    }    else if (value is CamStreamConfiguration) {
       buffer.putUint8(134);
       writeValue(buffer, value.encode());
-    }    else if (value is CamError) {
+    }    else if (value is CamStateUpdate) {
       buffer.putUint8(135);
       writeValue(buffer, value.encode());
-    }    else if (value is CamFrameResult) {
+    }    else if (value is CamError) {
       buffer.putUint8(136);
       writeValue(buffer, value.encode());
-    }    else if (value is CamRgbSample) {
+    }    else if (value is CamFrameResult) {
       buffer.putUint8(137);
+      writeValue(buffer, value.encode());
+    }    else if (value is CamRgbSample) {
+      buffer.putUint8(138);
+      writeValue(buffer, value.encode());
+    }    else if (value is CamPhotosDestination) {
+      buffer.putUint8(139);
+      writeValue(buffer, value.encode());
+    }    else if (value is CamCaptureResult) {
+      buffer.putUint8(140);
       writeValue(buffer, value.encode());
     } else {
       super.writeValue(buffer, value);
@@ -603,13 +768,19 @@ class _PigeonCodec extends StandardMessageCodec {
       case 133: 
         return CamCapabilities.decode(readValue(buffer)!);
       case 134: 
-        return CamStateUpdate.decode(readValue(buffer)!);
+        return CamStreamConfiguration.decode(readValue(buffer)!);
       case 135: 
-        return CamError.decode(readValue(buffer)!);
+        return CamStateUpdate.decode(readValue(buffer)!);
       case 136: 
-        return CamFrameResult.decode(readValue(buffer)!);
+        return CamError.decode(readValue(buffer)!);
       case 137: 
+        return CamFrameResult.decode(readValue(buffer)!);
+      case 138: 
         return CamRgbSample.decode(readValue(buffer)!);
+      case 139: 
+        return CamPhotosDestination.decode(readValue(buffer)!);
+      case 140: 
+        return CamCaptureResult.decode(readValue(buffer)!);
       default:
         return super.readValueOfType(type, buffer);
     }
@@ -749,10 +920,14 @@ class CameraHostApi {
     }
   }
 
-  /// Captures a still JPEG image using Camera2's hardware ISP.
-  /// Does NOT include GPU post-processing (saturation, contrast, brightness, black balance, gamma).
-  /// Returns the absolute file path of the saved image.
-  Future<String> captureNaturalPicture(int handle) async {
+  /// Captures a still JPEG image using Camera2's hardware ISP (Android) or
+  /// the natural-lane tap (iOS). Does NOT include GPU post-processing
+  /// (saturation, contrast, brightness, black balance, gamma).
+  ///
+  /// Returns a [CamCaptureResult] whose populated field depends on
+  /// [destination] and platform — see [CamPhotosDestination] /
+  /// [CamCaptureResult] for the per-platform semantics.
+  Future<CamCaptureResult> captureNaturalPicture(int handle, String? outputDirectory, String? fileName, CamPhotosDestination? destination) async {
     final String pigeonVar_channelName = 'dev.flutter.pigeon.cambrian_camera.CameraHostApi.captureNaturalPicture$pigeonVar_messageChannelSuffix';
     final BasicMessageChannel<Object?> pigeonVar_channel = BasicMessageChannel<Object?>(
       pigeonVar_channelName,
@@ -760,7 +935,7 @@ class CameraHostApi {
       binaryMessenger: pigeonVar_binaryMessenger,
     );
     final List<Object?>? pigeonVar_replyList =
-        await pigeonVar_channel.send(<Object?>[handle]) as List<Object?>?;
+        await pigeonVar_channel.send(<Object?>[handle, outputDirectory, fileName, destination]) as List<Object?>?;
     if (pigeonVar_replyList == null) {
       throw _createConnectionError(pigeonVar_channelName);
     } else if (pigeonVar_replyList.length > 1) {
@@ -775,15 +950,19 @@ class CameraHostApi {
         message: 'Host platform returned null value for non-null return value.',
       );
     } else {
-      return (pigeonVar_replyList[0] as String?)!;
+      return (pigeonVar_replyList[0] as CamCaptureResult?)!;
     }
   }
 
-  /// Captures the next GPU post-processed frame and saves it to disk.
+  /// Captures the next GPU post-processed frame and saves it.
   /// Format is inferred from [fileName] extension: .jpg/.jpeg → JPEG (quality 90),
-  /// .png or absent extension → PNG. [outputDirectory] null = system gallery under Pictures/CambrianCamera (via MediaStore).
-  /// Returns the absolute file path of the saved image.
-  Future<String> captureImage(int handle, String? outputDirectory, String? fileName) async {
+  /// .png or absent extension → PNG. [outputDirectory] null = system gallery
+  /// under Pictures/CambrianCamera (via MediaStore on Android).
+  ///
+  /// Returns a [CamCaptureResult] whose populated field depends on
+  /// [destination] and platform — see [CamPhotosDestination] /
+  /// [CamCaptureResult] for the per-platform semantics.
+  Future<CamCaptureResult> captureImage(int handle, String? outputDirectory, String? fileName, CamPhotosDestination? destination) async {
     final String pigeonVar_channelName = 'dev.flutter.pigeon.cambrian_camera.CameraHostApi.captureImage$pigeonVar_messageChannelSuffix';
     final BasicMessageChannel<Object?> pigeonVar_channel = BasicMessageChannel<Object?>(
       pigeonVar_channelName,
@@ -791,7 +970,7 @@ class CameraHostApi {
       binaryMessenger: pigeonVar_binaryMessenger,
     );
     final List<Object?>? pigeonVar_replyList =
-        await pigeonVar_channel.send(<Object?>[handle, outputDirectory, fileName]) as List<Object?>?;
+        await pigeonVar_channel.send(<Object?>[handle, outputDirectory, fileName, destination]) as List<Object?>?;
     if (pigeonVar_replyList == null) {
       throw _createConnectionError(pigeonVar_channelName);
     } else if (pigeonVar_replyList.length > 1) {
@@ -806,7 +985,7 @@ class CameraHostApi {
         message: 'Host platform returned null value for non-null return value.',
       );
     } else {
-      return (pigeonVar_replyList[0] as String?)!;
+      return (pigeonVar_replyList[0] as CamCaptureResult?)!;
     }
   }
 
@@ -1008,6 +1187,130 @@ class CameraHostApi {
       return (pigeonVar_replyList[0] as CamRgbSample?)!;
     }
   }
+
+  /// Returns the current camera permission status:
+  /// "notDetermined" | "denied" | "restricted" | "authorized".
+  ///
+  /// Callers should query this before invoking [open] so they can present
+  /// a permission rationale UI rather than discovering denial as an open
+  /// failure. iOS-style four-value status; Android maps PERMISSION_GRANTED
+  /// → "authorized", PERMISSION_DENIED → "denied" (or "restricted" if
+  /// don't-ask-again was selected).
+  Future<String> cameraPermissionStatus() async {
+    final String pigeonVar_channelName = 'dev.flutter.pigeon.cambrian_camera.CameraHostApi.cameraPermissionStatus$pigeonVar_messageChannelSuffix';
+    final BasicMessageChannel<Object?> pigeonVar_channel = BasicMessageChannel<Object?>(
+      pigeonVar_channelName,
+      pigeonChannelCodec,
+      binaryMessenger: pigeonVar_binaryMessenger,
+    );
+    final List<Object?>? pigeonVar_replyList =
+        await pigeonVar_channel.send(null) as List<Object?>?;
+    if (pigeonVar_replyList == null) {
+      throw _createConnectionError(pigeonVar_channelName);
+    } else if (pigeonVar_replyList.length > 1) {
+      throw PlatformException(
+        code: pigeonVar_replyList[0]! as String,
+        message: pigeonVar_replyList[1] as String?,
+        details: pigeonVar_replyList[2],
+      );
+    } else if (pigeonVar_replyList[0] == null) {
+      throw PlatformException(
+        code: 'null-error',
+        message: 'Host platform returned null value for non-null return value.',
+      );
+    } else {
+      return (pigeonVar_replyList[0] as String?)!;
+    }
+  }
+
+  /// Triggers the system permission prompt for camera access; returns the
+  /// resulting status (same four values as [cameraPermissionStatus]).
+  ///
+  /// No-op (returns current status) if already authorized.
+  Future<String> requestCameraPermission() async {
+    final String pigeonVar_channelName = 'dev.flutter.pigeon.cambrian_camera.CameraHostApi.requestCameraPermission$pigeonVar_messageChannelSuffix';
+    final BasicMessageChannel<Object?> pigeonVar_channel = BasicMessageChannel<Object?>(
+      pigeonVar_channelName,
+      pigeonChannelCodec,
+      binaryMessenger: pigeonVar_binaryMessenger,
+    );
+    final List<Object?>? pigeonVar_replyList =
+        await pigeonVar_channel.send(null) as List<Object?>?;
+    if (pigeonVar_replyList == null) {
+      throw _createConnectionError(pigeonVar_channelName);
+    } else if (pigeonVar_replyList.length > 1) {
+      throw PlatformException(
+        code: pigeonVar_replyList[0]! as String,
+        message: pigeonVar_replyList[1] as String?,
+        details: pigeonVar_replyList[2],
+      );
+    } else if (pigeonVar_replyList[0] == null) {
+      throw PlatformException(
+        code: 'null-error',
+        message: 'Host platform returned null value for non-null return value.',
+      );
+    } else {
+      return (pigeonVar_replyList[0] as String?)!;
+    }
+  }
+
+  /// Status query for Photos add-only permission (iOS) or WRITE_EXTERNAL_STORAGE
+  /// (Android pre-API 29) / no-op (Android API 29+, MediaStore handles it).
+  Future<String> photosAddPermissionStatus() async {
+    final String pigeonVar_channelName = 'dev.flutter.pigeon.cambrian_camera.CameraHostApi.photosAddPermissionStatus$pigeonVar_messageChannelSuffix';
+    final BasicMessageChannel<Object?> pigeonVar_channel = BasicMessageChannel<Object?>(
+      pigeonVar_channelName,
+      pigeonChannelCodec,
+      binaryMessenger: pigeonVar_binaryMessenger,
+    );
+    final List<Object?>? pigeonVar_replyList =
+        await pigeonVar_channel.send(null) as List<Object?>?;
+    if (pigeonVar_replyList == null) {
+      throw _createConnectionError(pigeonVar_channelName);
+    } else if (pigeonVar_replyList.length > 1) {
+      throw PlatformException(
+        code: pigeonVar_replyList[0]! as String,
+        message: pigeonVar_replyList[1] as String?,
+        details: pigeonVar_replyList[2],
+      );
+    } else if (pigeonVar_replyList[0] == null) {
+      throw PlatformException(
+        code: 'null-error',
+        message: 'Host platform returned null value for non-null return value.',
+      );
+    } else {
+      return (pigeonVar_replyList[0] as String?)!;
+    }
+  }
+
+  /// Trigger Photos add-only permission prompt (iOS) / WRITE_EXTERNAL_STORAGE
+  /// (Android pre-API 29) / no-op (Android API 29+).
+  Future<String> requestPhotosAddPermission() async {
+    final String pigeonVar_channelName = 'dev.flutter.pigeon.cambrian_camera.CameraHostApi.requestPhotosAddPermission$pigeonVar_messageChannelSuffix';
+    final BasicMessageChannel<Object?> pigeonVar_channel = BasicMessageChannel<Object?>(
+      pigeonVar_channelName,
+      pigeonChannelCodec,
+      binaryMessenger: pigeonVar_binaryMessenger,
+    );
+    final List<Object?>? pigeonVar_replyList =
+        await pigeonVar_channel.send(null) as List<Object?>?;
+    if (pigeonVar_replyList == null) {
+      throw _createConnectionError(pigeonVar_channelName);
+    } else if (pigeonVar_replyList.length > 1) {
+      throw PlatformException(
+        code: pigeonVar_replyList[0]! as String,
+        message: pigeonVar_replyList[1] as String?,
+        details: pigeonVar_replyList[2],
+      );
+    } else if (pigeonVar_replyList[0] == null) {
+      throw PlatformException(
+        code: 'null-error',
+        message: 'Host platform returned null value for non-null return value.',
+      );
+    } else {
+      return (pigeonVar_replyList[0] as String?)!;
+    }
+  }
 }
 
 abstract class CameraFlutterApi {
@@ -1023,11 +1326,12 @@ abstract class CameraFlutterApi {
   /// [state] is one of: "recording", "idle", "error".
   void onRecordingStateChanged(int handle, String state);
 
-  /// Called when the effective post-GPU output dimensions change — e.g.
-  /// after `cropOutputSize` is set or cleared, or after `setResolution`
-  /// resolves to a new camera stream size. Dart consumers should replace
-  /// their cached [CamCapabilities] with the new value.
-  void onCapabilitiesChanged(int handle, CamCapabilities capabilities);
+  /// Called when the active stream configuration changes — after
+  /// `cropOutputSize` is set or cleared, or after `setResolution` resolves
+  /// to a new camera stream size. The payload's texture-ID fields are
+  /// stable across the open session and are repeated on every change so
+  /// Dart consumers do not need a separate `getCapabilities` round-trip.
+  void onStreamConfigurationChanged(int handle, CamStreamConfiguration configuration);
 
   static void setUp(CameraFlutterApi? api, {BinaryMessenger? binaryMessenger, String messageChannelSuffix = '',}) {
     messageChannelSuffix = messageChannelSuffix.isNotEmpty ? '.$messageChannelSuffix' : '';
@@ -1145,23 +1449,23 @@ abstract class CameraFlutterApi {
     }
     {
       final BasicMessageChannel<Object?> pigeonVar_channel = BasicMessageChannel<Object?>(
-          'dev.flutter.pigeon.cambrian_camera.CameraFlutterApi.onCapabilitiesChanged$messageChannelSuffix', pigeonChannelCodec,
+          'dev.flutter.pigeon.cambrian_camera.CameraFlutterApi.onStreamConfigurationChanged$messageChannelSuffix', pigeonChannelCodec,
           binaryMessenger: binaryMessenger);
       if (api == null) {
         pigeonVar_channel.setMessageHandler(null);
       } else {
         pigeonVar_channel.setMessageHandler((Object? message) async {
           assert(message != null,
-          'Argument for dev.flutter.pigeon.cambrian_camera.CameraFlutterApi.onCapabilitiesChanged was null.');
+          'Argument for dev.flutter.pigeon.cambrian_camera.CameraFlutterApi.onStreamConfigurationChanged was null.');
           final List<Object?> args = (message as List<Object?>?)!;
           final int? arg_handle = (args[0] as int?);
           assert(arg_handle != null,
-              'Argument for dev.flutter.pigeon.cambrian_camera.CameraFlutterApi.onCapabilitiesChanged was null, expected non-null int.');
-          final CamCapabilities? arg_capabilities = (args[1] as CamCapabilities?);
-          assert(arg_capabilities != null,
-              'Argument for dev.flutter.pigeon.cambrian_camera.CameraFlutterApi.onCapabilitiesChanged was null, expected non-null CamCapabilities.');
+              'Argument for dev.flutter.pigeon.cambrian_camera.CameraFlutterApi.onStreamConfigurationChanged was null, expected non-null int.');
+          final CamStreamConfiguration? arg_configuration = (args[1] as CamStreamConfiguration?);
+          assert(arg_configuration != null,
+              'Argument for dev.flutter.pigeon.cambrian_camera.CameraFlutterApi.onStreamConfigurationChanged was null, expected non-null CamStreamConfiguration.');
           try {
-            api.onCapabilitiesChanged(arg_handle!, arg_capabilities!);
+            api.onStreamConfigurationChanged(arg_handle!, arg_configuration!);
             return wrapResponse(empty: true);
           } on PlatformException catch (e) {
             return wrapResponse(error: e);

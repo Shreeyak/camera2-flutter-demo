@@ -16,7 +16,7 @@ import 'package:pigeon/pigeon.dart'
     dartOptions: DartOptions(),
     kotlinOut: 'android/src/main/kotlin/com/cambrian/camera/Messages.g.kt',
     kotlinOptions: KotlinOptions(package: 'com.cambrian.camera'),
-    swiftOut: 'ios/Classes/Messages.g.swift',
+    swiftOut: 'ios/cambrian_camera/Sources/cambrian_camera/Messages.g.swift',
     swiftOptions: SwiftOptions(),
     copyrightHeader: 'pigeons/copyright.txt',
   ),
@@ -46,8 +46,8 @@ class CamSettings {
     this.noiseReductionMode,
     this.edgeMode,
     this.evCompensation,
-    this.enableRawStream,
-    this.rawStreamHeight,
+    this.enableNaturalStream,
+    this.naturalStreamHeight,
     this.cropOutputSize,
   });
 
@@ -95,11 +95,11 @@ class CamSettings {
   /// because CONTROL_AE_MODE is set to OFF in that case.
   int? evCompensation;
 
-  /// Enable GPU raw (passthrough) stream. Null = don't change.
-  bool? enableRawStream;
+  /// Enable GPU natural (unprocessed/passthrough) stream. Null = don't change.
+  bool? enableNaturalStream;
 
-  /// Requested height of the GPU raw stream in pixels. Null = don't change. 0 = use default.
-  int? rawStreamHeight;
+  /// Requested height of the GPU natural stream in pixels. Null = don't change. 0 = use default.
+  int? naturalStreamHeight;
 
   /// Center-crop the GPU output to this exact pixel size.
   ///
@@ -174,13 +174,14 @@ class CamCapabilities {
     required this.evCompMin,
     required this.evCompMax,
     required this.evCompensationStep,
-    required this.rawStreamTextureId,
-    required this.rawStreamWidth,
-    required this.rawStreamHeight,
+    required this.naturalStreamTextureId,
+    required this.naturalStreamWidth,
+    required this.naturalStreamHeight,
     required this.streamWidth,
     required this.streamHeight,
     required this.sensorStreamWidth,
     required this.sensorStreamHeight,
+    required this.streamPixelFormat,
   });
 
   /// All supported YUV_420_888 stream resolutions, sorted descending by area.
@@ -197,15 +198,15 @@ class CamCapabilities {
   int evCompMax;
   double evCompensationStep;
 
-  /// Flutter texture ID for the GPU raw stream (passthrough, no color adjustments).
-  /// 0 if raw stream is disabled.
-  int rawStreamTextureId;
+  /// Flutter texture ID for the GPU natural stream (passthrough, no color adjustments).
+  /// 0 if natural stream is disabled.
+  int naturalStreamTextureId;
 
-  /// Actual computed width of the GPU raw stream (pixels). 0 if raw stream is disabled.
-  int rawStreamWidth;
+  /// Actual computed width of the GPU natural stream (pixels). 0 if natural stream is disabled.
+  int naturalStreamWidth;
 
-  /// Requested height of the GPU raw stream (pixels). 0 if raw stream is disabled.
-  int rawStreamHeight;
+  /// Requested height of the GPU natural stream (pixels). 0 if natural stream is disabled.
+  int naturalStreamHeight;
 
   /// Width of the GPU processed stream texture (pixels). Matches the largest 4:3 YUV size.
   int streamWidth;
@@ -221,12 +222,73 @@ class CamCapabilities {
 
   /// Height of the camera session's YUV stream. See [sensorStreamWidth].
   int sensorStreamHeight;
+
+  /// Pixel format of the lane buffers exposed via the texture bridge.
+  /// Values: "BGRA8" (iOS default + Android post-D-2P-09 swizzle),
+  /// "RGBA16F" (iOS opt-out via OpenConfiguration.lanesEightBit: false),
+  /// "RGBA8" (Android pre-D-2P-09 — should not be observed in shipped builds).
+  /// Informational for non-Texture-widget consumers that read buffers raw.
+  String streamPixelFormat;
+}
+
+/// Lean payload for the active stream-configuration change callback.
+///
+/// Emitted on the active selection changing (after [CameraHostApi.setResolution]
+/// resolves or after [CamSettings.cropOutputSize] is set/cleared) — distinct
+/// from the heavier [CamCapabilities] which is a one-time bootstrap surface
+/// retrieved via [CameraHostApi.getCapabilities].
+///
+/// The texture-ID fields ([naturalTextureId], [previewTextureId]) are stable
+/// across the open session — they are minted at [CameraHostApi.open] time and
+/// carried on every change emission so a Dart consumer never needs a
+/// separate getCapabilities round-trip after a configuration change.
+class CamStreamConfiguration {
+  CamStreamConfiguration({
+    required this.captureWidth,
+    required this.captureHeight,
+    this.cropWidth,
+    this.cropHeight,
+    required this.naturalTextureId,
+    required this.previewTextureId,
+  });
+
+  /// Width of the active capture stream (sensor output before any GPU crop).
+  int captureWidth;
+
+  /// Height of the active capture stream.
+  int captureHeight;
+
+  /// Width of the active GPU center crop. Null = no crop (full capture).
+  int? cropWidth;
+
+  /// Height of the active GPU center crop. Null = no crop (full capture).
+  int? cropHeight;
+
+  /// Flutter texture ID for the natural-stream lane. Stable across the open session.
+  int naturalTextureId;
+
+  /// Flutter texture ID for the processed (post-color-pipeline) preview lane.
+  /// Stable across the open session.
+  int previewTextureId;
 }
 
 class CamStateUpdate {
   CamStateUpdate({required this.state});
 
-  /// One of: "closed", "opening", "streaming", "recovering", "error"
+  /// One of: "closed", "opening", "streaming", "recovering", "paused", "error",
+  /// "interrupted".
+  ///
+  /// - "paused" — pipeline gate closed (explicit `pause()` or app scenePhase
+  ///   inactive); resumes on `resume()` / scenePhase active.
+  /// - "interrupted" — iOS-only — AVCaptureSession was interrupted by a
+  ///   routine iOS event (Control Center claim, Split View / Stage Manager
+  ///   peer, phone call). Auto-resumes when the system clears the
+  ///   interruption; not an error.
+  /// - "error" — fatal or recoverable hardware/configuration error; see
+  ///   `onError` for code + isFatal.
+  ///
+  /// Android never emits "interrupted" (no equivalent route on the platform).
+  /// All other values are emitted on both platforms.
   String state;
 }
 
@@ -305,6 +367,37 @@ class CamRgbSample {
   double b;
 }
 
+/// Destination for image-capture output on iOS Photos / Android MediaStore.
+///
+/// When [saveToLibrary] is true: iOS writes through PHPhotoLibrary and yields
+/// a PHAsset local identifier (no filesystem path); Android writes through
+/// MediaStore and yields a content URI / file path. When false: both
+/// platforms write to filesystem at the [CameraHostApi.captureImage]
+/// `outputDirectory` + `fileName` arguments and yield the filesystem path.
+class CamPhotosDestination {
+  CamPhotosDestination({this.albumName, required this.saveToLibrary});
+
+  /// Optional album name on iOS Photos. Ignored on Android.
+  String? albumName;
+
+  /// If true, save to the platform photo library (Photos / MediaStore).
+  /// If false, write to filesystem at the host method's outputDirectory + fileName.
+  bool saveToLibrary;
+}
+
+/// Result of an image capture.
+///
+/// One of [filePath] / [phAssetLocalId] is non-null depending on the
+/// [CamPhotosDestination.saveToLibrary] flag and platform:
+/// - iOS + saveToLibrary == true: [phAssetLocalId] populated; [filePath] null.
+/// - iOS + saveToLibrary == false (or null destination): [filePath] populated.
+/// - Android (any destination): [filePath] populated; [phAssetLocalId] null.
+class CamCaptureResult {
+  CamCaptureResult({this.filePath, this.phAssetLocalId});
+  String? filePath;
+  String? phAssetLocalId;
+}
+
 // ---------------------------------------------------------------------------
 // Host API  (Dart → Kotlin)
 // ---------------------------------------------------------------------------
@@ -324,18 +417,36 @@ abstract class CameraHostApi {
 
   void setProcessingParams(int handle, CamProcessingParams params);
 
-  /// Captures a still JPEG image using Camera2's hardware ISP.
-  /// Does NOT include GPU post-processing (saturation, contrast, brightness, black balance, gamma).
-  /// Returns the absolute file path of the saved image.
+  /// Captures a still JPEG image using Camera2's hardware ISP (Android) or
+  /// the natural-lane tap (iOS). Does NOT include GPU post-processing
+  /// (saturation, contrast, brightness, black balance, gamma).
+  ///
+  /// Returns a [CamCaptureResult] whose populated field depends on
+  /// [destination] and platform — see [CamPhotosDestination] /
+  /// [CamCaptureResult] for the per-platform semantics.
   @async
-  String captureNaturalPicture(int handle);
+  CamCaptureResult captureNaturalPicture(
+    int handle,
+    String? outputDirectory,
+    String? fileName,
+    CamPhotosDestination? destination,
+  );
 
-  /// Captures the next GPU post-processed frame and saves it to disk.
+  /// Captures the next GPU post-processed frame and saves it.
   /// Format is inferred from [fileName] extension: .jpg/.jpeg → JPEG (quality 90),
-  /// .png or absent extension → PNG. [outputDirectory] null = system gallery under Pictures/CambrianCamera (via MediaStore).
-  /// Returns the absolute file path of the saved image.
+  /// .png or absent extension → PNG. [outputDirectory] null = system gallery
+  /// under Pictures/CambrianCamera (via MediaStore on Android).
+  ///
+  /// Returns a [CamCaptureResult] whose populated field depends on
+  /// [destination] and platform — see [CamPhotosDestination] /
+  /// [CamCaptureResult] for the per-platform semantics.
   @async
-  String captureImage(int handle, String? outputDirectory, String? fileName);
+  CamCaptureResult captureImage(
+    int handle,
+    String? outputDirectory,
+    String? fileName,
+    CamPhotosDestination? destination,
+  );
 
   @async
   int? getNativePipelineHandle(int handle);
@@ -373,6 +484,34 @@ abstract class CameraHostApi {
   /// Throws with error code "patch_not_ready" if no frame has been rendered yet.
   @async
   CamRgbSample sampleCenterPatch(int handle);
+
+  /// Returns the current camera permission status:
+  /// "notDetermined" | "denied" | "restricted" | "authorized".
+  ///
+  /// Callers should query this before invoking [open] so they can present
+  /// a permission rationale UI rather than discovering denial as an open
+  /// failure. iOS-style four-value status; Android maps PERMISSION_GRANTED
+  /// → "authorized", PERMISSION_DENIED → "denied" (or "restricted" if
+  /// don't-ask-again was selected).
+  @async
+  String cameraPermissionStatus();
+
+  /// Triggers the system permission prompt for camera access; returns the
+  /// resulting status (same four values as [cameraPermissionStatus]).
+  ///
+  /// No-op (returns current status) if already authorized.
+  @async
+  String requestCameraPermission();
+
+  /// Status query for Photos add-only permission (iOS) or WRITE_EXTERNAL_STORAGE
+  /// (Android pre-API 29) / no-op (Android API 29+, MediaStore handles it).
+  @async
+  String photosAddPermissionStatus();
+
+  /// Trigger Photos add-only permission prompt (iOS) / WRITE_EXTERNAL_STORAGE
+  /// (Android pre-API 29) / no-op (Android API 29+).
+  @async
+  String requestPhotosAddPermission();
 }
 
 // ---------------------------------------------------------------------------
@@ -389,9 +528,10 @@ abstract class CameraFlutterApi {
   /// [state] is one of: "recording", "idle", "error".
   void onRecordingStateChanged(int handle, String state);
 
-  /// Called when the effective post-GPU output dimensions change — e.g.
-  /// after `cropOutputSize` is set or cleared, or after `setResolution`
-  /// resolves to a new camera stream size. Dart consumers should replace
-  /// their cached [CamCapabilities] with the new value.
-  void onCapabilitiesChanged(int handle, CamCapabilities capabilities);
+  /// Called when the active stream configuration changes — after
+  /// `cropOutputSize` is set or cleared, or after `setResolution` resolves
+  /// to a new camera stream size. The payload's texture-ID fields are
+  /// stable across the open session and are repeated on every change so
+  /// Dart consumers do not need a separate `getCapabilities` round-trip.
+  void onStreamConfigurationChanged(int handle, CamStreamConfiguration configuration);
 }

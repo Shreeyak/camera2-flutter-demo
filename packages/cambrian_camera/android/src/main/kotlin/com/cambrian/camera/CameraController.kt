@@ -59,8 +59,8 @@ class CameraController(
     private val context: Context,
     private val surfaceProducer: TextureRegistry.SurfaceProducer,
     private val rawSurfaceProducer: TextureRegistry.SurfaceProducer?,
-    private val enableRawStream: Boolean,
-    private val rawStreamHeight: Int,
+    private val enableNaturalStream: Boolean,
+    private val naturalStreamHeight: Int,
     private val flutterApi: CameraFlutterApi,
     val handle: Long,
 ) {
@@ -233,7 +233,7 @@ class CameraController(
     // setResolution() call can reapply crop on the new session.
     @Volatile private var pendingCropOutputSize: CamSize? = null
 
-    /** Raw stream dimensions, set during [startCaptureSession] when [enableRawStream] is true. */
+    /** Raw stream dimensions, set during [startCaptureSession] when [enableNaturalStream] is true. */
     @Volatile private var rawW: Int = 0
 
     @Volatile private var rawH: Int = 0
@@ -798,12 +798,12 @@ class CameraController(
             surfaceProducer.setSize(streamWidth, streamHeight)
             val newRawW: Int
             val newRawH: Int
-            if (enableRawStream && rawSurfaceProducer != null) {
+            if (enableNaturalStream && rawSurfaceProducer != null) {
                 // Scale raw stream width to match the new aspect ratio, then clear the LSB
                 // (`and 1.inv()`) to guarantee an even width — YUV chroma planes require
                 // width divisible by 2, or the MediaCodec/GL buffer layout is undefined.
-                newRawW = (streamWidth.toFloat() / streamHeight * rawStreamHeight + 0.5f).toInt() and 1.inv()
-                newRawH = rawStreamHeight
+                newRawW = (streamWidth.toFloat() / streamHeight * naturalStreamHeight + 0.5f).toInt() and 1.inv()
+                newRawH = naturalStreamHeight
                 rawW = newRawW
                 rawH = newRawH
                 rawSurfaceProducer.setSize(newRawW, newRawH)
@@ -828,7 +828,7 @@ class CameraController(
             // (content only fills the top-left corner of the old-sized buffer). Fetching a
             // fresh reference here guarantees the GPU renders into a correctly-sized buffer.
             pipeline.rebindPreviewSurface(surfaceProducer.getSurface())
-            if (enableRawStream && rawSurfaceProducer != null) {
+            if (enableNaturalStream && rawSurfaceProducer != null) {
                 pipeline.rebindRawSurface(rawSurfaceProducer.getSurface())
             }
 
@@ -883,7 +883,7 @@ class CameraController(
                                 // applyOutputDims, this second emit is an
                                 // idempotent duplicate (Dart's `_capabilities`
                                 // ends up at the same value).
-                                emitCapabilitiesChanged()
+                                emitStreamConfigurationChanged()
                                 lastCaptureResultMs = android.os.SystemClock.elapsedRealtime()
                                 backgroundHandler.postDelayed(stallWatchdog, stallCheckIntervalMs)
                                 mainHandler.post { callback(Result.success(Unit)) }
@@ -958,9 +958,9 @@ class CameraController(
                     evCompensationStep = evStep?.toDouble() ?: 0.5,
                     // Report non-zero raw stream info only when the GPU pipeline is actually
                     // running with raw enabled; nativeGpuInit may silently disable it.
-                    rawStreamTextureId = if (gpuPipeline?.isRunning == true) rawSurfaceProducer?.id() ?: 0L else 0L,
-                    rawStreamWidth = if (gpuPipeline?.isRunning == true) rawW.toLong() else 0L,
-                    rawStreamHeight = if (gpuPipeline?.isRunning == true) rawH.toLong() else 0L,
+                    naturalStreamTextureId = if (gpuPipeline?.isRunning == true) rawSurfaceProducer?.id() ?: 0L else 0L,
+                    naturalStreamWidth = if (gpuPipeline?.isRunning == true) rawW.toLong() else 0L,
+                    naturalStreamHeight = if (gpuPipeline?.isRunning == true) rawH.toLong() else 0L,
                     // Report the post-GPU OUTPUT dims (= sensor dims unless
                     // a crop is active). See spec §7 — "downstream blind to
                     // crop" principle: Dart callers see one source of truth
@@ -972,6 +972,12 @@ class CameraController(
                     // correct "clear crop" size back via cropOutputSize.
                     sensorStreamWidth = sensorStreamWidth.toLong(),
                     sensorStreamHeight = sensorStreamHeight.toLong(),
+                    // §5.7: post-D-2P-09 the GPU swizzles to BGRA8 to match
+                    // iOS's default lane format. The runtime swizzle in
+                    // GpuRenderer.cpp that makes this value byte-accurate
+                    // lands separately (phase-3-android-polish); declaring
+                    // "BGRA8" here is the wire-contract goal.
+                    streamPixelFormat = "BGRA8",
                 )
             callback(Result.success(caps))
         } catch (e: CameraAccessException) {
@@ -1207,11 +1213,11 @@ class CameraController(
         // releaseGl() inside setCropOutput zeros its cached raw dims).
         val newRawW: Int
         val newRawH: Int
-        if (enableRawStream && rawSurfaceProducer != null) {
+        if (enableNaturalStream && rawSurfaceProducer != null) {
             // Scale raw width to match the new output aspect ratio, keeping
-            // rawStreamHeight fixed (the user-requested output height).
-            newRawW = (outW.toFloat() / outH * rawStreamHeight + 0.5f).toInt() and 1.inv()
-            newRawH = rawStreamHeight
+            // naturalStreamHeight fixed (the user-requested output height).
+            newRawW = (outW.toFloat() / outH * naturalStreamHeight + 0.5f).toInt() and 1.inv()
+            newRawH = naturalStreamHeight
         } else {
             newRawW = 0
             newRawH = 0
@@ -1222,7 +1228,7 @@ class CameraController(
         // the buffer queue starts allocating correctly-sized buffers before
         // initGl() recreates the EGL surface against the queue.
         surfaceProducer.setSize(outW, outH)
-        if (enableRawStream && rawSurfaceProducer != null) {
+        if (enableNaturalStream && rawSurfaceProducer != null) {
             rawSurfaceProducer.setSize(newRawW, newRawH)
         }
 
@@ -1243,7 +1249,7 @@ class CameraController(
         // old field values is the least-surprising state.
         previewWidth  = outW
         previewHeight = outH
-        if (enableRawStream && rawSurfaceProducer != null) {
+        if (enableNaturalStream && rawSurfaceProducer != null) {
             rawW = newRawW
             rawH = newRawH
         }
@@ -1254,28 +1260,36 @@ class CameraController(
         // internal rebind in setCropOutput() uses the stored ref which
         // may be stale. Same pattern as setResolution() — see commit 16ffe92.
         pipeline.rebindPreviewSurface(surfaceProducer.getSurface())
-        if (enableRawStream && rawSurfaceProducer != null) {
+        if (enableNaturalStream && rawSurfaceProducer != null) {
             pipeline.rebindRawSurface(rawSurfaceProducer.getSurface())
         }
 
-        emitCapabilitiesChanged()
+        emitStreamConfigurationChanged()
     }
 
     /**
-     * Build a fresh [CamCapabilities] reflecting the current post-GPU output
-     * dims and push it to Dart. Called whenever the effective output size
-     * changes (cropOutputSize update, setResolution completion).
+     * Build a fresh [CamStreamConfiguration] reflecting the current active
+     * stream selection and push it to Dart. Called whenever the effective
+     * output size changes (cropOutputSize update, setResolution completion).
+     *
+     * Unlike the prior `emitCapabilitiesChanged` which round-tripped through
+     * `getCapabilities`, this builds the lean payload directly from the
+     * controller's current sensor + crop state — the texture-ID fields are
+     * stable across the open session so consumers never need a separate
+     * `getCapabilities` round-trip after a configuration change.
      */
-    private fun emitCapabilitiesChanged() {
-        getCapabilities { result ->
-            result.onSuccess { caps ->
-                mainHandler.post {
-                    flutterApi.onCapabilitiesChanged(handle, caps) {}
-                }
-            }
-            result.onFailure { e ->
-                Log.w("CC/Cam", "emitCapabilitiesChanged: failed to build caps — ${e.message}")
-            }
+    private fun emitStreamConfigurationChanged() {
+        val cropSize = pendingCropOutputSize
+        val cfg = CamStreamConfiguration(
+            captureWidth  = sensorStreamWidth.toLong(),
+            captureHeight = sensorStreamHeight.toLong(),
+            cropWidth     = cropSize?.width,
+            cropHeight    = cropSize?.height,
+            naturalTextureId = if (gpuPipeline?.isRunning == true) rawSurfaceProducer?.id() ?: 0L else 0L,
+            previewTextureId = surfaceProducer.id(),
+        )
+        mainHandler.post {
+            flutterApi.onStreamConfigurationChanged(handle, cfg) {}
         }
     }
 
@@ -2067,9 +2081,9 @@ class CameraController(
             Log.i("CC/Cam", "Stream resolution: ${streamWidth}x${streamHeight} (4:3=${streamWidth * 3 == streamHeight * 4})")
         }
         surfaceProducer.setSize(streamWidth, streamHeight)
-        if (enableRawStream && rawSurfaceProducer != null) {
-            rawW = (streamWidth.toFloat() / streamHeight * rawStreamHeight + 0.5f).toInt() and 1.inv()
-            rawH = rawStreamHeight
+        if (enableNaturalStream && rawSurfaceProducer != null) {
+            rawW = (streamWidth.toFloat() / streamHeight * naturalStreamHeight + 0.5f).toInt() and 1.inv()
+            rawH = naturalStreamHeight
             rawSurfaceProducer.setSize(rawW, rawH)
         } else {
             rawW = 0
@@ -2099,7 +2113,7 @@ class CameraController(
 
         // GPU pipeline — SurfaceTexture receives camera frames as an OES texture;
         // GpuPipeline renders each frame on its GL thread and delivers RGBA to pipeline sinks.
-        val rawPreviewSurface = if (enableRawStream) rawSurfaceProducer?.getSurface() else null
+        val rawPreviewSurface = if (enableNaturalStream) rawSurfaceProducer?.getSurface() else null
         val pipeline = GpuPipeline(
             streamWidth, streamHeight,
             surfaceProducer.getSurface(),
@@ -2176,10 +2190,10 @@ class CameraController(
                             // Apply any cropOutputSize that was requested before
                             // the session became ready. If the pending crop is
                             // valid, applyPendingCropIfAny → applyOutputDims will
-                            // emit onCapabilitiesChanged with the cropped dims.
+                            // emit onStreamConfigurationChanged with the cropped dims.
                             //
                             // Intentional asymmetry with setResolution: we do NOT
-                            // call emitCapabilitiesChanged() unconditionally here.
+                            // call emitStreamConfigurationChanged() unconditionally here.
                             // The initial capabilities are delivered via the
                             // getCapabilities() return path at open() time, so
                             // Dart already has a fresh snapshot. Unlike setResolution,

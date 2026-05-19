@@ -120,13 +120,14 @@ class CameraCapabilities {
     required this.evCompMin,
     required this.evCompMax,
     required this.evCompensationStep,
-    required this.rawStreamTextureId,
-    required this.rawStreamWidth,
-    required this.rawStreamHeight,
+    required this.naturalStreamTextureId,
+    required this.naturalStreamWidth,
+    required this.naturalStreamHeight,
     required this.streamWidth,
     required this.streamHeight,
     required this.sensorStreamWidth,
     required this.sensorStreamHeight,
+    required this.streamPixelFormat,
   });
 
   /// Empty placeholder used during the open() factory before getCapabilities completes.
@@ -143,13 +144,14 @@ class CameraCapabilities {
         evCompMin: 0,
         evCompMax: 0,
         evCompensationStep: 0,
-        rawStreamTextureId: 0,
-        rawStreamWidth: 0,
-        rawStreamHeight: 0,
+        naturalStreamTextureId: 0,
+        naturalStreamWidth: 0,
+        naturalStreamHeight: 0,
         streamWidth: 0,
         streamHeight: 0,
         sensorStreamWidth: 0,
         sensorStreamHeight: 0,
+        streamPixelFormat: '',
       );
 
   factory CameraCapabilities.fromPigeon(CamCapabilities c) =>
@@ -168,13 +170,14 @@ class CameraCapabilities {
         evCompMin: c.evCompMin,
         evCompMax: c.evCompMax,
         evCompensationStep: c.evCompensationStep,
-        rawStreamTextureId: c.rawStreamTextureId,
-        rawStreamWidth: c.rawStreamWidth,
-        rawStreamHeight: c.rawStreamHeight,
+        naturalStreamTextureId: c.naturalStreamTextureId,
+        naturalStreamWidth: c.naturalStreamWidth,
+        naturalStreamHeight: c.naturalStreamHeight,
         streamWidth: c.streamWidth,
         streamHeight: c.streamHeight,
         sensorStreamWidth: c.sensorStreamWidth,
         sensorStreamHeight: c.sensorStreamHeight,
+        streamPixelFormat: c.streamPixelFormat,
       );
 
   /// All supported YUV_420_888 stream resolutions, sorted descending by area.
@@ -191,15 +194,15 @@ class CameraCapabilities {
   final int evCompMax;
   final double evCompensationStep;
 
-  /// Flutter texture ID for the GPU raw stream (passthrough, no color adjustments).
-  /// 0 if raw stream is disabled.
-  final int rawStreamTextureId;
+  /// Flutter texture ID for the GPU natural stream (passthrough, no color adjustments).
+  /// 0 if natural stream is disabled.
+  final int naturalStreamTextureId;
 
-  /// Actual computed width of the GPU raw stream (pixels). 0 if raw stream is disabled.
-  final int rawStreamWidth;
+  /// Actual computed width of the GPU natural stream (pixels). 0 if natural stream is disabled.
+  final int naturalStreamWidth;
 
-  /// Requested height of the GPU raw stream (pixels). 0 if raw stream is disabled.
-  final int rawStreamHeight;
+  /// Requested height of the GPU natural stream (pixels). 0 if natural stream is disabled.
+  final int naturalStreamHeight;
 
   /// Width of the GPU processed stream texture (pixels). Matches the largest 4:3 YUV size.
   final int streamWidth;
@@ -215,6 +218,12 @@ class CameraCapabilities {
 
   /// Height of the camera session's YUV stream. See [sensorStreamWidth].
   final int sensorStreamHeight;
+
+  /// Pixel format of the lane buffers exposed via the texture bridge —
+  /// "BGRA8" | "RGBA16F" | "RGBA8". See pigeons/camera_api.dart for the
+  /// per-value semantics. Informational for non-Texture-widget consumers
+  /// that read buffers raw.
+  final String streamPixelFormat;
 }
 
 /// Describes a GPU texture stream ready for display.

@@ -1,11 +1,14 @@
 // Copyright (c) 2025 Cambrian. All rights reserved.
 package com.cambrian.camera
 
+import android.Manifest
 import android.app.Activity
 import android.content.Context
+import android.content.pm.PackageManager
 import android.os.Build
 import android.provider.MediaStore
 import android.util.Log
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ProcessLifecycleOwner
@@ -239,13 +242,13 @@ class CambrianCameraPlugin : FlutterPlugin, ActivityAware, CameraHostApi {
             return
         }
 
-        val enableRawStream = settings?.enableRawStream ?: false
-        val rawStreamHeight = settings?.rawStreamHeight ?: 0L
+        val enableNaturalStream = settings?.enableNaturalStream ?: false
+        val naturalStreamHeight = settings?.naturalStreamHeight ?: 0L
         val producer = registry.createSurfaceProducer()
-        val rawSurfaceProducer = if (enableRawStream) registry.createSurfaceProducer() else null
+        val rawSurfaceProducer = if (enableNaturalStream) registry.createSurfaceProducer() else null
         val handle = producer.id()
         Log.i(TAG, "open handle=$handle cameraId=${cameraId ?: "default"}")
-        val controller = CameraController(ctx, producer, rawSurfaceProducer, enableRawStream, rawStreamHeight.toInt(), api, handle)
+        val controller = CameraController(ctx, producer, rawSurfaceProducer, enableNaturalStream, naturalStreamHeight.toInt(), api, handle)
 
         // Register the session immediately so that close() can tear it down even if open()
         // hasn't returned yet.  On failure, remove the session and release resources.
@@ -347,41 +350,70 @@ class CambrianCameraPlugin : FlutterPlugin, ActivityAware, CameraHostApi {
     }
 
     /**
-     * Captures a still JPEG image using Camera2's hardware ISP and returns its file path.
+     * Captures a still JPEG image using Camera2's hardware ISP and returns a
+     * [CamCaptureResult] (filePath populated on success).
      * Does NOT include GPU post-processing (saturation, contrast, brightness, black balance, gamma).
      *
-     * @param handle   The camera handle.
-     * @param callback Invoked with [Result.success] containing the absolute file path.
-     */
-    override fun captureNaturalPicture(handle: Long, callback: (Result<String>) -> Unit) {
-        val controller = sessions[handle]?.controller
-        if (controller == null) {
-            callback(Result.failure(FlutterError("invalid_handle", "No session for handle $handle", null)))
-            return
-        }
-        controller.captureNaturalPicture(callback)
-    }
-
-    /**
-     * Captures the next GPU post-processed frame from the C++ pipeline and saves to disk.
-     *
      * @param handle          The camera handle.
-     * @param outputDirectory Absolute path to the target directory, or null for the default.
-     * @param fileName        Filename including extension, or null for a timestamped default.
-     * @param callback        Invoked with [Result.success] containing the absolute file path.
+     * @param outputDirectory Absolute path to the target directory, or null for the default. Currently used only for the filesystem path; MediaStore branch (saveToLibrary == true) is TODO.
+     * @param fileName        Filename including extension, or null for a timestamped default. Same scope as outputDirectory.
+     * @param destination     Per-platform destination selector. Plan 1 honors only the filesystem branch on Android (destination == null OR saveToLibrary == false). The MediaStore branch is left as a TODO and currently behaves the same as the filesystem branch.
+     * @param callback        Invoked with [Result.success] containing the [CamCaptureResult].
      */
-    override fun captureImage(
+    override fun captureNaturalPicture(
         handle: Long,
         outputDirectory: String?,
         fileName: String?,
-        callback: (Result<String>) -> Unit,
+        destination: CamPhotosDestination?,
+        callback: (Result<CamCaptureResult>) -> Unit,
     ) {
         val controller = sessions[handle]?.controller
         if (controller == null) {
             callback(Result.failure(FlutterError("invalid_handle", "No session for handle $handle", null)))
             return
         }
-        controller.captureImage(outputDirectory, fileName, callback)
+        // TODO(phase-3-android-polish): honor outputDirectory/fileName/destination.
+        // Plan 1 lands the wire-contract reshape; the existing controller path
+        // writes to its built-in default location and returns the absolute
+        // path. Android MediaStore branch (destination?.saveToLibrary == true)
+        // ships alongside iOS Photos library impl in Plan 2.
+        controller.captureNaturalPicture { stringResult ->
+            callback(stringResult.fold(
+                onSuccess = { path -> Result.success(CamCaptureResult(filePath = path, phAssetLocalId = null)) },
+                onFailure = { e -> Result.failure(e) },
+            ))
+        }
+    }
+
+    /**
+     * Captures the next GPU post-processed frame from the C++ pipeline and saves it, returning a [CamCaptureResult].
+     *
+     * @param handle          The camera handle.
+     * @param outputDirectory Absolute path to the target directory, or null for the default.
+     * @param fileName        Filename including extension, or null for a timestamped default.
+     * @param destination     Per-platform destination selector. See [captureNaturalPicture] for Plan 1's scope.
+     * @param callback        Invoked with [Result.success] containing the [CamCaptureResult].
+     */
+    override fun captureImage(
+        handle: Long,
+        outputDirectory: String?,
+        fileName: String?,
+        destination: CamPhotosDestination?,
+        callback: (Result<CamCaptureResult>) -> Unit,
+    ) {
+        val controller = sessions[handle]?.controller
+        if (controller == null) {
+            callback(Result.failure(FlutterError("invalid_handle", "No session for handle $handle", null)))
+            return
+        }
+        // TODO(phase-3-android-polish): honor destination?.saveToLibrary == true
+        // via MediaStore (see captureNaturalPicture).
+        controller.captureImage(outputDirectory, fileName) { stringResult ->
+            callback(stringResult.fold(
+                onSuccess = { path -> Result.success(CamCaptureResult(filePath = path, phAssetLocalId = null)) },
+                onFailure = { e -> Result.failure(e) },
+            ))
+        }
     }
 
     /**
@@ -506,6 +538,46 @@ class CambrianCameraPlugin : FlutterPlugin, ActivityAware, CameraHostApi {
             session.rawSurfaceProducer?.release()
             callback(result)
         }
+    }
+
+    // §5.6 permission query/request methods. Plan 1 lands real status
+    // queries; the request variants are stubs that return current status
+    // (real ActivityCompat.requestPermissions wiring lands in
+    // phase-3-android-polish — it needs an Activity-scoped permission-result
+    // listener registered through ActivityPluginBinding).
+
+    override fun cameraPermissionStatus(callback: (Result<String>) -> Unit) {
+        val status = if (ContextCompat.checkSelfPermission(applicationContext ?: return callback(Result.failure(FlutterError("not_attached", "Plugin not attached to engine", null))), Manifest.permission.CAMERA)
+                         == PackageManager.PERMISSION_GRANTED) "authorized" else "notDetermined"
+        callback(Result.success(status))
+    }
+
+    override fun requestCameraPermission(callback: (Result<String>) -> Unit) {
+        // TODO(phase-3-android-polish): wire actual ActivityCompat.requestPermissions
+        // + onRequestPermissionsResult via ActivityPluginBinding.
+        // Until then, return the current status (matching cameraPermissionStatus).
+        val currentStatus = if (ContextCompat.checkSelfPermission(applicationContext ?: return callback(Result.failure(FlutterError("not_attached", "Plugin not attached to engine", null))), Manifest.permission.CAMERA)
+                                == PackageManager.PERMISSION_GRANTED) "authorized" else "denied"
+        callback(Result.success(currentStatus))
+    }
+
+    override fun photosAddPermissionStatus(callback: (Result<String>) -> Unit) {
+        // Android API 29+ uses MediaStore which doesn't need a write permission.
+        // Pre-API 29 requires WRITE_EXTERNAL_STORAGE.
+        val sdk = Build.VERSION.SDK_INT
+        val status = if (sdk >= 29) "authorized"
+            else if (ContextCompat.checkSelfPermission(
+                      applicationContext ?: return callback(Result.failure(FlutterError("not_attached", "Plugin not attached to engine", null))),
+                      Manifest.permission.WRITE_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED)
+                  "authorized" else "notDetermined"
+        callback(Result.success(status))
+    }
+
+    override fun requestPhotosAddPermission(callback: (Result<String>) -> Unit) {
+        // TODO(phase-3-android-polish): wire the pre-API-29 prompt flow when
+        // the actual request infrastructure lands. Until then, mirror the
+        // status query.
+        photosAddPermissionStatus(callback)
     }
 
     companion object {

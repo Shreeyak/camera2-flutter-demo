@@ -81,8 +81,8 @@ class CameraControllerGpuTest {
             context = mockContext,
             surfaceProducer = mockSurfaceProducer,
             rawSurfaceProducer = mockRawSurfaceProducer,
-            enableRawStream = false,
-            rawStreamHeight = 0,
+            enableNaturalStream = false,
+            naturalStreamHeight = 0,
             flutterApi = mockFlutterApi,
             handle = 1L,
         )
@@ -283,7 +283,7 @@ class CameraControllerGpuTest {
     }
 
     /**
-     * When enableRawStream is true and a session has been started (rawW/rawH populated),
+     * When enableNaturalStream is true and a session has been started (rawW/rawH populated),
      * getCapabilities must report the raw texture id and dimensions from the raw surface producer.
      */
     @Test
@@ -306,13 +306,13 @@ class CameraControllerGpuTest {
         val mockSurfaceProducer: TextureRegistry.SurfaceProducer = mock()
         val mockFlutterApi: CameraFlutterApi = mock()
 
-        // Create a controller with enableRawStream = true.
+        // Create a controller with enableNaturalStream = true.
         val rawController = CameraController(
             context = mockContext,
             surfaceProducer = mockSurfaceProducer,
             rawSurfaceProducer = mockRawSurfaceProducer,
-            enableRawStream = true,
-            rawStreamHeight = 480,
+            enableNaturalStream = true,
+            naturalStreamHeight = 480,
             flutterApi = mockFlutterApi,
             handle = 2L,
         )
@@ -352,13 +352,13 @@ class CameraControllerGpuTest {
         }
 
         val caps = capabilities!!
-        assertEquals(42L, caps.rawStreamTextureId)
-        assertEquals(640L, caps.rawStreamWidth)
-        assertEquals(480L, caps.rawStreamHeight)
+        assertEquals(42L, caps.naturalStreamTextureId)
+        assertEquals(640L, caps.naturalStreamWidth)
+        assertEquals(480L, caps.naturalStreamHeight)
     }
 
     /**
-     * When enableRawStream is false, getCapabilities must report zero for all three raw fields
+     * When enableNaturalStream is false, getCapabilities must report zero for all three raw fields
      * regardless of what the raw surface producer reports.
      */
     @Test
@@ -376,9 +376,9 @@ class CameraControllerGpuTest {
         }
 
         val caps = capabilities!!
-        assertEquals(0L, caps.rawStreamTextureId)
-        assertEquals(0L, caps.rawStreamWidth)
-        assertEquals(0L, caps.rawStreamHeight)
+        assertEquals(0L, caps.naturalStreamTextureId)
+        assertEquals(0L, caps.naturalStreamWidth)
+        assertEquals(0L, caps.naturalStreamHeight)
     }
 
     @Test
@@ -444,7 +444,7 @@ class CameraControllerGpuTest {
     @Test
     fun `updateSettings with cropOutputSize invokes gpuPipeline setCropOutput and emits capabilities change`() {
         // Arrange: inject mock GpuPipeline; stub sensor dims to 4000x3000 and
-        // the setCropOutput call to succeed. enableRawStream=false in the
+        // the setCropOutput call to succeed. enableNaturalStream=false in the
         // test setUp, so raw dims are 0.
         gpuPipelineField.set(controller, mockGpuPipeline)
         whenever(mockGpuPipeline.setCropOutput(1600, 1200, 0, 0)).thenReturn(true)
@@ -473,13 +473,14 @@ class CameraControllerGpuTest {
         // Act
         controller.updateSettings(CamSettings(cropOutputSize = CamSize(1600L, 1200L)))
 
-        // Assert: GPU call + preview resize + capabilities re-emit
+        // Assert: GPU call + preview resize + streamConfiguration re-emit
         verify(mockGpuPipeline).setCropOutput(1600, 1200, 0, 0)
         verify(mockSurfaceProducer).setSize(1600, 1200)
-        argumentCaptor<CamCapabilities>().apply {
-            verify(mockFlutterApi).onCapabilitiesChanged(eq(1L), capture(), any())
-            assertEquals(1600L, firstValue.streamWidth)
-            assertEquals(1200L, firstValue.streamHeight)
+        argumentCaptor<CamStreamConfiguration>().apply {
+            verify(mockFlutterApi).onStreamConfigurationChanged(eq(1L), capture(), any())
+            // Crop populated; preview-effective dims match the crop request.
+            assertEquals(1600L, firstValue.cropWidth)
+            assertEquals(1200L, firstValue.cropHeight)
         }
     }
 
@@ -526,7 +527,7 @@ class CameraControllerGpuTest {
         // No GPU call, no surface resize, no error, no capabilities re-emit.
         verify(mockGpuPipeline, never()).setCropOutput(any(), any(), any(), any())
         verify(mockSurfaceProducer, never()).setSize(any(), any())
-        verify(mockFlutterApi, never()).onCapabilitiesChanged(any(), any(), any())
+        verify(mockFlutterApi, never()).onStreamConfigurationChanged(any(), any(), any())
     }
 
     @Test

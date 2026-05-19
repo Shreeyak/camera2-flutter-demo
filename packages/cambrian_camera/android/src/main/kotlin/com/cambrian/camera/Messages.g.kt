@@ -139,10 +139,10 @@ data class CamSettings (
    * because CONTROL_AE_MODE is set to OFF in that case.
    */
   val evCompensation: Long? = null,
-  /** Enable GPU raw (passthrough) stream. Null = don't change. */
-  val enableRawStream: Boolean? = null,
-  /** Requested height of the GPU raw stream in pixels. Null = don't change. 0 = use default. */
-  val rawStreamHeight: Long? = null,
+  /** Enable GPU natural (unprocessed/passthrough) stream. Null = don't change. */
+  val enableNaturalStream: Boolean? = null,
+  /** Requested height of the GPU natural stream in pixels. Null = don't change. 0 = use default. */
+  val naturalStreamHeight: Long? = null,
   /**
    * Center-crop the GPU output to this exact pixel size.
    *
@@ -200,10 +200,10 @@ data class CamSettings (
       val noiseReductionMode = pigeonVar_list[11] as Long?
       val edgeMode = pigeonVar_list[12] as Long?
       val evCompensation = pigeonVar_list[13] as Long?
-      val enableRawStream = pigeonVar_list[14] as Boolean?
-      val rawStreamHeight = pigeonVar_list[15] as Long?
+      val enableNaturalStream = pigeonVar_list[14] as Boolean?
+      val naturalStreamHeight = pigeonVar_list[15] as Long?
       val cropOutputSize = pigeonVar_list[16] as CamSize?
-      return CamSettings(isoMode, iso, exposureMode, exposureTimeNs, focusMode, focusDistanceDiopters, wbMode, wbGainR, wbGainG, wbGainB, zoomRatio, noiseReductionMode, edgeMode, evCompensation, enableRawStream, rawStreamHeight, cropOutputSize)
+      return CamSettings(isoMode, iso, exposureMode, exposureTimeNs, focusMode, focusDistanceDiopters, wbMode, wbGainR, wbGainG, wbGainB, zoomRatio, noiseReductionMode, edgeMode, evCompensation, enableNaturalStream, naturalStreamHeight, cropOutputSize)
     }
   }
   fun toList(): List<Any?> {
@@ -222,8 +222,8 @@ data class CamSettings (
       noiseReductionMode,
       edgeMode,
       evCompensation,
-      enableRawStream,
-      rawStreamHeight,
+      enableNaturalStream,
+      naturalStreamHeight,
       cropOutputSize,
     )
   }
@@ -281,14 +281,14 @@ data class CamCapabilities (
   val evCompMax: Long,
   val evCompensationStep: Double,
   /**
-   * Flutter texture ID for the GPU raw stream (passthrough, no color adjustments).
-   * 0 if raw stream is disabled.
+   * Flutter texture ID for the GPU natural stream (passthrough, no color adjustments).
+   * 0 if natural stream is disabled.
    */
-  val rawStreamTextureId: Long,
-  /** Actual computed width of the GPU raw stream (pixels). 0 if raw stream is disabled. */
-  val rawStreamWidth: Long,
-  /** Requested height of the GPU raw stream (pixels). 0 if raw stream is disabled. */
-  val rawStreamHeight: Long,
+  val naturalStreamTextureId: Long,
+  /** Actual computed width of the GPU natural stream (pixels). 0 if natural stream is disabled. */
+  val naturalStreamWidth: Long,
+  /** Requested height of the GPU natural stream (pixels). 0 if natural stream is disabled. */
+  val naturalStreamHeight: Long,
   /** Width of the GPU processed stream texture (pixels). Matches the largest 4:3 YUV size. */
   val streamWidth: Long,
   /** Height of the GPU processed stream texture (pixels). */
@@ -301,7 +301,15 @@ data class CamCapabilities (
    */
   val sensorStreamWidth: Long,
   /** Height of the camera session's YUV stream. See [sensorStreamWidth]. */
-  val sensorStreamHeight: Long
+  val sensorStreamHeight: Long,
+  /**
+   * Pixel format of the lane buffers exposed via the texture bridge.
+   * Values: "BGRA8" (iOS default + Android post-D-2P-09 swizzle),
+   * "RGBA16F" (iOS opt-out via OpenConfiguration.lanesEightBit: false),
+   * "RGBA8" (Android pre-D-2P-09 — should not be observed in shipped builds).
+   * Informational for non-Texture-widget consumers that read buffers raw.
+   */
+  val streamPixelFormat: String
 )
  {
   companion object {
@@ -318,14 +326,15 @@ data class CamCapabilities (
       val evCompMin = pigeonVar_list[9] as Long
       val evCompMax = pigeonVar_list[10] as Long
       val evCompensationStep = pigeonVar_list[11] as Double
-      val rawStreamTextureId = pigeonVar_list[12] as Long
-      val rawStreamWidth = pigeonVar_list[13] as Long
-      val rawStreamHeight = pigeonVar_list[14] as Long
+      val naturalStreamTextureId = pigeonVar_list[12] as Long
+      val naturalStreamWidth = pigeonVar_list[13] as Long
+      val naturalStreamHeight = pigeonVar_list[14] as Long
       val streamWidth = pigeonVar_list[15] as Long
       val streamHeight = pigeonVar_list[16] as Long
       val sensorStreamWidth = pigeonVar_list[17] as Long
       val sensorStreamHeight = pigeonVar_list[18] as Long
-      return CamCapabilities(supportedSizes, isoMin, isoMax, exposureTimeMinNs, exposureTimeMaxNs, focusMin, focusMax, zoomMin, zoomMax, evCompMin, evCompMax, evCompensationStep, rawStreamTextureId, rawStreamWidth, rawStreamHeight, streamWidth, streamHeight, sensorStreamWidth, sensorStreamHeight)
+      val streamPixelFormat = pigeonVar_list[19] as String
+      return CamCapabilities(supportedSizes, isoMin, isoMax, exposureTimeMinNs, exposureTimeMaxNs, focusMin, focusMax, zoomMin, zoomMax, evCompMin, evCompMax, evCompensationStep, naturalStreamTextureId, naturalStreamWidth, naturalStreamHeight, streamWidth, streamHeight, sensorStreamWidth, sensorStreamHeight, streamPixelFormat)
     }
   }
   fun toList(): List<Any?> {
@@ -342,20 +351,92 @@ data class CamCapabilities (
       evCompMin,
       evCompMax,
       evCompensationStep,
-      rawStreamTextureId,
-      rawStreamWidth,
-      rawStreamHeight,
+      naturalStreamTextureId,
+      naturalStreamWidth,
+      naturalStreamHeight,
       streamWidth,
       streamHeight,
       sensorStreamWidth,
       sensorStreamHeight,
+      streamPixelFormat,
+    )
+  }
+}
+
+/**
+ * Lean payload for the active stream-configuration change callback.
+ *
+ * Emitted on the active selection changing (after [CameraHostApi.setResolution]
+ * resolves or after [CamSettings.cropOutputSize] is set/cleared) — distinct
+ * from the heavier [CamCapabilities] which is a one-time bootstrap surface
+ * retrieved via [CameraHostApi.getCapabilities].
+ *
+ * The texture-ID fields ([naturalTextureId], [previewTextureId]) are stable
+ * across the open session — they are minted at [CameraHostApi.open] time and
+ * carried on every change emission so a Dart consumer never needs a
+ * separate getCapabilities round-trip after a configuration change.
+ *
+ * Generated class from Pigeon that represents data sent in messages.
+ */
+data class CamStreamConfiguration (
+  /** Width of the active capture stream (sensor output before any GPU crop). */
+  val captureWidth: Long,
+  /** Height of the active capture stream. */
+  val captureHeight: Long,
+  /** Width of the active GPU center crop. Null = no crop (full capture). */
+  val cropWidth: Long? = null,
+  /** Height of the active GPU center crop. Null = no crop (full capture). */
+  val cropHeight: Long? = null,
+  /** Flutter texture ID for the natural-stream lane. Stable across the open session. */
+  val naturalTextureId: Long,
+  /**
+   * Flutter texture ID for the processed (post-color-pipeline) preview lane.
+   * Stable across the open session.
+   */
+  val previewTextureId: Long
+)
+ {
+  companion object {
+    fun fromList(pigeonVar_list: List<Any?>): CamStreamConfiguration {
+      val captureWidth = pigeonVar_list[0] as Long
+      val captureHeight = pigeonVar_list[1] as Long
+      val cropWidth = pigeonVar_list[2] as Long?
+      val cropHeight = pigeonVar_list[3] as Long?
+      val naturalTextureId = pigeonVar_list[4] as Long
+      val previewTextureId = pigeonVar_list[5] as Long
+      return CamStreamConfiguration(captureWidth, captureHeight, cropWidth, cropHeight, naturalTextureId, previewTextureId)
+    }
+  }
+  fun toList(): List<Any?> {
+    return listOf(
+      captureWidth,
+      captureHeight,
+      cropWidth,
+      cropHeight,
+      naturalTextureId,
+      previewTextureId,
     )
   }
 }
 
 /** Generated class from Pigeon that represents data sent in messages. */
 data class CamStateUpdate (
-  /** One of: "closed", "opening", "streaming", "recovering", "error" */
+  /**
+   * One of: "closed", "opening", "streaming", "recovering", "paused", "error",
+   * "interrupted".
+   *
+   * - "paused" — pipeline gate closed (explicit `pause()` or app scenePhase
+   *   inactive); resumes on `resume()` / scenePhase active.
+   * - "interrupted" — iOS-only — AVCaptureSession was interrupted by a
+   *   routine iOS event (Control Center claim, Split View / Stage Manager
+   *   peer, phone call). Auto-resumes when the system clears the
+   *   interruption; not an error.
+   * - "error" — fatal or recoverable hardware/configuration error; see
+   *   `onError` for code + isFatal.
+   *
+   * Android never emits "interrupted" (no equivalent route on the platform).
+   * All other values are emitted on both platforms.
+   */
   val state: String
 )
  {
@@ -469,6 +550,73 @@ data class CamRgbSample (
     )
   }
 }
+
+/**
+ * Destination for image-capture output on iOS Photos / Android MediaStore.
+ *
+ * When [saveToLibrary] is true: iOS writes through PHPhotoLibrary and yields
+ * a PHAsset local identifier (no filesystem path); Android writes through
+ * MediaStore and yields a content URI / file path. When false: both
+ * platforms write to filesystem at the [CameraHostApi.captureImage]
+ * `outputDirectory` + `fileName` arguments and yield the filesystem path.
+ *
+ * Generated class from Pigeon that represents data sent in messages.
+ */
+data class CamPhotosDestination (
+  /** Optional album name on iOS Photos. Ignored on Android. */
+  val albumName: String? = null,
+  /**
+   * If true, save to the platform photo library (Photos / MediaStore).
+   * If false, write to filesystem at the host method's outputDirectory + fileName.
+   */
+  val saveToLibrary: Boolean
+)
+ {
+  companion object {
+    fun fromList(pigeonVar_list: List<Any?>): CamPhotosDestination {
+      val albumName = pigeonVar_list[0] as String?
+      val saveToLibrary = pigeonVar_list[1] as Boolean
+      return CamPhotosDestination(albumName, saveToLibrary)
+    }
+  }
+  fun toList(): List<Any?> {
+    return listOf(
+      albumName,
+      saveToLibrary,
+    )
+  }
+}
+
+/**
+ * Result of an image capture.
+ *
+ * One of [filePath] / [phAssetLocalId] is non-null depending on the
+ * [CamPhotosDestination.saveToLibrary] flag and platform:
+ * - iOS + saveToLibrary == true: [phAssetLocalId] populated; [filePath] null.
+ * - iOS + saveToLibrary == false (or null destination): [filePath] populated.
+ * - Android (any destination): [filePath] populated; [phAssetLocalId] null.
+ *
+ * Generated class from Pigeon that represents data sent in messages.
+ */
+data class CamCaptureResult (
+  val filePath: String? = null,
+  val phAssetLocalId: String? = null
+)
+ {
+  companion object {
+    fun fromList(pigeonVar_list: List<Any?>): CamCaptureResult {
+      val filePath = pigeonVar_list[0] as String?
+      val phAssetLocalId = pigeonVar_list[1] as String?
+      return CamCaptureResult(filePath, phAssetLocalId)
+    }
+  }
+  fun toList(): List<Any?> {
+    return listOf(
+      filePath,
+      phAssetLocalId,
+    )
+  }
+}
 private open class MessagesPigeonCodec : StandardMessageCodec() {
   override fun readValueOfType(type: Byte, buffer: ByteBuffer): Any? {
     return when (type) {
@@ -499,22 +647,37 @@ private open class MessagesPigeonCodec : StandardMessageCodec() {
       }
       134.toByte() -> {
         return (readValue(buffer) as? List<Any?>)?.let {
-          CamStateUpdate.fromList(it)
+          CamStreamConfiguration.fromList(it)
         }
       }
       135.toByte() -> {
         return (readValue(buffer) as? List<Any?>)?.let {
-          CamError.fromList(it)
+          CamStateUpdate.fromList(it)
         }
       }
       136.toByte() -> {
         return (readValue(buffer) as? List<Any?>)?.let {
-          CamFrameResult.fromList(it)
+          CamError.fromList(it)
         }
       }
       137.toByte() -> {
         return (readValue(buffer) as? List<Any?>)?.let {
+          CamFrameResult.fromList(it)
+        }
+      }
+      138.toByte() -> {
+        return (readValue(buffer) as? List<Any?>)?.let {
           CamRgbSample.fromList(it)
+        }
+      }
+      139.toByte() -> {
+        return (readValue(buffer) as? List<Any?>)?.let {
+          CamPhotosDestination.fromList(it)
+        }
+      }
+      140.toByte() -> {
+        return (readValue(buffer) as? List<Any?>)?.let {
+          CamCaptureResult.fromList(it)
         }
       }
       else -> super.readValueOfType(type, buffer)
@@ -542,20 +705,32 @@ private open class MessagesPigeonCodec : StandardMessageCodec() {
         stream.write(133)
         writeValue(stream, value.toList())
       }
-      is CamStateUpdate -> {
+      is CamStreamConfiguration -> {
         stream.write(134)
         writeValue(stream, value.toList())
       }
-      is CamError -> {
+      is CamStateUpdate -> {
         stream.write(135)
         writeValue(stream, value.toList())
       }
-      is CamFrameResult -> {
+      is CamError -> {
         stream.write(136)
         writeValue(stream, value.toList())
       }
-      is CamRgbSample -> {
+      is CamFrameResult -> {
         stream.write(137)
+        writeValue(stream, value.toList())
+      }
+      is CamRgbSample -> {
+        stream.write(138)
+        writeValue(stream, value.toList())
+      }
+      is CamPhotosDestination -> {
+        stream.write(139)
+        writeValue(stream, value.toList())
+      }
+      is CamCaptureResult -> {
+        stream.write(140)
         writeValue(stream, value.toList())
       }
       else -> super.writeValue(stream, value)
@@ -572,18 +747,26 @@ interface CameraHostApi {
   fun setResolution(handle: Long, width: Long, height: Long, callback: (Result<Unit>) -> Unit)
   fun setProcessingParams(handle: Long, params: CamProcessingParams)
   /**
-   * Captures a still JPEG image using Camera2's hardware ISP.
-   * Does NOT include GPU post-processing (saturation, contrast, brightness, black balance, gamma).
-   * Returns the absolute file path of the saved image.
+   * Captures a still JPEG image using Camera2's hardware ISP (Android) or
+   * the natural-lane tap (iOS). Does NOT include GPU post-processing
+   * (saturation, contrast, brightness, black balance, gamma).
+   *
+   * Returns a [CamCaptureResult] whose populated field depends on
+   * [destination] and platform — see [CamPhotosDestination] /
+   * [CamCaptureResult] for the per-platform semantics.
    */
-  fun captureNaturalPicture(handle: Long, callback: (Result<String>) -> Unit)
+  fun captureNaturalPicture(handle: Long, outputDirectory: String?, fileName: String?, destination: CamPhotosDestination?, callback: (Result<CamCaptureResult>) -> Unit)
   /**
-   * Captures the next GPU post-processed frame and saves it to disk.
+   * Captures the next GPU post-processed frame and saves it.
    * Format is inferred from [fileName] extension: .jpg/.jpeg → JPEG (quality 90),
-   * .png or absent extension → PNG. [outputDirectory] null = system gallery under Pictures/CambrianCamera (via MediaStore).
-   * Returns the absolute file path of the saved image.
+   * .png or absent extension → PNG. [outputDirectory] null = system gallery
+   * under Pictures/CambrianCamera (via MediaStore on Android).
+   *
+   * Returns a [CamCaptureResult] whose populated field depends on
+   * [destination] and platform — see [CamPhotosDestination] /
+   * [CamCaptureResult] for the per-platform semantics.
    */
-  fun captureImage(handle: Long, outputDirectory: String?, fileName: String?, callback: (Result<String>) -> Unit)
+  fun captureImage(handle: Long, outputDirectory: String?, fileName: String?, destination: CamPhotosDestination?, callback: (Result<CamCaptureResult>) -> Unit)
   fun getNativePipelineHandle(handle: Long, callback: (Result<Long?>) -> Unit)
   fun startRecording(handle: Long, outputDirectory: String?, fileName: String?, bitrate: Long?, fps: Long?, callback: (Result<String>) -> Unit)
   fun stopRecording(handle: Long, callback: (Result<String>) -> Unit)
@@ -604,6 +787,34 @@ interface CameraHostApi {
    * Throws with error code "patch_not_ready" if no frame has been rendered yet.
    */
   fun sampleCenterPatch(handle: Long, callback: (Result<CamRgbSample>) -> Unit)
+  /**
+   * Returns the current camera permission status:
+   * "notDetermined" | "denied" | "restricted" | "authorized".
+   *
+   * Callers should query this before invoking [open] so they can present
+   * a permission rationale UI rather than discovering denial as an open
+   * failure. iOS-style four-value status; Android maps PERMISSION_GRANTED
+   * → "authorized", PERMISSION_DENIED → "denied" (or "restricted" if
+   * don't-ask-again was selected).
+   */
+  fun cameraPermissionStatus(callback: (Result<String>) -> Unit)
+  /**
+   * Triggers the system permission prompt for camera access; returns the
+   * resulting status (same four values as [cameraPermissionStatus]).
+   *
+   * No-op (returns current status) if already authorized.
+   */
+  fun requestCameraPermission(callback: (Result<String>) -> Unit)
+  /**
+   * Status query for Photos add-only permission (iOS) or WRITE_EXTERNAL_STORAGE
+   * (Android pre-API 29) / no-op (Android API 29+, MediaStore handles it).
+   */
+  fun photosAddPermissionStatus(callback: (Result<String>) -> Unit)
+  /**
+   * Trigger Photos add-only permission prompt (iOS) / WRITE_EXTERNAL_STORAGE
+   * (Android pre-API 29) / no-op (Android API 29+).
+   */
+  fun requestPhotosAddPermission(callback: (Result<String>) -> Unit)
 
   companion object {
     /** The codec used by CameraHostApi. */
@@ -720,7 +931,10 @@ interface CameraHostApi {
           channel.setMessageHandler { message, reply ->
             val args = message as List<Any?>
             val handleArg = args[0] as Long
-            api.captureNaturalPicture(handleArg) { result: Result<String> ->
+            val outputDirectoryArg = args[1] as String?
+            val fileNameArg = args[2] as String?
+            val destinationArg = args[3] as CamPhotosDestination?
+            api.captureNaturalPicture(handleArg, outputDirectoryArg, fileNameArg, destinationArg) { result: Result<CamCaptureResult> ->
               val error = result.exceptionOrNull()
               if (error != null) {
                 reply.reply(wrapError(error))
@@ -742,7 +956,8 @@ interface CameraHostApi {
             val handleArg = args[0] as Long
             val outputDirectoryArg = args[1] as String?
             val fileNameArg = args[2] as String?
-            api.captureImage(handleArg, outputDirectoryArg, fileNameArg) { result: Result<String> ->
+            val destinationArg = args[3] as CamPhotosDestination?
+            api.captureImage(handleArg, outputDirectoryArg, fileNameArg, destinationArg) { result: Result<CamCaptureResult> ->
               val error = result.exceptionOrNull()
               if (error != null) {
                 reply.reply(wrapError(error))
@@ -914,6 +1129,78 @@ interface CameraHostApi {
           channel.setMessageHandler(null)
         }
       }
+      run {
+        val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.cambrian_camera.CameraHostApi.cameraPermissionStatus$separatedMessageChannelSuffix", codec)
+        if (api != null) {
+          channel.setMessageHandler { _, reply ->
+            api.cameraPermissionStatus{ result: Result<String> ->
+              val error = result.exceptionOrNull()
+              if (error != null) {
+                reply.reply(wrapError(error))
+              } else {
+                val data = result.getOrNull()
+                reply.reply(wrapResult(data))
+              }
+            }
+          }
+        } else {
+          channel.setMessageHandler(null)
+        }
+      }
+      run {
+        val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.cambrian_camera.CameraHostApi.requestCameraPermission$separatedMessageChannelSuffix", codec)
+        if (api != null) {
+          channel.setMessageHandler { _, reply ->
+            api.requestCameraPermission{ result: Result<String> ->
+              val error = result.exceptionOrNull()
+              if (error != null) {
+                reply.reply(wrapError(error))
+              } else {
+                val data = result.getOrNull()
+                reply.reply(wrapResult(data))
+              }
+            }
+          }
+        } else {
+          channel.setMessageHandler(null)
+        }
+      }
+      run {
+        val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.cambrian_camera.CameraHostApi.photosAddPermissionStatus$separatedMessageChannelSuffix", codec)
+        if (api != null) {
+          channel.setMessageHandler { _, reply ->
+            api.photosAddPermissionStatus{ result: Result<String> ->
+              val error = result.exceptionOrNull()
+              if (error != null) {
+                reply.reply(wrapError(error))
+              } else {
+                val data = result.getOrNull()
+                reply.reply(wrapResult(data))
+              }
+            }
+          }
+        } else {
+          channel.setMessageHandler(null)
+        }
+      }
+      run {
+        val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.cambrian_camera.CameraHostApi.requestPhotosAddPermission$separatedMessageChannelSuffix", codec)
+        if (api != null) {
+          channel.setMessageHandler { _, reply ->
+            api.requestPhotosAddPermission{ result: Result<String> ->
+              val error = result.exceptionOrNull()
+              if (error != null) {
+                reply.reply(wrapError(error))
+              } else {
+                val data = result.getOrNull()
+                reply.reply(wrapResult(data))
+              }
+            }
+          }
+        } else {
+          channel.setMessageHandler(null)
+        }
+      }
     }
   }
 }
@@ -998,17 +1285,18 @@ class CameraFlutterApi(private val binaryMessenger: BinaryMessenger, private val
     }
   }
   /**
-   * Called when the effective post-GPU output dimensions change — e.g.
-   * after `cropOutputSize` is set or cleared, or after `setResolution`
-   * resolves to a new camera stream size. Dart consumers should replace
-   * their cached [CamCapabilities] with the new value.
+   * Called when the active stream configuration changes — after
+   * `cropOutputSize` is set or cleared, or after `setResolution` resolves
+   * to a new camera stream size. The payload's texture-ID fields are
+   * stable across the open session and are repeated on every change so
+   * Dart consumers do not need a separate `getCapabilities` round-trip.
    */
-  fun onCapabilitiesChanged(handleArg: Long, capabilitiesArg: CamCapabilities, callback: (Result<Unit>) -> Unit)
+  fun onStreamConfigurationChanged(handleArg: Long, configurationArg: CamStreamConfiguration, callback: (Result<Unit>) -> Unit)
 {
     val separatedMessageChannelSuffix = if (messageChannelSuffix.isNotEmpty()) ".$messageChannelSuffix" else ""
-    val channelName = "dev.flutter.pigeon.cambrian_camera.CameraFlutterApi.onCapabilitiesChanged$separatedMessageChannelSuffix"
+    val channelName = "dev.flutter.pigeon.cambrian_camera.CameraFlutterApi.onStreamConfigurationChanged$separatedMessageChannelSuffix"
     val channel = BasicMessageChannel<Any?>(binaryMessenger, channelName, codec)
-    channel.send(listOf(handleArg, capabilitiesArg)) {
+    channel.send(listOf(handleArg, configurationArg)) {
       if (it is List<*>) {
         if (it.size > 1) {
           callback(Result.failure(FlutterError(it[0] as String, it[1] as String?, it[2] as String?)))

@@ -45,3 +45,7 @@ export 'src/camera_state.dart'
         CameraTextureInfo,
         quarterTurnsFromDisplayRotation,
         RecordingState;
+
+// Pigeon types re-exported as part of the public surface — used by callers
+// of [CambrianCamera.captureImage] / [captureNaturalPicture] (Phase 3 §5.4).
+export 'src/messages.g.dart' show CamCaptureResult, CamPhotosDestination;

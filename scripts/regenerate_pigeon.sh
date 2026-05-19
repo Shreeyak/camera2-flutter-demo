@@ -16,7 +16,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 PKG_DIR="$REPO_ROOT/packages/cambrian_camera"
 
-SWIFT_FILE="$PKG_DIR/ios/Classes/Messages.g.swift"
+SWIFT_FILE="$PKG_DIR/ios/cambrian_camera/Sources/cambrian_camera/Messages.g.swift"
 KOTLIN_FILE="$PKG_DIR/android/src/main/kotlin/com/cambrian/camera/Messages.g.kt"
 
 # Step 1: Run Pigeon
