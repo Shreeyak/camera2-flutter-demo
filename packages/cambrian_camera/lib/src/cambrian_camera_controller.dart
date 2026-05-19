@@ -155,6 +155,38 @@ class CambrianCamera {
   /// to true in the settings. The [CameraSettings.naturalStreamHeight] field controls the
   /// requested height of the natural stream; 0 uses a default.
   ///
+  /// Current camera permission status, without prompting the user.
+  ///
+  /// Returns one of: `"notDetermined"`, `"denied"`, `"restricted"`,
+  /// `"authorized"`. Call this before [requestCameraPermission] to decide
+  /// whether to show a rationale UI, or before [open] to short-circuit
+  /// if the permission is denied.
+  ///
+  /// Internally routes to the iOS engine's `AVCaptureDevice.authorizationStatus(for: .video)`
+  /// (or Android's `ContextCompat.checkSelfPermission(CAMERA)`).
+  static Future<String> cameraPermissionStatus() =>
+      CameraHostApi().cameraPermissionStatus();
+
+  /// Triggers the system camera-permission prompt and returns the
+  /// resulting status (same four values as [cameraPermissionStatus]).
+  ///
+  /// On iOS, calls `AVCaptureDevice.requestAccess(for: .video)` directly
+  /// — no `permission_handler` round-trip. The prompt only fires when
+  /// the current status is `"notDetermined"`; for `"denied"` or
+  /// `"restricted"` the call returns the current status without
+  /// showing UI (iOS will not override a prior decision).
+  static Future<String> requestCameraPermission() =>
+      CameraHostApi().requestCameraPermission();
+
+  /// Photos add-only permission status. iOS-only; returns
+  /// `"authorized"` on Android API 29+ (MediaStore handles it).
+  static Future<String> photosAddPermissionStatus() =>
+      CameraHostApi().photosAddPermissionStatus();
+
+  /// Triggers the system Photos add-only prompt.
+  static Future<String> requestPhotosAddPermission() =>
+      CameraHostApi().requestPhotosAddPermission();
+
   /// Throws [PlatformException] if the camera cannot be opened (e.g. permission
   /// denied). After opening, errors are delivered via [errorStream].
   static Future<CambrianCamera> open({

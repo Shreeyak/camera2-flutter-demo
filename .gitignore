@@ -3,6 +3,12 @@
 tmp_files/*
 .vscode/
 *.png
+# App launcher icon assets — override the broad *.png rule above so a fresh
+# clone has the iOS/Android launcher icons without needing
+# `dart run flutter_launcher_icons` first.
+!assets/icon/*.png
+!ios/Runner/Assets.xcassets/AppIcon.appiconset/*.png
+!android/app/src/main/res/mipmap-*/*.png
 **/android/.kotlin
 **/android/.gradle
 **/android/app/bin
