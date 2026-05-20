@@ -48,7 +48,7 @@ class HitlScreen extends StatefulWidget {
   State<HitlScreen> createState() => _HitlScreenState();
 }
 
-class _HitlScreenState extends State<HitlScreen> with WidgetsBindingObserver {
+class _HitlScreenState extends State<HitlScreen> {
   CambrianCamera? _camera;
 
   // ── Latest values from the FlutterApi streams ──────────────────────────────
@@ -74,38 +74,16 @@ class _HitlScreenState extends State<HitlScreen> with WidgetsBindingObserver {
   StreamSubscription<CameraTextureInfo>? _previewTexSub;
   StreamSubscription<CameraTextureInfo>? _naturalTexSub;
 
-  @override
-  void initState() {
-    super.initState();
-    WidgetsBinding.instance.addObserver(this);
-  }
-
-  @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    // Standard Flutter pattern: pause on background, resume on foreground.
-    // On Android this releases Camera2 cleanly. On iOS the engine ALSO observes
-    // scene phase itself, so this Dart pause is redundant there — and it does
-    // NOT prevent a separate engine-side FSM crash on background (off-map
-    // SessionState transitions; see
-    // measurements/phase-3-hitl/2026-05-20/notes.md "Engine bugs" §1).
-    switch (state) {
-      case AppLifecycleState.paused:
-      case AppLifecycleState.hidden:
-        _camera?.pause().catchError((Object e) {
-          debugPrint('HITL: pause on background failed: $e');
-        });
-      case AppLifecycleState.resumed:
-        _camera?.resume().catchError((Object e) {
-          debugPrint('HITL: resume on foreground failed: $e');
-        });
-      default:
-        break;
-    }
-  }
+  // App-lifecycle (background/foreground) is driven entirely by the plugin's
+  // native observers — iOS `LifecycleObserver` (UIScene scene-phase) and
+  // Android `ProcessLifecycleOwner` — which run the full suspend/resume
+  // sequence. App code must NOT also drive it from `didChangeAppLifecycleState`
+  // (that double-drove the engine and, on iOS, left the session running long
+  // enough for the background FSM crash; see
+  // measurements/phase-3-hitl/2026-05-20/notes.md "Engine bugs" §1).
 
   @override
   void dispose() {
-    WidgetsBinding.instance.removeObserver(this);
     // Mirror the repo-root CameraScreen teardown: cancel every subscription,
     // then close the native session in a catchError so a late failure cannot
     // throw out of dispose(). Clean disposal is what makes the hot-restart
