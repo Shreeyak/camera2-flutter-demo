@@ -618,6 +618,12 @@ class CambrianCamera {
   /// Uses a dedicated JPEG ImageReader pre-allocated at session setup time.
   /// Does not interrupt the streaming pipeline.
   ///
+  /// **Capture settings:** this is a neutral hardware baseline — it captures with
+  /// automatic exposure and white balance at 1.0× zoom. Manual ISO/exposure,
+  /// white-balance gains, and zoom set via [updateSettings] are **not** applied to
+  /// this capture; use [captureImage] if you need the configured capture. EXIF still
+  /// records the actual ISO/exposure the hardware chose.
+  ///
   /// Returns a [CamCaptureResult] whose populated field depends on
   /// [destination] and platform (see [CamPhotosDestination] /
   /// [CamCaptureResult]).

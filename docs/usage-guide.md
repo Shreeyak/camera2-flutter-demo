@@ -405,7 +405,9 @@ the full-sensor hardware JPEG and **intentionally ignores `cropOutputSize`**.
 Use `captureImage()` if you want the cropped image. The preview and
 `captureImage()` reflect the crop; `captureNaturalPicture()` does not — this
 mismatch is by design, since "natural picture" is defined as the unprocessed
-sensor JPEG.
+sensor JPEG. For the same reason it also ignores `zoomRatio` (hardware zoom)
+and any manual ISO/exposure/white-balance — it is always the full-sensor frame
+at automatic 3A.
 
 ---
 
@@ -566,10 +568,10 @@ print('After:  ${result.patchAfter}');
 
 There are two capture methods with different trade-offs:
 
-| Method | Source | Post-processing | Format | Quality |
-|--------|--------|-----------------|--------|---------|
-| `captureNaturalPicture()` | Camera2 hardware ISP | None | JPEG | Highest (hardware encoder) |
-| `captureImage()` | GPU post-processed pipeline | Full (black balance, brightness, contrast, saturation, gamma) | JPEG or PNG | Good (software encoder) |
+| Method | Source | Post-processing | Capture settings | Format | Quality |
+|--------|--------|-----------------|------------------|--------|---------|
+| `captureNaturalPicture()` | Camera2 hardware ISP | None | Auto AE/AWB at 1.0× zoom (ignores manual ISO/exposure/WB/zoom) | JPEG | Highest (hardware encoder) |
+| `captureImage()` | GPU post-processed pipeline | Full (black balance, brightness, contrast, saturation, gamma) | Honors configured ISO/exposure/WB/zoom | JPEG or PNG | Good (software encoder) |
 
 #### `camera.captureNaturalPicture()`
 
@@ -580,6 +582,8 @@ Future<String> captureNaturalPicture()
 Captures a JPEG still image using Camera2's hardware ISP ImageReader. Returns the absolute file path. Does **not** interrupt the streaming pipeline.
 
 **Important:** This method bypasses the GPU post-processing pipeline. The resulting image reflects raw ISP output — none of the GPU shader transforms (saturation, contrast, brightness, black balance, gamma) are applied. Use this when you need the highest-fidelity hardware-encoded JPEG.
+
+**Capture settings:** this is a neutral hardware baseline — it captures with automatic exposure and white balance at 1.0× zoom. Manual ISO/exposure, white-balance gains, and zoom set via `updateSettings()` are **not** applied to this capture; use `captureImage()` for the configured capture. EXIF still records the actual ISO/exposure the hardware chose.
 
 ```dart
 final path = await camera.captureNaturalPicture();

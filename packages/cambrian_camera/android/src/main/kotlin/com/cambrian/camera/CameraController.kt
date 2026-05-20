@@ -1445,6 +1445,12 @@ class CameraController(
      * Captures via the pre-allocated JPEG [ImageReader], acquires the next image on a
      * background thread, and writes the bytes to `<cacheDir>/capture_<timestamp>.jpg`.
      *
+     * **Capture settings:** this is a neutral hardware baseline. The still request is
+     * built bare (auto AE/AWB at 1.0x zoom) and deliberately does NOT carry the manual
+     * ISO/exposure/white-balance/zoom from [appliedSettings] that the preview/GPU stream
+     * uses. Use [captureImage] for the configured (GPU-processed) capture. EXIF still
+     * records the actual values the hardware chose.
+     *
      * EXIF metadata (ISO, exposure time, focal length, aperture, flash, white balance mode,
      * subject distance, pixel dimensions, orientation, and capture timestamp) is written
      * using [android.media.ExifInterface] from the most recent streaming-frame snapshot.
@@ -1498,6 +1504,11 @@ class CameraController(
                 }
             }, backgroundHandler)
 
+            // Bare still request by design: captureNaturalPicture is a neutral hardware
+            // baseline — auto AE/AWB at 1.0x zoom, deliberately ignoring the manual
+            // ISO/exposure/WB/zoom on appliedSettings (which the repeating preview/GPU
+            // request carries via buildCaptureRequest). Use captureImage() for the
+            // configured (GPU-processed) capture. EXIF still records the actual values used.
             val jpegRequest =
                 device
                     .createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE)

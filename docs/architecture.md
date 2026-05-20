@@ -698,7 +698,10 @@ video encoder paths do not touch the mirrors — they blit directly from `fbo_`
 separate hardware JPEG `ImageReader` and encodes orientation via EXIF tags
 in `CameraController.kt` (combining display rotation, sensor mount, and
 front-camera mirroring). That path stays identical to Android's default
-behavior.
+behavior. Its still request is also built **bare** (`TEMPLATE_STILL_CAPTURE`
+with only `addTarget`) and does not carry `appliedSettings`, so it captures
+with auto AE/AWB at 1.0× zoom — a neutral hardware baseline, ignoring the
+manual ISO/exposure/WB/zoom the repeating preview request applies.
 
 **Consequence for preview widgets:** the plugin intentionally delivers a
 fixed orientation so the same pixels land in the encoder, in `captureImage`,
