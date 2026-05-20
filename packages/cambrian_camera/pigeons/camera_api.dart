@@ -513,6 +513,9 @@ abstract class CameraHostApi {
   /// the natural-lane tap (iOS). Does NOT include GPU post-processing
   /// (saturation, contrast, brightness, black balance, gamma).
   ///
+  /// Neutral hardware baseline: captured with auto AE/AWB at 1.0x zoom. Manual
+  /// ISO/exposure/WB/zoom from [updateSettings] are NOT applied (use captureImage).
+  ///
   /// Returns a [CamCaptureResult] whose populated field depends on
   /// [destination] and platform — see [CamPhotosDestination] /
   /// [CamCaptureResult] for the per-platform semantics.
