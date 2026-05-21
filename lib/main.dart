@@ -82,8 +82,7 @@ class CameraScreen extends StatefulWidget {
   State<CameraScreen> createState() => _CameraScreenState();
 }
 
-class _CameraScreenState extends State<CameraScreen>
-    with WidgetsBindingObserver {
+class _CameraScreenState extends State<CameraScreen> {
   // ── Camera state
   late CameraSettingsValues _values;
   CameraRanges _ranges = const CameraRanges();
@@ -165,7 +164,6 @@ class _CameraScreenState extends State<CameraScreen>
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addObserver(this);
     _values = CameraSettingsValues.fromSettings(_kInitialSettings, _ranges);
     _openCamera();
     _callbacks = CameraCallbacks(
@@ -179,7 +177,6 @@ class _CameraScreenState extends State<CameraScreen>
 
   @override
   void dispose() {
-    WidgetsBinding.instance.removeObserver(this);
     _frameResultSub?.cancel();
     _errorSub?.cancel();
     _recordingStateSub?.cancel();
@@ -192,24 +189,10 @@ class _CameraScreenState extends State<CameraScreen>
     super.dispose();
   }
 
-  @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    switch (state) {
-      case AppLifecycleState.paused:
-      case AppLifecycleState.hidden: // screen locked or covered on Android 14+
-        if (_isRecording) {
-          _camera?.stopRecording().catchError((Object e) {
-            debugPrint('auto-stop on background failed: $e');
-            return '';
-          });
-        }
-        _camera?.pause();
-      case AppLifecycleState.resumed:
-        _camera?.resume();
-      default:
-        break;
-    }
-  }
+  // App-lifecycle (background/foreground) is driven by the plugin's native
+  // observers — iOS LifecycleObserver (UIScene) and Android ProcessLifecycleOwner
+  // — which run the full suspend/resume sequence, including finalizing an active
+  // recording on background. App code must NOT also drive it.
 
   Future<void> _openCamera() async {
     // Use cambrian_camera's native permission API instead of permission_handler.
