@@ -17,12 +17,12 @@ import UniformTypeIdentifiers
 @Suite("CaptureNaturalPictureTests — captureNaturalPicture", .progressLogged)
 struct CaptureNaturalPictureTests {
 
-    @Test("encode-natural-jpeg-round-trip: RGBA fp16 round-trips through JPEG within ±8 LSB")
+    @Test("encode-natural-jpeg-round-trip: BGRA8 round-trips through JPEG within ±8 LSB")
     func encodeNaturalJpegRoundTrip() async throws {
         // 16×16 buffer — small enough to stay fast, large enough that JPEG's
         // 8×8 block quantisation doesn't murder a 4×4 patch's center pixel.
         let size = Size(width: 16, height: 16)
-        let buf = try makeFp16Buffer(width: size.width, height: size.height, r: 1.0, g: 0.0, b: 0.5)
+        let buf = try makeBgra8Buffer(width: size.width, height: size.height, r: 255, g: 0, b: 128)
         let capture = StillCapture()
         let outURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString + ".jpg")
@@ -64,7 +64,7 @@ struct CaptureNaturalPictureTests {
         // generous but stable across iOS versions and device chips.
         #expect(abs(r - 255) <= 8, "Red channel: expected ~255, got \(r)")
         #expect(abs(g - 0) <= 8, "Green channel: expected ~0, got \(g)")
-        #expect(abs(b - 127) <= 8, "Blue channel: expected ~127, got \(b)")
+        #expect(abs(b - 128) <= 8, "Blue channel: expected ~128, got \(b)")
     }
 
     @Test("exif-camplugin-v1-natural-marker: laneTag='natural' lands in JSON envelope")
@@ -118,7 +118,7 @@ struct CaptureNaturalPictureTests {
         ext: String
     ) async throws -> String? {
         let size = Size(width: 4, height: 4)
-        let buf = try makeFp16Buffer(width: size.width, height: size.height, r: 0.5, g: 0.5, b: 0.5)
+        let buf = try makeBgra8Buffer(width: size.width, height: size.height, r: 128, g: 128, b: 128)
         let snap = DeviceStateSnapshot(
             iso: 100,
             exposureDurationNs: 33_333_333,
@@ -159,63 +159,5 @@ struct CaptureNaturalPictureTests {
     }
 }
 
-// MARK: - Local test helpers (duplicated from Stage07Tests — `private` there)
-
-/// Creates a CPU-accessible RGBA16F CVPixelBuffer filled with given fp16 RGBA values.
-private func makeFp16Buffer(
-    width: Int, height: Int, r: Float, g: Float, b: Float, a: Float = 1.0
-) throws -> CVPixelBuffer {
-    var buf: CVPixelBuffer?
-    let attrs: [CFString: Any] = [
-        kCVPixelBufferPixelFormatTypeKey: kCVPixelFormatType_64RGBAHalf,
-        kCVPixelBufferWidthKey: width,
-        kCVPixelBufferHeightKey: height,
-    ]
-    let s = CVPixelBufferCreate(
-        kCFAllocatorDefault, width, height,
-        kCVPixelFormatType_64RGBAHalf, attrs as CFDictionary, &buf)
-    guard s == kCVReturnSuccess, let buf else {
-        throw NSError(domain: "Test", code: Int(s))
-    }
-    CVPixelBufferLockBaseAddress(buf, [])
-    defer { CVPixelBufferUnlockBaseAddress(buf, []) }
-    guard let base = CVPixelBufferGetBaseAddress(buf) else {
-        throw NSError(domain: "Test", code: -1)
-    }
-    let bytesPerRow = CVPixelBufferGetBytesPerRow(buf)
-    let fp16R = float16(r)
-    let fp16G = float16(g)
-    let fp16B = float16(b)
-    let fp16A = float16(a)
-    for y in 0..<height {
-        let row = base.advanced(by: y * bytesPerRow).bindMemory(to: UInt16.self, capacity: width * 4)
-        for x in 0..<width {
-            row[x * 4 + 0] = fp16R
-            row[x * 4 + 1] = fp16G
-            row[x * 4 + 2] = fp16B
-            row[x * 4 + 3] = fp16A
-        }
-    }
-    return buf
-}
-
-/// Converts a Float32 to IEEE 754 half-precision (float16). Subset of
-/// Stage07Tests' helper — small positive values only (RGBA fixtures).
-private func float16(_ v: Float) -> UInt16 {
-    var f = v
-    var h: UInt16 = 0
-    withUnsafeBytes(of: &f) { fp32 in
-        let bits = fp32.load(as: UInt32.self)
-        let sign = UInt16((bits >> 31) & 1) << 15
-        let exp = Int((bits >> 23) & 0xFF) - 127 + 15
-        let mant = UInt16((bits >> 13) & 0x3FF)
-        if exp <= 0 {
-            h = sign
-        } else if exp >= 31 {
-            h = sign | (0x1F << 10)
-        } else {
-            h = sign | UInt16(exp << 10) | mant
-        }
-    }
-    return h
-}
+// `makeBgra8Buffer` is defined in Stage07Tests.swift (internal — shared within
+// the test target).

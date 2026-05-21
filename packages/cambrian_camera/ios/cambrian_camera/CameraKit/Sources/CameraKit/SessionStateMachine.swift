@@ -25,12 +25,21 @@ import Foundation
 ///     from many states.
 ///
 /// Off-map transitions are LOGGED (`CameraKitLog.warning`) with from /
-/// to / kind / caller context, then `assertionFailure(...)` in DEBUG,
-/// then APPLIED. Observability-first: the state machine is a diagnostic
-/// instrument, not a gate. A `paused → recovering` log entry correlated
-/// with a preceding OS notification is the legitimate path; the same
-/// entry with no OS event in the preceding window is the watchdog-race
-/// bug the retrospective predicted.
+/// to / kind / caller context, then APPLIED — in every build config. The
+/// state machine is a diagnostic instrument, not a gate. A `paused →
+/// recovering` log entry correlated with a preceding OS notification is the
+/// legitimate path; the same entry with no OS event in the preceding window
+/// is the watchdog-race bug the retrospective predicted.
+///
+/// Off-map is deliberately NOT fatal. An earlier design tripped
+/// `assertionFailure(...)` on off-map in DEBUG, which aborted on-device
+/// DEBUG builds on legitimate-but-rare OS lifecycle races (e.g. an
+/// interruption ending while backgrounded) that RELEASE handled gracefully.
+/// Because the OS event space is not fully enumerable, crashing on it traded
+/// a real diagnostic (the log) for a DEBUG/RELEASE divergence that amplified
+/// bugs rather than catching them (measurements 2026-05-20 §1). The log
+/// alone carries the signal; genuine state-logic regressions are caught by
+/// the classifier tests, not by aborting the running app.
 struct SessionStateMachine {
 
     /// Classification of the trigger for a transition.

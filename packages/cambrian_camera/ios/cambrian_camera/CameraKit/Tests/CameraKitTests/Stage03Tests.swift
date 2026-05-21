@@ -91,6 +91,87 @@ struct Stage03Tests {
         #expect(resolved3.exposureMode == .auto)
     }
 
+    // MARK: Test 3b — single-field manual pins both (measurements 2026-05-20 §1, case #4)
+
+    /// A single-field manual request must pin both ISO and exposure.
+    ///
+    /// Issued while the device is in auto exposure, a manual-ISO-only request
+    /// must pin BOTH (iOS couples them), latching the current device exposure for
+    /// a smooth transition. Without `promoteSingleFieldManual` the carried-over
+    /// `.auto` couples the request straight back to auto.
+    @Test func singleFieldManualPinsBothOverAutoPrior() throws {
+        let snap = DeviceStateSnapshot(
+            iso: 250, exposureDurationNs: 16_000_000, lensPosition: 0.5,
+            whiteBalanceGains: WhiteBalanceGains(red: 1, green: 1, blue: 1),
+            isAdjustingExposure: false, systemPressureLevel: .nominal)
+
+        // Device currently in auto exposure.
+        var prior = CameraSettings()
+        prior.isoMode = .auto
+        prior.exposureMode = .auto
+
+        // Manual ISO alone.
+        var isoOnly = CameraSettings()
+        isoOnly.isoMode = .manual
+        isoOnly.iso = 400
+        let mergedIso = SettingsCoupling.promoteSingleFieldManual(
+            request: isoOnly, merged: isoOnly.merging(onto: prior))
+        let resolvedIso = try SettingsCoupling.apply(rules: mergedIso, latched: snap)
+        #expect(resolvedIso.isoMode == .manual)
+        #expect(resolvedIso.exposureMode == .manual, "manual ISO alone must pin exposure too")
+        #expect(resolvedIso.iso == 400)
+        #expect(
+            resolvedIso.exposureTimeNs == snap.exposureDurationNs,
+            "exposure must latch the current device value")
+
+        // Symmetric: manual exposure alone pins ISO from the current device value.
+        var expOnly = CameraSettings()
+        expOnly.exposureMode = .manual
+        expOnly.exposureTimeNs = 4_000_000
+        let mergedExp = SettingsCoupling.promoteSingleFieldManual(
+            request: expOnly, merged: expOnly.merging(onto: prior))
+        let resolvedExp = try SettingsCoupling.apply(rules: mergedExp, latched: snap)
+        #expect(resolvedExp.exposureMode == .manual)
+        #expect(resolvedExp.isoMode == .manual, "manual exposure alone must pin ISO too")
+        #expect(resolvedExp.exposureTimeNs == 4_000_000)
+        #expect(resolvedExp.iso == Int(snap.iso), "ISO must latch the current device value")
+    }
+
+    /// Promotion must not disturb the existing cases: an explicit `.auto` still
+    /// releases both, and a side already pinned manual keeps its value.
+    @Test func singleFieldManualLeavesExplicitAutoAndBothManualUntouched() throws {
+        let snap = DeviceStateSnapshot(
+            iso: 250, exposureDurationNs: 16_000_000, lensPosition: 0.5,
+            whiteBalanceGains: WhiteBalanceGains(red: 1, green: 1, blue: 1),
+            isAdjustingExposure: false, systemPressureLevel: .nominal)
+
+        // Explicit auto request → both auto, no promotion.
+        var autoReq = CameraSettings()
+        autoReq.isoMode = .auto
+        let mergedAuto = SettingsCoupling.promoteSingleFieldManual(
+            request: autoReq, merged: autoReq.merging(onto: CameraSettings()))
+        let resolvedAuto = try SettingsCoupling.apply(rules: mergedAuto, latched: snap)
+        #expect(resolvedAuto.isoMode == .auto)
+        #expect(resolvedAuto.exposureMode == .auto)
+
+        // Prior already manual exposure=8ms; new manual ISO keeps that pinned value.
+        var prior = CameraSettings()
+        prior.isoMode = .manual
+        prior.iso = 100
+        prior.exposureMode = .manual
+        prior.exposureTimeNs = 8_000_000
+        var isoOnly = CameraSettings()
+        isoOnly.isoMode = .manual
+        isoOnly.iso = 500
+        let merged = SettingsCoupling.promoteSingleFieldManual(
+            request: isoOnly, merged: isoOnly.merging(onto: prior))
+        let resolved = try SettingsCoupling.apply(rules: merged, latched: snap)
+        #expect(resolved.iso == 500)
+        #expect(
+            resolved.exposureTimeNs == 8_000_000,
+            "an already-pinned exposure must survive a manual-ISO change")
+    }
+
     // MARK: Test 4 — 03:rule3-manual-latch-from-last-readback (failure path)
 
     /// Rule 3 failure: transitioning to manual with no prior snapshot throws settingsConflict,
@@ -231,7 +312,7 @@ final class FakeCaptureDeviceProviding: CaptureDeviceProviding, @unchecked Senda
     }
     func lockForConfiguration() async throws {}
     func unlockForConfiguration() async {}
-    func setExposureModeCustom(durationNs: Int64, iso: Float) async throws {}
+    func setIsoExposureManual(durationNs: Int64, iso: Float) async throws {}
     func setContinuousAutoExposure() async throws {}
     func setFocusModeLocked(lensPosition: Float) async throws { lastLockedLensPosition = lensPosition }
     func setContinuousAutoFocus() async throws {}

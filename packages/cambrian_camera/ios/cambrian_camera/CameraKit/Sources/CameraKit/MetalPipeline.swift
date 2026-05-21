@@ -52,8 +52,11 @@ struct PatchUniform {
 
 // UniformsHost removed in Stage 05. Replaced by Mutex<UniformStorage> (ADR-34, D-17).
 
-/// Owns the GPU pipeline that converts YUV sample buffers into an RGBA16Float texture
-/// consumed by the MTKView render pass.
+/// Owns the GPU pipeline that converts YUV sample buffers through RGBA16F
+/// compute passes and delivers BGRA8 lane surfaces (preview, bridge, tracker,
+/// still capture).
+///
+/// RGBA16F is the internal math format; BGRA8 is the single delivery format.
 ///
 /// ADR-02: `encode(sampleBuffer:)` runs entirely on the `delivery` DispatchQueue.
 /// No actor hops, no `Task {}`, no `await`, no `DispatchQueue.main.async`.
@@ -75,41 +78,78 @@ final class MetalPipeline: @unchecked Sendable {
     private let processedPool: CVPixelBufferPool
     private let trackerPool: CVPixelBufferPool
 
-    // Pre-Phase-3 — RGBA8 lane conversion (default-on session flag).
+    // RGBA8 lane conversion — unconditional for natural + processed.
     //
-    // When `lanesEightBit` is true, Pass-7 dispatches per-frame for natural +
-    // processed (NOT tracker) and writes into these IOSurface-backed BGRA8
-    // pools. The buffer mailboxes (`_latestNaturalBuffer` /
-    // `_latestProcessedBuffer`) point at the converted buffer, so
-    // `CameraEngine.currentPixelBuffer(stream:)` returns BGRA8 for the
-    // Phase-3 bridge. See
+    // Pass-7 dispatches per-frame for natural + processed and writes into these
+    // IOSurface-backed BGRA8 pools. The tracker lane uses a fused approach:
+    // `trackerPool` is itself BGRA8, so Pass-4's downsample writes BGRA8 directly
+    // with no separate conversion pass. All three buffer mailboxes deliver BGRA8
+    // to `CameraEngine.currentPixelBuffer(stream:)` for the Phase-3 bridge. See
     // `docs/superpowers/specs/2026-05-15-rgba16f-to-rgba8-conversion-design.md`.
-    private let lanesEightBit: Bool
-    private let eightBitNaturalPool: CVPixelBufferPool?
-    private let eightBitProcessedPool: CVPixelBufferPool?
-    private let rgba16fToBgra8PSO: MTLComputePipelineState?
+    private let eightBitNaturalPool: CVPixelBufferPool
+    private let eightBitProcessedPool: CVPixelBufferPool
+    private let rgba16fToBgra8PSO: MTLComputePipelineState
 
     private(set) var captureSize: Size
+
+    /// P2a true crop — the output (natural/processed/still/encoder/8-bit) texture
+    /// size.
+    ///
+    /// Equals `captureSize` when uncropped. When a crop is active, this is the
+    /// crop-region size: the AVCaptureSession keeps producing `captureSize`
+    /// sensor buffers, and Pass-1 reads the `cropOrigin`-offset sub-region into
+    /// these `outputSize` output textures (a sub-region resolution change, not a
+    /// zoom). The SOURCE Y/CbCr textures still derive their size from the
+    /// incoming sample buffer (= sensor).
+    private(set) var outputSize: Size
+
+    /// P2a true crop — top-left of the sub-region read from the sensor, in
+    /// sensor pixels.
+    ///
+    /// `(0, 0)` when uncropped. Carried into Pass-1's `CropUniform.origin*` so
+    /// the shader offsets every source read by it.
+    private(set) var cropOrigin: (x: Int, y: Int)
+
     private let trackerSize: Size
 
-    /// Preview-facing "latest" textures.
+    /// Internal RGBA16F "latest" textures — Metal-compute intermediates, NOT a
+    /// delivery surface.
+    ///
+    /// `_latestNaturalTex16F` is the Pass-1 output sampled by WB/BB calibration
+    /// (`dispatchCenterPatchOnNatural` / `dispatchBBCalibrationSample`);
+    /// `_latestProcessedTex16F` is the Pass-2 graded output sampled by the
+    /// diagnostic center-patch (`dispatchCenterPatch` / `sampleCenterPatch`).
+    /// They stay 16F because the math wants float headroom — the camera is
+    /// 8-bit-locked, so this precision only buys anything in-shader, never at
+    /// the delivery boundary. The preview/bridge surfaces are the BGRA8
+    /// mailboxes below.
     ///
     /// Single writer on the AVF delivery queue (`addCompletedHandler`
-    /// callback); readers on MainActor / sessionQueue / the C++ pixel-sink
-    /// consumer thread. See `Mailbox<T>` for the safety contract. G-13 /
-    /// Stage 06 design.
-    ///
-    /// Storage is `private` (Mailbox-write access is restricted to this
-    /// type); the public-read companion below forwards `latest` so external
-    /// readers continue to see `pipeline.latestNaturalTex` returning
-    /// `MTLTexture?` — preserves the prior `private(set)` semantics.
-    private let _latestNaturalTex = Mailbox<MTLTexture>()
-    private let _latestProcessedTex = Mailbox<MTLTexture>()
+    /// callback); readers on MainActor / sessionQueue. See `Mailbox<T>` for the
+    /// safety contract. G-13 / Stage 06 design.
+    private let _latestNaturalTex16F = Mailbox<MTLTexture>()
+    private let _latestProcessedTex16F = Mailbox<MTLTexture>()
     private let _latestTrackerTex = Mailbox<MTLTexture>()
 
-    var latestNaturalTex: MTLTexture? { _latestNaturalTex.latest }
-    var latestProcessedTex: MTLTexture? { _latestProcessedTex.latest }
+    var latestNaturalTex16F: MTLTexture? { _latestNaturalTex16F.latest }
+    var latestProcessedTex16F: MTLTexture? { _latestProcessedTex16F.latest }
+    /// Tracker texture — `.bgra8Unorm` (Pass-4 writes directly into the BGRA8
+    /// tracker pool; no separate 16F texture exists for this lane).
     var latestTrackerTex: MTLTexture? { _latestTrackerTex.latest }
+
+    /// Preview/bridge-facing BGRA8 lane textures (natural + processed).
+    ///
+    /// Each is the `.bgra8Unorm` view of the Pass-7 convert output, sharing its
+    /// IOSurface with the matching `_latest*Buffer` mailbox — so a lane exposes
+    /// one surface as both a `CVPixelBuffer` and an `MTLTexture`. The public
+    /// `CameraEngine.currentTexture()` / `currentProcessedTexture()` accessors
+    /// read these; the MTKView preview and the Phase-3 bridge get identical
+    /// 8-bit pixels. Single writer on the delivery queue (`Mailbox<T>`).
+    private let _latestNaturalBgra8Tex = Mailbox<MTLTexture>()
+    private let _latestProcessedBgra8Tex = Mailbox<MTLTexture>()
+
+    var latestNaturalBgra8Tex: MTLTexture? { _latestNaturalBgra8Tex.latest }
+    var latestProcessedBgra8Tex: MTLTexture? { _latestProcessedBgra8Tex.latest }
 
     // Phase-2 §2c: lane CVPixelBuffer mailboxes — paired with the texture
     // mailboxes above. Single writer on the AVF delivery queue; readers
@@ -124,17 +164,15 @@ final class MetalPipeline: @unchecked Sendable {
     var latestProcessedBuffer: CVPixelBuffer? { _latestProcessedBuffer.latest }
     var latestTrackerBuffer: CVPixelBuffer? { _latestTrackerBuffer.latest }
 
-    // Pre-Phase-3 — parallel RGBA16F mailbox for the natural-lane buffer,
-    // populated unconditionally (independent of `lanesEightBit`). Read by
-    // `CameraEngine.captureNaturalPicture` so HDR-grade still capture
-    // continues to source the precise RGBA16F lane buffer even when the
-    // bridge-facing `currentPixelBuffer(stream: .natural)` is BGRA8.
-    // Single writer on the AVF delivery queue; same `Mailbox<T>` contract
-    // as the other lane mailboxes.
-    private let _latestNaturalBufferRGBA16F = Mailbox<CVPixelBuffer>()
-    var latestNaturalBufferRGBA16F: CVPixelBuffer? { _latestNaturalBufferRGBA16F.latest }
+    /// Retains the pre-first-frame fallback scratch buffer for the processed lane.
+    ///
+    /// Keeps the returned blank texture valid through the caller's GPU dispatch
+    /// (CoreVideo retain contract). Separate from `_latestProcessedBuffer`: the
+    /// scratch is RGBA16F, not a BGRA8 delivery surface, and must never reach
+    /// `currentPixelBuffer(stream:)`.
+    private let _processedFallbackScratch = Mailbox<CVPixelBuffer>()
 
-    /// PTS (in nanoseconds) of the most recent CMSampleBuffer encoded into `latestNaturalTex`.
+    /// PTS (in nanoseconds) of the most recent CMSampleBuffer encoded into `latestNaturalTex16F`.
     ///
     /// Read by `CameraEngine.awaitNaturalAfter` to confirm the natural texture
     /// has been refreshed past a target buffer timestamp (e.g. the `t_apply`
@@ -142,13 +180,6 @@ final class MetalPipeline: @unchecked Sendable {
     /// allow lock-free CAS reads. Single writer: completion handler on the
     /// delivery queue.
     let latestNaturalPTSNs: ManagedAtomic<Int64> = ManagedAtomic(0)
-
-    // Still capture (Stage 07) — one slot, CPU-readable pool.
-    private var stillCapturePool: CVPixelBufferPool?
-    // Armed by StillCapture.armCapture(); cleared by completion handler after delivery.
-    // Single-writer guarantee: CAS guard in StillCapture prevents concurrent arming.
-    nonisolated(unsafe) var pendingCaptureContinuation: CheckedContinuation<CVPixelBuffer, Error>?
-    private(set) var stillCaptureDequeueCount: Int = 0  // test seam
 
     // MARK: - Pass 4 — tracker downsample (Stage 06)
 
@@ -229,7 +260,12 @@ final class MetalPipeline: @unchecked Sendable {
 
     /// - Parameters:
     ///   - device: From `MTLCreateSystemDefaultDevice()`.
-    ///   - captureSize: Dimensions reported by `CameraSession.configure()`.
+    ///   - captureSize: Sensor/source dimensions reported by `CameraSession.configure()`.
+    ///   - outputSize: P2a true-crop output texture size. `nil` (default) means
+    ///     no crop — output equals `captureSize`. When a crop is active, this is
+    ///     the crop-region size.
+    ///   - cropOrigin: P2a true-crop top-left in sensor pixels. `(0, 0)` (default)
+    ///     when uncropped.
     ///   - gate: Shared `ManagedAtomic<Bool>` owned by `CameraEngine` (ADR-09).
     ///   - consumers: `ConsumerRegistry` owned by `CameraEngine`; used to publish
     ///     `FrameSet` values on the delivery queue.
@@ -238,19 +274,25 @@ final class MetalPipeline: @unchecked Sendable {
     init(
         device: MTLDevice,
         captureSize: Size,
+        outputSize: Size? = nil,
+        cropOrigin: (x: Int, y: Int) = (0, 0),
         gate: ManagedAtomic<Bool>,
         consumers: ConsumerRegistry,
-        engineSessionToken: ManagedAtomic<UInt64>,
-        lanesEightBit: Bool
+        engineSessionToken: ManagedAtomic<UInt64>
     ) throws {
         submissionGate = gate
         self.engineSessionToken = engineSessionToken
         self.consumers = consumers
         self.captureSize = captureSize
+        let resolvedOutputSize = outputSize ?? captureSize
+        self.outputSize = resolvedOutputSize
+        self.cropOrigin = cropOrigin
 
-        // Tracker dimensions: preserve capture aspect ratio, scale to trackerHeightPx.
+        // Tracker dimensions: preserve OUTPUT aspect ratio, scale to trackerHeightPx.
+        // P2a — the tracker downsamples the rendered natural (which is now
+        // outputSize), so its aspect must follow outputSize, not the sensor.
         let trackerH = Constants.trackerHeightPx
-        let aspect = Double(captureSize.width) / Double(captureSize.height)
+        let aspect = Double(resolvedOutputSize.width) / Double(resolvedOutputSize.height)
         let rawW = Int((Double(trackerH) * aspect).rounded())
         let trackerW = rawW - (rawW % 2)
         self.trackerSize = Size(width: trackerW, height: trackerH)
@@ -313,43 +355,49 @@ final class MetalPipeline: @unchecked Sendable {
         patchBufferB = bufB
 
         // 4d. Host-side uniforms — Stage 05 mutex-protected storage (ADR-34, D-17).
+        //     P2a — the crop uniform is now set ONCE at construction and carries
+        //     the sensor-pixel origin of the sub-region Pass-1 reads. It is no
+        //     longer mutated per-frame (the Stage-04 black-out masking retired).
+        //     `width`/`height` mirror the output (crop-region) size; the shader
+        //     ignores them and uses the output texture's own dims.
         uniforms = Mutex(
             UniformStorage(
                 color: .identity,
-                crop: .full(width: captureSize.width, height: captureSize.height)
+                crop: CropUniform(
+                    originX: UInt32(cropOrigin.x),
+                    originY: UInt32(cropOrigin.y),
+                    width: UInt32(resolvedOutputSize.width),
+                    height: UInt32(resolvedOutputSize.height)
+                )
             ))
 
         // 5. Command queue.
         commandQueue = device.makeCommandQueue()!
 
         // 6. Per-stream CVPixelBufferPools (Stage 06 pool-backed lineage).
-        naturalPool = try texturePool.makeWorkingFormatPool(size: captureSize)
-        processedPool = try texturePool.makeWorkingFormatPool(size: captureSize)
-        trackerPool = try texturePool.makeWorkingFormatPool(size: trackerSize)
+        //    P2a — natural/processed pools size to `outputSize` (the crop region),
+        //    NOT the sensor. Tracker derives from `trackerSize` (already scaled
+        //    to the output aspect above).
+        naturalPool = try texturePool.makeWorkingFormatPool(size: resolvedOutputSize)
+        processedPool = try texturePool.makeWorkingFormatPool(size: resolvedOutputSize)
+        // Tracker pool is BGRA8 — Pass-4's kernel writes `float4` via
+        // `texture2d<float, access::write>`, so a `.bgra8Unorm` output texture
+        // clamps [0,1] and stores BGRA8 with no shader edit (Task 2, 8-bit
+        // BGRA end-to-end delivery design).
+        trackerPool = try texturePool.makeBgra8LanePool(size: trackerSize)
 
-        // 6b. Pre-Phase-3 — RGBA8 conversion flag stored; pools + PSO lazy when on.
-        //     Tracker lane is intentionally not converted (Plan OQ #4) — no Phase-3
-        //     Pigeon counterpart for the tracker lane; saves one Metal pass/frame.
-        self.lanesEightBit = lanesEightBit
-        if lanesEightBit {
-            self.eightBitNaturalPool = try texturePool.makeBgra8LanePool(size: captureSize)
-            self.eightBitProcessedPool = try texturePool.makeBgra8LanePool(size: captureSize)
-            guard let fnConvert = library.makeFunction(name: "rgba16fToBgra8") else {
-                throw MetalError.pipelineStateCompilation("rgba16fToBgra8 missing")
-            }
-            self.rgba16fToBgra8PSO = try device.makeComputePipelineState(function: fnConvert)
-        } else {
-            self.eightBitNaturalPool = nil
-            self.eightBitProcessedPool = nil
-            self.rgba16fToBgra8PSO = nil
+        // 6b. RGBA8 lane conversion — unconditional for natural + processed.
+        //     P2a — sized to outputSize (the crop region), not the sensor.
+        self.eightBitNaturalPool = try texturePool.makeBgra8LanePool(size: resolvedOutputSize)
+        self.eightBitProcessedPool = try texturePool.makeBgra8LanePool(size: resolvedOutputSize)
+        guard let fnConvert = library.makeFunction(name: "rgba16fToBgra8") else {
+            throw MetalError.pipelineStateCompilation("rgba16fToBgra8 missing")
         }
-
-        // 8. Still-capture pool — 1-slot, CPU-readable, RGBA16F (Stage 07).
-        let sPool = try texturePool.makeStillCapturePool(size: captureSize)
-        self.stillCapturePool = sPool
+        self.rgba16fToBgra8PSO = try device.makeComputePipelineState(function: fnConvert)
 
         // 9. Stage 10: encoder NV12 pool + rgba16fToNV12 PSO (Pass 5).
-        encoderPool = try texturePool.makeEncoderNV12Pool(size: captureSize)
+        //    P2a — Pass-5 encodes processedTexI (outputSize); NV12 pool follows.
+        encoderPool = try texturePool.makeEncoderNV12Pool(size: resolvedOutputSize)
         guard let fnEncode = library.makeFunction(name: "rgba16fToNV12") else {
             throw MetalError.pipelineStateCompilation("rgba16fToNV12 missing")
         }
@@ -401,17 +449,19 @@ final class MetalPipeline: @unchecked Sendable {
         let processedPair: (buffer: CVPixelBuffer, texture: MTLTexture)
         do {
             naturalPair = try texturePool.dequeuePoolTexture(
-                pool: naturalPool, width: captureSize.width, height: captureSize.height)
+                pool: naturalPool, width: outputSize.width, height: outputSize.height)
             processedPair = try texturePool.dequeuePoolTexture(
-                pool: processedPool, width: captureSize.width, height: captureSize.height)
+                pool: processedPool, width: outputSize.width, height: outputSize.height)
         } catch {
             return  // pool exhausted — drop frame
         }
 
         // Tracker buffer only when someone is subscribed to .tracker (no wasteful alloc).
+        // Pool is BGRA8; dequeueEightBitPoolTexture wraps it as .bgra8Unorm — Pass-4's
+        // shader writes float4 into a bgra8Unorm output which clamps and stores BGRA8.
         let trackerPair: (buffer: CVPixelBuffer, texture: MTLTexture)?
         if consumers.hasSubscriber(.tracker) {
-            trackerPair = try? texturePool.dequeuePoolTexture(
+            trackerPair = try? texturePool.dequeueEightBitPoolTexture(
                 pool: trackerPool, width: trackerSize.width, height: trackerSize.height)
         } else {
             trackerPair = nil
@@ -478,34 +528,6 @@ final class MetalPipeline: @unchecked Sendable {
             pass4.endEncoding()
         }
 
-        // Pass 6: blit processedTexI → still readback buffer (gated on pending capture).
-        // Origins must be (0,0,0) — non-zero origins on IOSurface textures break rendering
-        // (CLAUDE.md §8 invariant). Dequeue from dedicated still pool, not processed pool.
-        var stillPairForCompletion: (buffer: CVPixelBuffer, texture: MTLTexture)?
-        if pendingCaptureContinuation != nil, let sPool = stillCapturePool {
-            if let pair = try? texturePool.dequeuePoolTexture(
-                pool: sPool, width: captureSize.width, height: captureSize.height
-            ) {
-                let pass6 = commandBuffer.makeBlitCommandEncoder()!
-                pass6.copy(
-                    from: processedTexI,
-                    sourceSlice: 0,
-                    sourceLevel: 0,
-                    sourceOrigin: MTLOrigin(x: 0, y: 0, z: 0),
-                    sourceSize: MTLSize(
-                        width: processedTexI.width, height: processedTexI.height, depth: 1
-                    ),
-                    to: pair.texture,
-                    destinationSlice: 0,
-                    destinationLevel: 0,
-                    destinationOrigin: MTLOrigin(x: 0, y: 0, z: 0)
-                )
-                pass6.endEncoding()
-                stillPairForCompletion = pair
-                stillCaptureDequeueCount += 1
-            }
-        }
-
         // Pass 5: RGBA16F → NV12 encode (Stage 10). Runs only while recording.
         // Pool exhaustion drops this frame from the recorder; preview is unaffected
         // (domain 06 Recording-Sink Back-Pressure).
@@ -531,43 +553,36 @@ final class MetalPipeline: @unchecked Sendable {
             }
         }
 
-        // Pass 7 (pre-Phase-3): RGBA16F → BGRA8 conversion for the lane-buffer
-        // mailboxes when `lanesEightBit` is on. Tracker is not converted
-        // (Plan §OQ #4). Runs unconditionally when on — not subscriber-gated
-        // in v1, so HITL measures the real cost (Plan §OQ #2). Pass-7 reads
-        // the RGBA16F lane texture and writes into a fresh BGRA8 pool buffer's
-        // .bgra8Unorm view; the buffer mailbox below points at the new buffer.
+        // Pass 7: RGBA16F → BGRA8 conversion for the natural + processed lane-buffer
+        // mailboxes (unconditional). Tracker is NOT converted here — its pool is already
+        // BGRA8; Pass-4 writes BGRA8 directly (fused). Not subscriber-gated in v1.
+        // Pass-7 reads the RGBA16F lane texture and writes into a fresh BGRA8 pool
+        // buffer's .bgra8Unorm view; the buffer mailbox below points at the new buffer.
         var naturalEightBitPair: (buffer: CVPixelBuffer, texture: MTLTexture)?
         var processedEightBitPair: (buffer: CVPixelBuffer, texture: MTLTexture)?
-        if lanesEightBit,
-            let convertPSO = rgba16fToBgra8PSO,
-            let natPool = eightBitNaturalPool,
-            let procPool = eightBitProcessedPool
-        {
-            if let pair = try? texturePool.dequeueEightBitPoolTexture(
-                pool: natPool, width: captureSize.width, height: captureSize.height
-            ) {
-                let pass7n = commandBuffer.makeComputeCommandEncoder()!
-                pass7n.setComputePipelineState(convertPSO)
-                pass7n.setTexture(naturalTexI, index: 0)
-                pass7n.setTexture(pair.texture, index: 1)
-                pass7n.dispatchThreadgroups(
-                    threadGroups, threadsPerThreadgroup: threadGroupSize)
-                pass7n.endEncoding()
-                naturalEightBitPair = pair
-            }
-            if let pair = try? texturePool.dequeueEightBitPoolTexture(
-                pool: procPool, width: captureSize.width, height: captureSize.height
-            ) {
-                let pass7p = commandBuffer.makeComputeCommandEncoder()!
-                pass7p.setComputePipelineState(convertPSO)
-                pass7p.setTexture(processedTexI, index: 0)
-                pass7p.setTexture(pair.texture, index: 1)
-                pass7p.dispatchThreadgroups(
-                    threadGroups, threadsPerThreadgroup: threadGroupSize)
-                pass7p.endEncoding()
-                processedEightBitPair = pair
-            }
+        if let pair = try? texturePool.dequeueEightBitPoolTexture(
+            pool: eightBitNaturalPool, width: outputSize.width, height: outputSize.height
+        ) {
+            let pass7n = commandBuffer.makeComputeCommandEncoder()!
+            pass7n.setComputePipelineState(rgba16fToBgra8PSO)
+            pass7n.setTexture(naturalTexI, index: 0)
+            pass7n.setTexture(pair.texture, index: 1)
+            pass7n.dispatchThreadgroups(
+                threadGroups, threadsPerThreadgroup: threadGroupSize)
+            pass7n.endEncoding()
+            naturalEightBitPair = pair
+        }
+        if let pair = try? texturePool.dequeueEightBitPoolTexture(
+            pool: eightBitProcessedPool, width: outputSize.width, height: outputSize.height
+        ) {
+            let pass7p = commandBuffer.makeComputeCommandEncoder()!
+            pass7p.setComputePipelineState(rgba16fToBgra8PSO)
+            pass7p.setTexture(processedTexI, index: 0)
+            pass7p.setTexture(pair.texture, index: 1)
+            pass7p.dispatchThreadgroups(
+                threadGroups, threadsPerThreadgroup: threadGroupSize)
+            pass7p.endEncoding()
+            processedEightBitPair = pair
         }
 
         // 9. Gate check (ADR-09, D-06). Strict policy: every .inactive gates.
@@ -584,45 +599,41 @@ final class MetalPipeline: @unchecked Sendable {
         let trackerBuf = trackerPair?.buffer
         let trackerTex = trackerPair?.texture
         let consumers = self.consumers
-        let trackerForSet: CVPixelBuffer = trackerBuf ?? naturalBuf
-        let stillBufForCompletion: CVPixelBuffer? = stillPairForCompletion?.buffer
         // Stage 10: extract NV12 buffer for delivery in completion handler.
         let encoderBufForCompletion: CVPixelBuffer? = encoderPairForCompletion?.buffer
-        // Pre-Phase-3 — capture converted buffers for mailbox store in handler.
+        // Capture the BGRA8-converted buffers + textures for the mailbox store in
+        // the completion handler. Each pair's buffer and texture share one
+        // IOSurface. Tracker buffer is already BGRA8 (pool fused in Pass-4).
         let naturalEightBitBuf: CVPixelBuffer? = naturalEightBitPair?.buffer
+        let naturalEightBitTex: MTLTexture? = naturalEightBitPair?.texture
         let processedEightBitBuf: CVPixelBuffer? = processedEightBitPair?.buffer
+        let processedEightBitTex: MTLTexture? = processedEightBitPair?.texture
+
+        // FrameSet delivers BGRA8 for all three lanes to the C++/AsyncStream
+        // consumers (CannyConsumer format-branches on _32BGRA). The `?? <16F>`
+        // fallbacks only fire if a Pass-7 dequeue was dropped on pool
+        // exhaustion (rare); the tracker falls back to the BGRA8 natural buffer.
+        let naturalForSet: CVPixelBuffer = naturalEightBitBuf ?? naturalBuf
+        let processedForSet: CVPixelBuffer = processedEightBitBuf ?? processedBuf
+        let trackerForSet: CVPixelBuffer = trackerBuf ?? naturalForSet
 
         // D-10: capture the session token at commit. Handler no-ops if the token has
-        // advanced (close() / recovery ran) — prevents use-after-free on readback
-        // buffers and pending continuations (G-20).
+        // advanced (close() / recovery ran) — prevents stale FrameSet publish and
+        // stale mailbox stores after teardown/recovery (G-20).
         let tokenAtCommit = self.engineSessionToken.load(ordering: .acquiring)
         commandBuffer.addCompletedHandler { [weak self] cb in
             guard let self else { return }
             let liveToken = self.engineSessionToken.load(ordering: .acquiring)
             if liveToken != tokenAtCommit {
-                // Session advanced — release the pending capture slot if any and bail.
-                self.pendingCaptureContinuation?.resume(
-                    throwing: StillCaptureError.metalReadbackFailed
-                )
-                self.pendingCaptureContinuation = nil
+                // Session advanced — drop this frame's delivery entirely.
                 self.didNoOpCountForTest &+= 1
                 return
             }
             // Metal-level error classification (G-02 / ADR-15).
             if cb.status == .error {
                 let code = (cb.error as NSError?)?.code ?? -1
-                if let cont = self.pendingCaptureContinuation {
-                    cont.resume(throwing: MetalError.commandBufferFailed(code: code))
-                    self.pendingCaptureContinuation = nil
-                }
                 self.onMetalError?(MetalError.commandBufferFailed(code: code))
                 return
-            }
-            // Deliver still readback buffer to StillCapture if Pass 6 ran.
-            if let buf = stillBufForCompletion {
-                let cont = self.pendingCaptureContinuation
-                self.pendingCaptureContinuation = nil
-                cont?.resume(returning: buf)
             }
             // Stage 10: deliver NV12 encoder buffer if Pass 5 ran and command buffer succeeded.
             if let encBuf = encoderBufForCompletion, cb.status == .completed {
@@ -632,8 +643,8 @@ final class MetalPipeline: @unchecked Sendable {
             let fs = FrameSet(
                 frameNumber: fn,
                 captureTime: captureTime,
-                natural: naturalBuf,
-                processed: processedBuf,
+                natural: naturalForSet,
+                processed: processedForSet,
                 tracker: trackerForSet,
                 capture: captureMeta,
                 processing: meta,
@@ -646,15 +657,17 @@ final class MetalPipeline: @unchecked Sendable {
             if trackerBuf != nil {
                 consumers.yield(fs, stream: .tracker)
             }
-            // Update preview mailboxes for MTKView draw pass.
-            // Pre-Phase-3 — buffer mailbox stores converted BGRA8 buffer when
-            // flag is on; texture mailbox always stores RGBA16F. The parallel
-            // `_latestNaturalBufferRGBA16F` mailbox always stores the
-            // RGBA16F pool buffer so `captureNaturalPicture` keeps HDR-grade
-            // precision regardless of the flag.
+            // Update lane mailboxes. Delivery is BGRA8 for every lane and every
+            // surface type: the buffer mailboxes (natural/processed via Pass-7,
+            // tracker via the fused Pass-4 pool) AND the natural/processed
+            // texture mailboxes (`_latest*Bgra8Tex`, sharing the buffer's
+            // IOSurface). The 16F texture mailboxes are kept only as internal
+            // compute intermediates for calibration/diagnostic sampling — never
+            // delivered. Still capture (`captureImage` / `captureNaturalPicture`)
+            // reads the BGRA8 buffer mailboxes directly.
             self._latestNaturalBuffer.store(naturalEightBitBuf ?? naturalBuf)
-            self._latestNaturalBufferRGBA16F.store(naturalBuf)
-            self._latestNaturalTex.store(naturalTexI)
+            self._latestNaturalTex16F.store(naturalTexI)
+            if let nTex = naturalEightBitTex { self._latestNaturalBgra8Tex.store(nTex) }
             // Publish the buffer PTS as nanoseconds so `awaitNaturalAfter` can
             // confirm naturalTex has been refreshed past a given timestamp. CAS
             // loop ensures we only advance the published PTS — out-of-order
@@ -669,7 +682,8 @@ final class MetalPipeline: @unchecked Sendable {
                 cur = actual
             }
             self._latestProcessedBuffer.store(processedEightBitBuf ?? processedBuf)
-            self._latestProcessedTex.store(processedTexI)
+            self._latestProcessedTex16F.store(processedTexI)
+            if let pTex = processedEightBitTex { self._latestProcessedBgra8Tex.store(pTex) }
             if let tBuf = trackerBuf, let tTex = trackerTex {
                 self._latestTrackerBuffer.store(tBuf)
                 self._latestTrackerTex.store(tTex)
@@ -692,36 +706,66 @@ final class MetalPipeline: @unchecked Sendable {
         lastCommandBuffer?.waitUntilScheduled()
     }
 
-    /// Returns the latest natural texture for the MTKView draw pass.
-    ///
-    /// Reads `latestNaturalTex` `Mailbox<T>` (G-13 single-writer model).
-    /// Falls back to dequeuing a blank pool buffer on the first call before any frame arrives.
-    func currentTexture() -> MTLTexture {
-        if let t = latestNaturalTex { return t }
-        if let pair = try? texturePool.dequeuePoolTexture(
-            pool: naturalPool, width: captureSize.width, height: captureSize.height
-        ) {
-            _latestNaturalBuffer.store(pair.buffer)
-            _latestNaturalTex.store(pair.texture)
-            return pair.texture
-        }
-        fatalError("MetalPipeline.currentTexture: no preview texture available")
-    }
-
     /// Returns the latest processed texture for the right-half MTKView.
     ///
-    /// Reads `latestProcessedTex` `Mailbox<T>` (G-13 single-writer model).
-    /// Falls back to dequeuing a blank pool buffer on the first call before any frame arrives.
+    /// Reads the internal `latestProcessedTex16F` `Mailbox<T>` (G-13
+    /// single-writer model) — the RGBA16F Pass-2 graded output, sampled by
+    /// `dispatchCenterPatch` / `sampleCenterPatch` (NOT the BGRA8 preview
+    /// surface). Falls back to dequeuing a blank pool buffer on the first call
+    /// before any frame arrives.
     func currentProcessedTex() -> MTLTexture {
-        if let t = latestProcessedTex { return t }
+        if let t = latestProcessedTex16F { return t }
         if let pair = try? texturePool.dequeuePoolTexture(
-            pool: processedPool, width: captureSize.width, height: captureSize.height
+            pool: processedPool, width: outputSize.width, height: outputSize.height
         ) {
-            _latestProcessedBuffer.store(pair.buffer)
-            _latestProcessedTex.store(pair.texture)
+            // Pre-first-frame fallback: retain the RGBA16F scratch buffer in a
+            // dedicated slot (NOT `_latestProcessedBuffer`, which is the BGRA8
+            // delivery surface) so the returned blank texture stays valid for
+            // the caller's GPU dispatch.
+            _processedFallbackScratch.store(pair.buffer)
+            _latestProcessedTex16F.store(pair.texture)
             return pair.texture
         }
         fatalError("MetalPipeline.currentProcessedTex: no preview texture available")
+    }
+
+    /// Pre-seed the natural + processed preview mailboxes with blank pool
+    /// buffers so both lanes are non-nil immediately after `open()`.
+    ///
+    /// Without this, `CameraEngine.currentTexture()` / `currentPixelBuffer(stream:)`
+    /// are nil on the first `open()` until a frame is encoded, so the Flutter
+    /// texture bridge registers id 0 and the natural lane stays black until a
+    /// close→open cycle (measurements 2026-05-20 §1, P2b). Mirrors the mailboxes
+    /// `encode()` writes: the RGBA16F texture (calibration sampling), the BGRA8
+    /// texture (bridge accessors), and the BGRA8 buffer (FlutterTexture). Sizes to
+    /// `outputSize` so a seeded crop matches its frames. Idempotent and
+    /// best-effort — a no-op once a frame has populated the mailboxes, and a pool
+    /// miss simply leaves the mailbox nil (today's behavior). Fresh pool buffers
+    /// are zero-filled, so the seeded frame is black, never uninitialized garbage.
+    func seedPreviewMailboxes() {
+        guard latestNaturalTex16F == nil else { return }
+        if let nat = try? texturePool.dequeuePoolTexture(
+            pool: naturalPool, width: outputSize.width, height: outputSize.height)
+        {
+            _latestNaturalTex16F.store(nat.texture)
+        }
+        if let nat8 = try? texturePool.dequeueEightBitPoolTexture(
+            pool: eightBitNaturalPool, width: outputSize.width, height: outputSize.height)
+        {
+            _latestNaturalBgra8Tex.store(nat8.texture)
+            _latestNaturalBuffer.store(nat8.buffer)
+        }
+        if let proc = try? texturePool.dequeuePoolTexture(
+            pool: processedPool, width: outputSize.width, height: outputSize.height)
+        {
+            _latestProcessedTex16F.store(proc.texture)
+        }
+        if let proc8 = try? texturePool.dequeueEightBitPoolTexture(
+            pool: eightBitProcessedPool, width: outputSize.width, height: outputSize.height)
+        {
+            _latestProcessedBgra8Tex.store(proc8.texture)
+            _latestProcessedBuffer.store(proc8.buffer)
+        }
     }
 
     /// Returns the center-patch sample size in pixels, scaled with capture
@@ -745,7 +789,10 @@ final class MetalPipeline: @unchecked Sendable {
 
     /// Encodes the center-patch sampler over a caller-supplied texture and returns one RgbSample.
     private func dispatchCenterPatch(on tex: MTLTexture) async throws -> RgbSample {
-        let patchSize = Self.scaledCenterPatchSize(captureSize: captureSize)
+        // P2a — patch scales to the OUTPUT (crop-region) size, since the natural/
+        // processed textures sampled here are now `outputSize`. The static
+        // method's `captureSize:` label is kept to avoid cross-file churn.
+        let patchSize = Self.scaledCenterPatchSize(captureSize: outputSize)
         let texW = tex.width
         let texH = tex.height
         guard texW >= patchSize, texH >= patchSize else {
@@ -828,7 +875,7 @@ final class MetalPipeline: @unchecked Sendable {
         // calibration sample of a blank texture is silently (0,0,0) — worse than
         // a thrown error. Single-writer invariant (delivery queue) + Metal's
         // command-buffer retention through encode make this read race-free.
-        guard let naturalTex = latestNaturalTex else {
+        guard let naturalTex = latestNaturalTex16F else {
             throw MetalError.noFrameAvailable
         }
         return try await dispatchCenterPatch(on: naturalTex)
@@ -852,15 +899,16 @@ final class MetalPipeline: @unchecked Sendable {
     func dispatchBBCalibrationSample() async throws -> RgbSample {
         // Single-writer invariant (delivery queue) + Metal command-buffer
         // retention through encode make this nonisolated(unsafe) read race-free.
-        guard let naturalTex = latestNaturalTex else {
+        guard let naturalTex = latestNaturalTex16F else {
             throw MetalError.noFrameAvailable
         }
 
         // Allocate scratch texture (released at function exit).
+        // P2a — match the natural texture being graded, i.e. `outputSize`.
         let desc = MTLTextureDescriptor.texture2DDescriptor(
             pixelFormat: .rgba16Float,
-            width: captureSize.width,
-            height: captureSize.height,
+            width: outputSize.width,
+            height: outputSize.height,
             mipmapped: false
         )
         desc.usage = [.shaderWrite, .shaderRead]
@@ -926,59 +974,50 @@ final class MetalPipeline: @unchecked Sendable {
         return sum / Float(hi - lo)
     }
 
-    // MARK: - Still capture (Stage 07)
-
-    /// Arms the next-frame Pass 6 blit.
-    ///
-    /// Called by StillCapture after winning the CAS. Must be called before the next
-    /// `encode()` invocation. The continuation will be resumed exactly once — either
-    /// with the readback buffer on success, or with an error on GPU failure.
-    func armCapture(continuation: CheckedContinuation<CVPixelBuffer, Error>) {
-        pendingCaptureContinuation = continuation
-    }
-
     // MARK: - Internal test seams
 
     /// Convenience init that creates its own gate and an empty ConsumerRegistry.
     ///
     /// Used by Stage02Tests to build a standalone pipeline without needing to
-    /// import Atomics. `lanesEightBit` defaults to `false` so existing
-    /// pool-count assertions stay valid.
+    /// import Atomics.
     convenience init(
         device: MTLDevice,
         captureSize: Size,
-        gateOpen: Bool = true,
-        lanesEightBit: Bool = false
+        outputSize: Size? = nil,
+        cropOrigin: (x: Int, y: Int) = (0, 0),
+        gateOpen: Bool = true
     ) throws {
         try self.init(
             device: device,
             captureSize: captureSize,
+            outputSize: outputSize,
+            cropOrigin: cropOrigin,
             gate: ManagedAtomic<Bool>(gateOpen),
             consumers: ConsumerRegistry(),
-            engineSessionToken: ManagedAtomic<UInt64>(0),
-            lanesEightBit: lanesEightBit
+            engineSessionToken: ManagedAtomic<UInt64>(0)
         )
     }
 
     /// Convenience init that accepts an explicit ConsumerRegistry but hides ManagedAtomic.
     ///
     /// Used by Stage06Tests so tests can inject a specific registry without
-    /// importing Atomics. `lanesEightBit` defaults to `false` so existing
-    /// pool-count assertions stay valid.
+    /// importing Atomics.
     convenience init(
         device: MTLDevice,
         captureSize: Size,
+        outputSize: Size? = nil,
+        cropOrigin: (x: Int, y: Int) = (0, 0),
         gateOpen: Bool = true,
-        consumers: ConsumerRegistry,
-        lanesEightBit: Bool = false
+        consumers: ConsumerRegistry
     ) throws {
         try self.init(
             device: device,
             captureSize: captureSize,
+            outputSize: outputSize,
+            cropOrigin: cropOrigin,
             gate: ManagedAtomic<Bool>(gateOpen),
             consumers: consumers,
-            engineSessionToken: ManagedAtomic<UInt64>(0),
-            lanesEightBit: lanesEightBit
+            engineSessionToken: ManagedAtomic<UInt64>(0)
         )
     }
 
@@ -1001,24 +1040,21 @@ final class MetalPipeline: @unchecked Sendable {
     var processedPoolForTest: CVPixelBufferPool { processedPool }
     var trackerPoolForTest: CVPixelBufferPool { trackerPool }
     var trackerSizeForTest: Size { trackerSize }
-    var stillCapturePoolForTest: CVPixelBufferPool? { stillCapturePool }
-    var stillCaptureDequeueCountForTest: Int { stillCaptureDequeueCount }
 
-    // Pre-Phase-3 — RGBA8 conversion test seams.
-    var eightBitNaturalPoolForTest: CVPixelBufferPool? { eightBitNaturalPool }
-    var eightBitProcessedPoolForTest: CVPixelBufferPool? { eightBitProcessedPool }
-    /// Always nil; tracker lane is not converted (Plan OQ #4).
-    var eightBitTrackerPoolForTest: CVPixelBufferPool? { nil }
-    var lanesEightBitForTest: Bool { lanesEightBit }
+    // RGBA8 conversion test seams.
+    var eightBitNaturalPoolForTest: CVPixelBufferPool { eightBitNaturalPool }
+    var eightBitProcessedPoolForTest: CVPixelBufferPool { eightBitProcessedPool }
+    // Note: there is no separate eightBitTrackerPool — the tracker pool itself is
+    // BGRA8 (fused into Pass-4). Use `trackerPoolForTest` to inspect tracker format.
 
     func setLatestNaturalForTest(buffer: CVPixelBuffer, texture: MTLTexture) {
         _latestNaturalBuffer.store(buffer)
-        _latestNaturalTex.store(texture)
+        _latestNaturalTex16F.store(texture)
     }
 
     func setLatestProcessedForTest(buffer: CVPixelBuffer, texture: MTLTexture) {
         _latestProcessedBuffer.store(buffer)
-        _latestProcessedTex.store(texture)
+        _latestProcessedTex16F.store(texture)
     }
 
     /// Writes color uniforms directly into the pipeline's uniforms Mutex.
@@ -1034,10 +1070,12 @@ final class MetalPipeline: @unchecked Sendable {
     }
 
     // Test-only: dispatches Pass 2 (color transform) over the latest natural texture,
-    // awaits scheduled, and returns. Use after writing test-pattern bytes via lock/unlock.
+    // awaits scheduled, and returns. Use after installing natural + processed
+    // textures via `setLatestNaturalForTest` / `setLatestProcessedForTest`.
     func encodePass2Only() async throws {
-        let natTex = currentTexture()
-        let procTex = currentProcessedTex()
+        guard let natTex = latestNaturalTex16F, let procTex = latestProcessedTex16F else {
+            throw MetalError.noFrameAvailable
+        }
         guard let commandBuffer = commandQueue.makeCommandBuffer() else {
             throw MetalError.commandBufferFailed(code: -1)
         }

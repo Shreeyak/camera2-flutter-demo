@@ -1,161 +1,54 @@
-import Accelerate
-import CameraKitInterop
+import CoreGraphics
 import CoreVideo
 import Foundation
 import ImageIO
-import Metal
 import UniformTypeIdentifiers
 
 /// Orchestrates one-shot still image capture per architecture §D-05 and §D-09.
 ///
-/// At-most-one in-flight capture enforced by a `CppCaptureAtomic` guard (ADR-13 / Invariant 7).
+/// Both still paths read the latest delivered BGRA8 lane buffer directly from
+/// `MetalPipeline` (`captureImage` → processed lane, `captureNaturalPicture` →
+/// natural lane) and encode it to disk — no GPU readback pass, no vImage
+/// conversion. The input is already 8-bit BGRA (the single delivery format), so
+/// `encode` just locks the IOSurface and builds the CGImage with BGRA byte
+/// order.
 final class StillCapture: @unchecked Sendable {
-    // C++ std::atomic<bool> per ADR-13 / Invariant 7 (CaptureAtomic.hpp, Stage 08).
-    private let captureInFlight: CppCaptureAtomic = CppCaptureAtomic()
 
     init() {}
 
-    /// Captures the next GPU-processed frame as an 8-bit TIFF.
-    ///
-    /// Caller (CameraEngine) is responsible for dispatching the resulting file
-    /// through `PhotosLibraryClient.publish` per the requested
-    /// `PhotosDestination`; this method only writes the file to disk.
-    ///
-    /// - Parameters:
-    ///   - pipeline: The live MetalPipeline to arm for Pass 6.
-    ///   - captureSize: Width × height of the processed frame (to allocate vImage buffers).
-    ///   - deviceSnapshot: Current DeviceStateSnapshot for EXIF metadata (ISO, exposure, WB, focus).
-    ///   - focalLengthMm: Focal length in mm from the active AVCaptureDevice format.
-    ///   - apertureValue: APEX aperture value from the active format.
-    ///   - outputURL: Resolved per `PhotosLibraryClient.resolve` (default ext `tif`).
-    func captureImage(
-        pipeline: MetalPipeline,
-        captureSize: Size,
-        deviceSnapshot: DeviceStateSnapshot?,
-        focalLengthMm: Double,
-        apertureValue: Double,
-        outputURL: URL?
-    ) async throws -> StillCaptureOutput {
-        CameraKitLog.notice(.engine, "[still] capture start size=\(captureSize.width)x\(captureSize.height)")
-        // 1. CAS guard — wins exclusivity before arming pipeline (prevents race on continuation).
-        guard captureInFlight.tryAcquire() else {
-            CameraKitLog.warning(.engine, "[still] already in-flight, rejecting")
-            throw StillCaptureError.alreadyInFlight
-        }
-        defer { captureInFlight.release() }
-
-        // 2. Resolve the on-disk write URL up-front; throws on sandbox escape.
-        let writeURL = try PhotosLibraryClient.resolve(outputURL: outputURL, defaultExt: "tif")
-
-        // 3. Arm pipeline continuation — the next encode() will perform Pass 6.
-        let readbackBuffer: CVPixelBuffer = try await withCheckedThrowingContinuation { continuation in
-            pipeline.armCapture(continuation: continuation)
-        }
-
-        // 4. Hand off to the shared encode path — vImage convert, build CGImage,
-        //    EXIF, write to disk. Marked `"lane": "processed"` so consumers can
-        //    distinguish from `captureNaturalPicture` output.
-        let output = try await encode(
-            buffer: readbackBuffer,
-            captureSize: captureSize,
-            deviceSnapshot: deviceSnapshot,
-            focalLengthMm: focalLengthMm,
-            apertureValue: apertureValue,
-            outputURL: writeURL,
-            format: .tiff,
-            laneTag: "processed"
-        )
-
-        CameraKitLog.notice(.engine, "[still] capture complete path=\(output.filePath)")
-        return output
-    }
-
     // MARK: - Private helpers
 
-    private func convertRGBA16FtoRGBA8(
-        buffer: CVPixelBuffer,
-        width: Int,
-        height: Int
-    ) throws -> [UInt8] {
+    /// Builds a `CGImage` from a BGRA8 (`kCVPixelFormatType_32BGRA`) buffer.
+    ///
+    /// The data provider copies the locked bytes (it must outlive the buffer
+    /// lock) and preserves the source `bytesPerRow` — IOSurface-backed pools
+    /// commonly pad rows past `width * 4`.
+    private func makeCGImage(buffer: CVPixelBuffer) throws -> CGImage {
         CVPixelBufferLockBaseAddress(buffer, .readOnly)
         defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
 
-        guard let baseAddr = CVPixelBufferGetBaseAddress(buffer) else {
+        guard let base = CVPixelBufferGetBaseAddress(buffer) else {
             throw StillCaptureError.metalReadbackFailed
         }
-        let srcRowBytes = CVPixelBufferGetBytesPerRow(buffer)
-
-        // Source format: RGBA 16-bit half-float, little-endian (MTKView / Metal default).
-        var srcFormat = vImage_CGImageFormat(
-            bitsPerComponent: 16,
-            bitsPerPixel: 64,
-            colorSpace: nil,
-            bitmapInfo: CGBitmapInfo(
-                rawValue:
-                    CGBitmapInfo.byteOrder16Little.rawValue | CGBitmapInfo.floatComponents.rawValue
-                    | CGImageAlphaInfo.last.rawValue),
-            version: 0,
-            decode: nil,
-            renderingIntent: .defaultIntent
-        )
-
-        // Destination format: RGBA 8-bit, no alpha.
-        var dstFormat = vImage_CGImageFormat(
-            bitsPerComponent: 8,
-            bitsPerPixel: 32,
-            colorSpace: nil,
-            bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.noneSkipLast.rawValue),
-            version: 0,
-            decode: nil,
-            renderingIntent: .defaultIntent
-        )
-
-        var convErr: vImage_Error = kvImageNoError
-        guard
-            let converterUnmanaged = vImageConverter_CreateWithCGImageFormat(
-                &srcFormat, &dstFormat, nil, vImage_Flags(kvImageNoFlags), &convErr
-            )
-        else {
+        let width = CVPixelBufferGetWidth(buffer)
+        let height = CVPixelBufferGetHeight(buffer)
+        let bytesPerRow = CVPixelBufferGetBytesPerRow(buffer)
+        let data = Data(bytes: base, count: bytesPerRow * height)
+        guard let provider = CGDataProvider(data: data as CFData) else {
             throw StillCaptureError.metalReadbackFailed
         }
-        let converter = converterUnmanaged.takeRetainedValue()
-
-        var srcBuf = vImage_Buffer(
-            data: baseAddr,
-            height: vImagePixelCount(height),
-            width: vImagePixelCount(width),
-            rowBytes: srcRowBytes
-        )
-
-        let dstRowBytes = width * 4
-        var rgbaBytes = [UInt8](repeating: 0, count: width * height * 4)
-        let err = rgbaBytes.withUnsafeMutableBytes { ptr -> vImage_Error in
-            var dstBuf = vImage_Buffer(
-                data: ptr.baseAddress!,
-                height: vImagePixelCount(height),
-                width: vImagePixelCount(width),
-                rowBytes: dstRowBytes
-            )
-            return vImageConvert_AnyToAny(converter, &srcBuf, &dstBuf, nil, vImage_Flags(kvImageNoFlags))
-        }
-        guard err == kvImageNoError else {
-            throw StillCaptureError.metalReadbackFailed
-        }
-        return rgbaBytes
-    }
-
-    private func makeCGImage(rgbaBytes: [UInt8], width: Int, height: Int) throws -> CGImage {
-        let bitsPerComponent = 8
-        let bytesPerRow = width * 4
-        guard let provider = CGDataProvider(data: Data(rgbaBytes) as CFData) else {
-            throw StillCaptureError.metalReadbackFailed
-        }
-        let bitmapInfo = CGBitmapInfo(rawValue: CGImageAlphaInfo.noneSkipLast.rawValue)
+        // `kCVPixelFormatType_32BGRA` stores bytes `[B, G, R, A]`. Read as a
+        // little-endian 32-bit word that is `A<<24 | R<<16 | G<<8 | B`
+        // (ARGB-in-register); `noneSkipFirst` drops the leading alpha, leaving
+        // RGB. (Was `noneSkipLast` when the input was RGBA8 from vImage.)
+        let bitmapInfo = CGBitmapInfo(
+            rawValue: CGBitmapInfo.byteOrder32Little.rawValue
+                | CGImageAlphaInfo.noneSkipFirst.rawValue)
         guard
             let image = CGImage(
                 width: width,
                 height: height,
-                bitsPerComponent: bitsPerComponent,
+                bitsPerComponent: 8,
                 bitsPerPixel: 32,
                 bytesPerRow: bytesPerRow,
                 space: CGColorSpaceCreateDeviceRGB(),
@@ -247,12 +140,12 @@ final class StillCapture: @unchecked Sendable {
 
     // MARK: - Shared encode path
 
-    /// Encodes a CPU-readable RGBA16F `CVPixelBuffer` to disk in the requested format.
+    /// Encodes a CPU-readable BGRA8 `CVPixelBuffer` to disk in the requested format.
     ///
-    /// Used by `captureImage` (after a Pass-6 GPU readback) and by
-    /// `CameraEngine.captureNaturalPicture` (latest Pass-1 buffer from the natural-lane
-    /// `Mailbox<CVPixelBuffer>`). Also the seam used by unit tests that skip the
-    /// pipeline-arm continuation.
+    /// Used by `CameraEngine.captureImage` (latest processed-lane buffer,
+    /// `.tiff`) and `CameraEngine.captureNaturalPicture` (latest natural-lane
+    /// buffer, `.jpeg`). Both source the same BGRA8 IOSurface delivered to the
+    /// preview/bridge — no separate readback or precision-preserving copy.
     ///
     /// - Parameter format: `.tiff` for processed-lane stills, `.jpeg` for natural-lane.
     /// - Parameter laneTag: `"processed"` / `"natural"` / `nil`. When non-nil, written
@@ -268,10 +161,7 @@ final class StillCapture: @unchecked Sendable {
         format: UTType,
         laneTag: String?
     ) async throws -> StillCaptureOutput {
-        let rgbaBytes = try convertRGBA16FtoRGBA8(
-            buffer: buffer, width: captureSize.width, height: captureSize.height)
-        let cgImage = try makeCGImage(
-            rgbaBytes: rgbaBytes, width: captureSize.width, height: captureSize.height)
+        let cgImage = try makeCGImage(buffer: buffer)
         let timestamp = ISO8601DateFormatter().string(from: Date())
         let camPluginJson = buildCamPluginV1Json(deviceSnapshot: deviceSnapshot, laneTag: laneTag)
         let metadata = buildImageProperties(
