@@ -28,6 +28,13 @@ enum CameraState {
   /// The library automatically reopens when the app returns to the foreground.
   suspended,
 
+  /// iOS-only. The `AVCaptureSession` was interrupted by a routine system event
+  /// (Control Center claim, Split View / Stage Manager peer, an incoming call).
+  /// This is **not** an error: the engine auto-resumes (back to [streaming])
+  /// when the system clears the interruption. Android has no equivalent route
+  /// and never emits this.
+  interrupted,
+
   /// A fatal error occurred. The app must call [CambrianCamera.close] and
   /// optionally reopen the camera.
   error;
@@ -39,6 +46,7 @@ enum CameraState {
         'recovering' => recovering,
         'paused' => paused,
         'suspended' => suspended,
+        'interrupted' => interrupted,
         'error' => error,
         _ => error,
       };
