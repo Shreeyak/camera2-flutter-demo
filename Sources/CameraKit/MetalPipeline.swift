@@ -227,6 +227,15 @@ final class MetalPipeline: @unchecked Sendable {
     // Test-only: count of completion-handler invocations that no-op due to token mismatch.
     nonisolated(unsafe) var didNoOpCountForTest: UInt64 = 0
 
+    // Resume-latency diagnostic (one-shot). Armed by the engine actor in
+    // `reconcile(.active)` the instant the gate reopens; the first frame to pass
+    // the gate logs its commit (t1b) and the moment its texture is stored (t1c),
+    // then clears the flag. Mirrors `CaptureDelegate.framesToLog` (t1): together
+    // they split AVF delivery-resume from GPU/commit cost on a Control Center
+    // resume. nonisolated(unsafe): set on the actor, read/cleared on the delivery
+    // queue — a benign one-shot race, same pattern as `framesToLog`.
+    nonisolated(unsafe) var logNextCommit: Bool = false
+
     // Hook for Metal-level errors; set by engine after init.
     var onMetalError: (@Sendable (MetalError) -> Void)?
 
@@ -588,6 +597,12 @@ final class MetalPipeline: @unchecked Sendable {
         // 9. Gate check (ADR-09, D-06). Strict policy: every .inactive gates.
         guard submissionGate.load(ordering: .acquiring) else { return }
 
+        // Resume probe (one-shot): if the gate was just reopened this is the first
+        // frame through. Snapshot + clear so t1b (commit) and t1c (texture stored)
+        // each fire exactly once. Captured into the completion handler below.
+        let logFirstAfterGate = logNextCommit
+        if logFirstAfterGate { logNextCommit = false }
+
         // Capture all frame-local values before the completion handler. CMSampleBuffer
         // is not Sendable; capture derived values (CMTime, metadata snapshot) instead.
         let captureTime = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
@@ -668,6 +683,10 @@ final class MetalPipeline: @unchecked Sendable {
             self._latestNaturalBuffer.store(naturalEightBitBuf ?? naturalBuf)
             self._latestNaturalTex16F.store(naturalTexI)
             if let nTex = naturalEightBitTex { self._latestNaturalBgra8Tex.store(nTex) }
+            if logFirstAfterGate {
+                CameraKitLog.notice(
+                    .metal, "[resume] first texture stored (t1c) — preview texture live")
+            }
             // Publish the buffer PTS as nanoseconds so `awaitNaturalAfter` can
             // confirm naturalTex has been refreshed past a given timestamp. CAS
             // loop ensures we only advance the published PTS — out-of-order
@@ -696,6 +715,9 @@ final class MetalPipeline: @unchecked Sendable {
         commitCount += 1
         frameNumber &+= 1
         commandBuffer.commit()
+        if logFirstAfterGate {
+            CameraKitLog.notice(.metal, "[resume] first commit after gate (t1b)")
+        }
     }
 
     /// Blocks until the most recently committed command buffer has been scheduled.

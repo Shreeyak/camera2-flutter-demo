@@ -84,7 +84,7 @@ struct Stage08Tests {
     /// Full non-nil path requires camera permission and a real device (deferred HITL).
     @Test("08:get-native-pipeline-handle-holds-actor")
     func getNativePipelineHandleHoldsActor() async throws {
-        let engine = CameraEngine()
+        let engine = CameraEngine(initialPhase: .active)
         let handle = await engine.getNativePipelineHandle()
         #expect(handle == nil)
     }

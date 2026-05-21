@@ -265,7 +265,7 @@ struct Stage03Tests {
 
     /// Out-of-range ISO/shutter throws settingsConflict with no partial mutation.
     @Test func settingsConflictThrows() async throws {
-        let engine = CameraEngine()
+        let engine = CameraEngine(initialPhase: .active)
         var s = CameraSettings()
         s.isoMode = .manual
         s.iso = 10  // below any realistic minISO

@@ -19,7 +19,7 @@ struct Stage02Tests {
     /// Uses a real MetalPipeline + synthetic IOSurface-backed CVPixelBuffer so that
     /// pipeline.commitCount directly measures whether commit() was called.
     @Test func gateClosesOnInactive() async throws {
-        let engine = CameraEngine()
+        let engine = CameraEngine(initialPhase: .active)
 
         // Engine-level: gate starts open.
         #expect(await engine.isGateOpen == true)
@@ -56,7 +56,7 @@ struct Stage02Tests {
     /// - With gate closed before drain, no further commits occur.
     @Test func waitUntilScheduledOnInactive() async throws {
         // Nil-pipeline path: drainSubmittedFrame() must not hang when no pipeline is open.
-        let engine = CameraEngine()
+        let engine = CameraEngine(initialPhase: .active)
         await engine.setGate(false)
         await engine.drainSubmittedFrame()
         #expect(await engine.isGateOpen == false)
@@ -103,23 +103,6 @@ struct Stage02Tests {
                 "runOnQueue must return via timeout (~150ms), not wait for work to complete")
     }
 
-    // MARK: Test 4 — 02:background-resume-is-noop-until-interruption-ended
-
-    /// Verifies backgroundResume() is idempotent: opens the gate, no session restart,
-    /// no thrown error.
-    @Test func backgroundResumeIsNoopUntilInterruptionEnded() async {
-        let engine = CameraEngine()
-
-        await engine.setGate(false)
-        #expect(await engine.isGateOpen == false)
-
-        await engine.backgroundResume()
-        #expect(await engine.isGateOpen == true)
-
-        // Idempotent: second call does not break anything.
-        await engine.backgroundResume()
-        #expect(await engine.isGateOpen == true)
-    }
 }
 
 // MARK: - Helpers
