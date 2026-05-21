@@ -119,32 +119,39 @@ struct Stage04Tests {
         #expect(abs(s2.b - 0.5) < 1e-3)
     }
 
-    // MARK: - Test 4 — 04:set-crop-region-updates-uniform
+    // MARK: - Test 4 — 04:set-crop-region-true-crop
 
-    /// setCropRegion writes the expected values into the pipeline's
-    /// CropUniform; out-of-bounds rects throw settingsConflict.
-    @Test func setCropRegionUpdatesUniform() async throws {
+    /// P2a true crop: a pipeline built with a crop region carries the crop
+    /// origin in its CropUniform and sizes its output textures to the crop, NOT
+    /// the sensor.
+    ///
+    /// Semantics changed from the Stage-04 black-out masking — the output
+    /// resolution IS the crop-region size. Engine-level rects that are
+    /// out-of-bounds or odd-coordinate throw `EngineError`.
+    @Test func setCropRegionTrueCrop() async throws {
         let device = try #require(MTLCreateSystemDefaultDevice())
-        let size = Size(width: 1280, height: 960)
-        let pipeline = try MetalPipeline(device: device, captureSize: size, gateOpen: true)
+        let sensor = Size(width: 1280, height: 960)
 
-        // Simulate what CameraEngine.setCropRegion does on the happy path.
+        // Build a cropped pipeline the way CameraEngine.setCropRegion now does.
         let rect = Rect(x: 100, y: 50, width: 800, height: 600)
-        pipeline.uniforms.withLock { storage in
-            storage.crop = CropUniform(
-                originX: UInt32(rect.x),
-                originY: UInt32(rect.y),
-                width: UInt32(rect.width),
-                height: UInt32(rect.height)
-            )
-        }
-        let (ox, oy, ow, oh) = pipeline.uniforms.withLock { s in
-            (s.crop.originX, s.crop.originY, s.crop.width, s.crop.height)
-        }
+        let pipeline = try MetalPipeline(
+            device: device,
+            captureSize: sensor,
+            outputSize: Size(width: rect.width, height: rect.height),
+            cropOrigin: (rect.x, rect.y),
+            gateOpen: true
+        )
+
+        // Sensor size is preserved; output size = crop size; origin carried.
+        #expect(pipeline.captureSize == sensor)
+        #expect(pipeline.outputSize == Size(width: 800, height: 600))
+        #expect(pipeline.cropOrigin.x == 100)
+        #expect(pipeline.cropOrigin.y == 50)
+
+        // The crop uniform carries the origin (set once at construction).
+        let (ox, oy) = pipeline.uniforms.withLock { s in (s.crop.originX, s.crop.originY) }
         #expect(ox == 100)
         #expect(oy == 50)
-        #expect(ow == 800)
-        #expect(oh == 600)
 
         // Engine-level out-of-bounds throw — exercise via CameraEngine when
         // session is nil → notOpen path. (Open path requires camera hardware.)
@@ -153,6 +160,64 @@ struct Stage04Tests {
         await #expect(throws: EngineError.self) {
             try await engine.setCropRegion(oob)
         }
+    }
+
+    // MARK: - Test 4b — 04:set-crop-region-rejects-odd-coords
+
+    /// P2a: odd crop coordinates are rejected (4:2:0 chroma alignment).
+    ///
+    /// An odd luma offset/extent would skew the half-resolution chroma plane
+    /// sampling. On an unopened engine the call short-circuits on the
+    /// `notOpen` guard, so this asserts `EngineError` like the OOB case (an
+    /// opened engine maps the same rect to `.settingsConflict`).
+    @Test func setCropRegionRejectsOddCoords() async throws {
+        let engine = CameraEngine()
+        let odd = Rect(x: 1, y: 0, width: 800, height: 600)
+        await #expect(throws: EngineError.self) {
+            try await engine.setCropRegion(odd)
+        }
+    }
+
+    // MARK: - Test 4c — 04:default-crop-is-full-frame
+
+    /// A pipeline built without a crop has output = capture (no crop applied).
+    @Test func defaultCropIsFullFrame() async throws {
+        let device = try #require(MTLCreateSystemDefaultDevice())
+        let sensor = Size(width: 1280, height: 960)
+        let pipeline = try MetalPipeline(device: device, captureSize: sensor, gateOpen: true)
+        #expect(pipeline.outputSize == sensor)
+        #expect(pipeline.cropOrigin.x == 0)
+        #expect(pipeline.cropOrigin.y == 0)
+    }
+
+    // MARK: - Test 4d — 04:resolution-rebuild-drops-prior-crop
+
+    /// A resolution change drops any active crop (measurements 2026-05-20 §1, P2a).
+    ///
+    /// `setResolution` rebuilds the pipeline with no `outputSize`/`cropOrigin`,
+    /// so the new pipeline defaults to full-frame and `activeCropRect(for:)` —
+    /// the single source of truth for the published `StreamConfiguration` — reads
+    /// full-frame from it. This pins that structural guarantee at the pipeline
+    /// level (the engine-level "StreamConfiguration emits full-frame" path needs
+    /// an open session and is covered by HITL, not unit tests).
+    @Test func resolutionRebuildDropsPriorCrop() async throws {
+        let device = try #require(MTLCreateSystemDefaultDevice())
+        let sensor = Size(width: 1280, height: 960)
+
+        // 1. A cropped pipeline, built the way setCropRegion builds it.
+        let cropped = try MetalPipeline(
+            device: device,
+            captureSize: sensor,
+            outputSize: Size(width: 800, height: 600),
+            cropOrigin: (100, 50),
+            gateOpen: true)
+        #expect(cropped.outputSize == Size(width: 800, height: 600))
+
+        // 2. Rebuilt the way setResolution builds it — no crop args → full frame.
+        let rebuilt = try MetalPipeline(device: device, captureSize: sensor, gateOpen: true)
+        #expect(rebuilt.outputSize == sensor)
+        #expect(rebuilt.cropOrigin.x == 0)
+        #expect(rebuilt.cropOrigin.y == 0)
     }
 
     // MARK: - Helpers

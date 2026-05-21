@@ -413,7 +413,7 @@ final class CameraSession: @unchecked Sendable {
     /// already run `merging(onto:)`, `SettingsCoupling.apply(rules:latched:)`,
     /// and range validation — this function only commits.
     ///
-    /// ISO + exposure are coupled by `setExposureModeCustom(durationNs:iso:)`'s
+    /// ISO + exposure are coupled by `setIsoExposureManual(durationNs:iso:)`'s
     /// API shape (07-settings.md §Commit shape). Focus, white balance, zoom,
     /// and EV bias commit independently inside the same lock window.
     func applySettings(
@@ -427,7 +427,7 @@ final class CameraSession: @unchecked Sendable {
                 let durationNs = settings.exposureTimeNs,
                 let iso = settings.iso
             {
-                try await device.setExposureModeCustom(
+                try await device.setIsoExposureManual(
                     durationNs: durationNs,
                     iso: Float(iso))
             } else if settings.exposureMode == .auto {

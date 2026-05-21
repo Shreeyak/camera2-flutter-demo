@@ -68,4 +68,32 @@ enum SettingsCoupling {
         }
         return out
     }
+
+    /// Rule 4 — single-field manual promotion (iOS ISO/exposure coupling).
+    ///
+    /// iOS pins ISO and exposure together in one `setIsoExposureManual(durationNs:iso:)`
+    /// call, so a request that sets exactly one side to `.manual` must pin both.
+    /// Promote the unspecified side to `.manual` and clear its value (unless the
+    /// request supplied it) so `apply`'s Rule 3 latches the current device
+    /// reading — a smooth transition, instead of `merging`'s carried-over `.auto`
+    /// coupling the request straight back to auto (measurements 2026-05-20 §1,
+    /// case #4). A side already `.manual` in `merged` keeps its pinned value.
+    ///
+    /// Pure: takes the raw `request` (to read intent) and the post-`merging`
+    /// `merged`; returns the adjusted settings to feed `apply`.
+    static func promoteSingleFieldManual(
+        request: CameraSettings,
+        merged: CameraSettings
+    ) -> CameraSettings {
+        var out = merged
+        if request.isoMode == .manual, request.exposureMode == nil, merged.exposureMode != .manual {
+            out.exposureMode = .manual
+            out.exposureTimeNs = request.exposureTimeNs  // nil → Rule 3 latches device value
+        }
+        if request.exposureMode == .manual, request.isoMode == nil, merged.isoMode != .manual {
+            out.isoMode = .manual
+            out.iso = request.iso  // nil → Rule 3 latches device value
+        }
+        return out
+    }
 }

@@ -31,7 +31,7 @@ actor FakeCaptureDevice: CaptureDeviceProviding {
     func lockForConfiguration() throws {}
     func unlockForConfiguration() {}
 
-    func setExposureModeCustom(durationNs: Int64, iso: Float) throws {}
+    func setIsoExposureManual(durationNs: Int64, iso: Float) throws {}
     func setContinuousAutoExposure() throws {}
 
     func setFocusModeLocked(lensPosition: Float) throws {}

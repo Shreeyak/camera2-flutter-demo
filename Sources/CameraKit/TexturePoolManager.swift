@@ -164,13 +164,12 @@ final class TexturePoolManager: @unchecked Sendable {
     }
 
     /// Creates a `CVPixelBufferPool` that vends IOSurface-backed, Metal-compatible
-    /// **BGRA8** `CVPixelBuffer`s for the pre-Phase-3 RGBA8 conversion path.
+    /// **BGRA8** `CVPixelBuffer`s for the RGBA8 lane-conversion path (Pass-7).
     ///
     /// Parallel to `makeWorkingFormatPool` but emits
     /// `kCVPixelFormatType_32BGRA` instead of `_64RGBAHalf`. Same pool
     /// attributes (`POOL_MIN_BUFFER_COUNT`, `POOL_MAX_BUFFER_AGE_SECONDS`,
-    /// IOSurface + Metal compatibility). Used only when
-    /// `OpenConfiguration.lanesEightBit == true`.
+    /// IOSurface + Metal compatibility).
     func makeBgra8LanePool(size: Size) throws -> CVPixelBufferPool {
         let poolAttrs: [CFString: Any] = [
             kCVPixelBufferPoolMinimumBufferCountKey: Constants.poolMinBufferCount,
@@ -232,34 +231,6 @@ final class TexturePoolManager: @unchecked Sendable {
             throw MetalError.textureWrapFailed(code: wrap)
         }
         return (buffer, mtlTex)
-    }
-
-    /// Creates a 1-slot CPU-readable pool for still capture readback.
-    ///
-    /// Buffers are IOSurface-backed (Metal-writable via Pass 6 blit) and CPU-readable
-    /// (CVPixelBufferLockBaseAddress for vImage) per ADR-06.
-    func makeStillCapturePool(size: Size) throws -> CVPixelBufferPool {
-        let poolAttrs: [CFString: Any] = [
-            kCVPixelBufferPoolMinimumBufferCountKey: 1
-        ]
-        let bufferAttrs: [CFString: Any] = [
-            kCVPixelBufferPixelFormatTypeKey: kCVPixelFormatType_64RGBAHalf,
-            kCVPixelBufferWidthKey: size.width,
-            kCVPixelBufferHeightKey: size.height,
-            kCVPixelBufferIOSurfacePropertiesKey: [:] as [CFString: Any],
-            kCVPixelBufferMetalCompatibilityKey: true,
-        ]
-        var pool: CVPixelBufferPool?
-        let status = CVPixelBufferPoolCreate(
-            kCFAllocatorDefault,
-            poolAttrs as CFDictionary,
-            bufferAttrs as CFDictionary,
-            &pool
-        )
-        guard status == kCVReturnSuccess, let pool else {
-            throw MetalError.unsupportedFormat
-        }
-        return pool
     }
 
     /// Dequeues a buffer from `pool` and wraps it as an `MTLTexture` view through

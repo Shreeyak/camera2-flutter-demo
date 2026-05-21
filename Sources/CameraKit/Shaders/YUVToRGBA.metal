@@ -1,11 +1,16 @@
 #include <metal_stdlib>
 using namespace metal;
 
-// BT.601 full-range YCbCr 4:2:0 → RGBA16F conversion, with optional crop.
+// BT.601 full-range YCbCr 4:2:0 → RGBA16F conversion, with true sub-region crop.
 //
-// Stage 01 baseline + Stage 04 crop uniform: kernel writes the cropped region
-// only. The host writes a CropUniform that defaults to the full texture, so
-// Stage-01 callers see no behavioral change.
+// P2a true crop: the output texture IS the crop-region size. The host sets a
+// CropUniform once at pipeline construction carrying the crop origin (in sensor
+// pixels). Each output pixel `gid` reads the source at `gid + cropOrigin`, so
+// the kernel copies a 1:1 sub-region of the sensor (no zoom, no masking). When
+// uncropped, origin is (0,0) and outTex dims equal the sensor dims — identical
+// to the Stage-01 baseline. `width`/`height` in CropUniform are now unused by
+// the shader (the output texture's own dims bound the dispatch); the struct
+// layout is preserved to match the Swift `CropUniform` host side.
 
 struct CropUniform {
     uint originX;
@@ -21,26 +26,19 @@ kernel void yuvToRgba(texture2d<float, access::read>  yTex    [[texture(0)]],
                       uint2 gid [[thread_position_in_grid]])
 {
     // Texture-bounds guard — extra threads dispatched to fill a tile may exceed
-    // texture size.
+    // the output (crop-region) texture size.
     if (gid.x >= outTex.get_width() || gid.y >= outTex.get_height()) {
         return;
     }
 
-    // Crop guard — pixels outside the rect get cleared to black.
-    bool insideCrop = gid.x >= crop.originX
-                   && gid.y >= crop.originY
-                   && gid.x <  crop.originX + crop.width
-                   && gid.y <  crop.originY + crop.height;
-    if (!insideCrop) {
-        outTex.write(float4(0.0, 0.0, 0.0, 1.0), gid);
-        return;
-    }
+    // Map the output pixel to its source pixel in the full sensor frame.
+    uint2 src = uint2(gid.x + crop.originX, gid.y + crop.originY);
 
     // Sample luma — full-range: Y already in [0, 1].
-    float Y = yTex.read(gid).r;
+    float Y = yTex.read(src).r;
 
     // Sample chroma — 4:2:0: chroma plane is half-resolution in both dimensions.
-    float2 UV = cbcrTex.read(uint2(gid.x / 2, gid.y / 2)).rg;
+    float2 UV = cbcrTex.read(uint2(src.x / 2, src.y / 2)).rg;
 
     // Center chroma around 0 (UV values from .rg8Unorm are [0, 1]).
     float Cb = UV.x - 0.5;
