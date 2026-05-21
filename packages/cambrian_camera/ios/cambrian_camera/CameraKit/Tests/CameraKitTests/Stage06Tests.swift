@@ -110,7 +110,8 @@ struct Stage06Tests {
             pool: pipeline.naturalPoolForTest, width: size.width, height: size.height)
         let (pb, _) = try pipeline.texturePoolForTest.dequeuePoolTexture(
             pool: pipeline.processedPoolForTest, width: size.width, height: size.height)
-        let (tb, _) = try pipeline.texturePoolForTest.dequeuePoolTexture(
+        // Tracker pool is BGRA8 — use the 8-bit dequeue helper (Task 2 format change).
+        let (tb, _) = try pipeline.texturePoolForTest.dequeueEightBitPoolTexture(
             pool: pipeline.trackerPoolForTest,
             width: pipeline.trackerSizeForTest.width,
             height: pipeline.trackerSizeForTest.height)
@@ -118,6 +119,54 @@ struct Stage06Tests {
         #expect(CVPixelBufferGetIOSurface(nb) != nil)
         #expect(CVPixelBufferGetIOSurface(pb) != nil)
         #expect(CVPixelBufferGetIOSurface(tb) != nil)
+    }
+
+    // MARK: - P2b — first-open preview seeding (measurements 2026-05-20 §1)
+
+    /// `seedPreviewMailboxes()` makes the natural + processed lanes non-nil
+    /// before the first frame is encoded.
+    ///
+    /// Without it, `currentPixelBuffer(.natural)` / `currentTexture()` are nil on
+    /// first open and the raw lane stays black (texture id 0) until a close→open
+    /// cycle. Seeds the BGRA8 buffer + BGRA8 texture (Flutter bridge) and the
+    /// RGBA16F texture (calibration).
+    @Test func seedPreviewMailboxesPopulatesLanesBeforeFirstFrame() async throws {
+        let device = try #require(MTLCreateSystemDefaultDevice())
+        let size = Size(width: 256, height: 256)
+
+        let pipeline = try MetalPipeline(
+            device: device, captureSize: size,
+            gateOpen: true, consumers: ConsumerRegistry())
+        #expect(pipeline.latestNaturalBuffer == nil, "precondition: nil before any frame")
+        #expect(pipeline.latestProcessedBuffer == nil)
+        pipeline.seedPreviewMailboxes()
+        #expect(pipeline.latestNaturalBuffer != nil, "natural lane seeded on open")
+        #expect(pipeline.latestProcessedBuffer != nil, "processed lane seeded on open")
+        #expect(pipeline.latestNaturalBgra8Tex != nil, "bridge BGRA8 texture seeded")
+        #expect(pipeline.latestProcessedBgra8Tex != nil)
+        #expect(pipeline.latestNaturalTex16F != nil, "calibration RGBA16F texture seeded")
+        #expect(pipeline.latestProcessedTex16F != nil)
+
+        // The bridge buffer must be BGRA8 (the unconditional Flutter delivery format).
+        let nat8 = try #require(pipeline.latestNaturalBuffer)
+        #expect(
+            CVPixelBufferGetPixelFormatType(nat8) == kCVPixelFormatType_32BGRA,
+            "BGRA8 lane must seed a BGRA8 buffer for the Flutter bridge")
+        #expect(CVPixelBufferGetIOSurface(nat8) != nil, "seeded buffer is IOSurface-backed")
+    }
+
+    /// Seeding is idempotent: a second call must not replace a live mailbox.
+    @Test func seedPreviewMailboxesIsIdempotent() async throws {
+        let device = try #require(MTLCreateSystemDefaultDevice())
+        let size = Size(width: 256, height: 256)
+        let pipeline = try MetalPipeline(
+            device: device, captureSize: size,
+            gateOpen: true, consumers: ConsumerRegistry())
+        pipeline.seedPreviewMailboxes()
+        let firstTex = try #require(pipeline.latestNaturalBgra8Tex)
+        pipeline.seedPreviewMailboxes()  // guard: latestNaturalTex16F != nil → no-op
+        let secondTex = try #require(pipeline.latestNaturalBgra8Tex)
+        #expect(firstTex === secondTex, "second seed must not replace the live texture")
     }
 
     // MARK: - Test 4 — 06:tracker-downsample-height-matches-constant
@@ -199,6 +248,58 @@ struct Stage06Tests {
         // See docs/stage-11-pre-existing-bugs.md Bug 2.
         #expect(fs?.frameNumber == 0)
         #expect(CVPixelBufferGetIOSurface(fs!.natural) != nil)
+    }
+
+    // MARK: - Test — 06:true-crop-output-resolution
+
+    /// P2a true crop: a pipeline built with `outputSize`/`cropOrigin` emits
+    /// natural + processed textures sized to the crop region, not the sensor.
+    ///
+    /// The synthetic YUV sample buffer is sensor-sized (1024×768); Pass-1 reads
+    /// the (256,192)-offset 512×384 sub-region into the output textures.
+    @Test func trueCropOutputResolution() throws {
+        let device = try #require(MTLCreateSystemDefaultDevice())
+        let sensor = Size(width: 1024, height: 768)
+        let crop = Size(width: 512, height: 384)
+        let pipeline = try MetalPipeline(
+            device: device,
+            captureSize: sensor,
+            outputSize: crop,
+            cropOrigin: (256, 192),
+            gateOpen: true)
+
+        // Source is sensor-sized; Pass-1 reads the offset sub-region.
+        let sb = try makeSyntheticYUVSampleBuffer(width: sensor.width, height: sensor.height)
+        try pipeline.encode(sampleBuffer: sb)
+        // Mailbox stores happen in addCompletedHandler, which fires as part of
+        // the transition to .completed — deterministic, no sleep.
+        pipeline.lastCommandBuffer?.waitUntilCompleted()
+
+        let nat = try #require(pipeline.latestNaturalTex16F)
+        let proc = try #require(pipeline.latestProcessedTex16F)
+        #expect(nat.width == 512)
+        #expect(nat.height == 384)
+        #expect(proc.width == 512)
+        #expect(proc.height == 384)
+    }
+
+    // MARK: - Test — 06:default-crop-output-equals-capture
+
+    /// P2a default (no crop): output textures equal the sensor size.
+    @Test func defaultCropOutputEqualsCapture() throws {
+        let device = try #require(MTLCreateSystemDefaultDevice())
+        let sensor = Size(width: 512, height: 384)
+        let pipeline = try MetalPipeline(
+            device: device, captureSize: sensor, gateOpen: true)
+        #expect(pipeline.outputSize == sensor)
+
+        let sb = try makeSyntheticYUVSampleBuffer(width: sensor.width, height: sensor.height)
+        try pipeline.encode(sampleBuffer: sb)
+        pipeline.lastCommandBuffer?.waitUntilCompleted()
+
+        let nat = try #require(pipeline.latestNaturalTex16F)
+        #expect(nat.width == 512)
+        #expect(nat.height == 384)
     }
 
     // MARK: - Helpers

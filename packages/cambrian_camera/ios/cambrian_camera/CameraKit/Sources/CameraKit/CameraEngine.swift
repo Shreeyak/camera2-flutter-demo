@@ -67,12 +67,6 @@ public actor CameraEngine {
     /// `setResolution()` throw `.calibrationInProgress`. `close()` and the
     /// `.interrupted` `SessionState` route call `cancel()` here.
     private var calibrationTask: Task<CalibrationResult, Error>?
-    /// Pre-Phase-3 — cached for `setResolution` / recovery pipeline rebuilds so
-    /// the session's `OpenConfiguration.lanesEightBit` value survives across
-    /// pipeline re-inits.
-    ///
-    /// Set in `open(configuration:)`.
-    private var lanesEightBitCurrent: Bool = true
     private nonisolated let frameResultContinuationBox =
         Mutex<AsyncStream<FrameResult>.Continuation?>(nil)
     private let cachedFrameResultStream = Mailbox<AsyncStream<FrameResult>>()
@@ -106,8 +100,8 @@ public actor CameraEngine {
     nonisolated let sessionToken: ManagedAtomic<UInt64> = ManagedAtomic(0)
 
     // Bug 4 fix: previewTex accessors forward live to MetalPipeline mailboxes
-    // (`latestNaturalTex` / `latestProcessedTex`) — which the pipeline rewrites
-    // every frame. The previous capture-once snapshot pattern sat on whichever
+    // (`latestNaturalBgra8Tex` / `latestProcessedBgra8Tex`) — which the pipeline
+    // rewrites every frame. The previous capture-once snapshot pattern sat on whichever
     // pool buffer was dequeued at open() time and froze whenever pool rotation
     // moved past it (typical after any transient back-pressure). Tracker tex
     // already followed this live-forward pattern (line ~565).
@@ -215,16 +209,29 @@ public actor CameraEngine {
         guard let mtlDevice = MTLCreateSystemDefaultDevice() else {
             throw EngineError.metal(MetalError.unsupportedFormat)
         }
+        // P2a — honor OpenConfiguration.cropRegion as a TRUE crop: validate it
+        // against the sensor (same constraints as setCropRegion — in-bounds,
+        // even coords for 4:2:0), then size the output textures to the crop.
+        // nil → full-frame output (captureSize), the default.
+        let openOutputSize: Size?
+        let openCropOrigin: (x: Int, y: Int)
+        if let crop = configuration.cropRegion {
+            try validateCropRegion(crop, sensor: captureSize)
+            openOutputSize = Size(width: crop.width, height: crop.height)
+            openCropOrigin = (crop.x, crop.y)
+        } else {
+            openOutputSize = nil
+            openCropOrigin = (0, 0)
+        }
         let pipeline = try MetalPipeline(
             device: mtlDevice,
             captureSize: captureSize,
+            outputSize: openOutputSize,
+            cropOrigin: openCropOrigin,
             gate: submissionGate,
             consumers: consumers,
-            engineSessionToken: sessionToken,
-            lanesEightBit: configuration.lanesEightBit
+            engineSessionToken: sessionToken
         )
-        // Pre-Phase-3 — record for setResolution / recovery pipeline rebuilds.
-        self.lanesEightBitCurrent = configuration.lanesEightBit
         pipeline.onMetalError = { [weak self] mErr in
             Task { [weak self] in
                 let err = CameraError(
@@ -256,6 +263,11 @@ public actor CameraEngine {
         self.captureDelegate = delegate
         self.metalPipeline = pipeline
         self._metalPipeline.store(pipeline)
+        // Seed the preview mailboxes with blank pool buffers so the natural and
+        // processed lanes are non-nil on first open(), before the first frame —
+        // otherwise the Flutter texture bridge registers id 0 and the natural
+        // lane stays black until a close→open cycle (measurements 2026-05-20 §1, P2b).
+        pipeline.seedPreviewMailboxes()
         stillCapture = StillCapture()
         self.deliveryQueue = delivery
 
@@ -294,9 +306,7 @@ public actor CameraEngine {
             }
         )
         self.recovery = RecoveryCoordinator(clock: clock, hooks: hooks)
-        let token = sessionToken.load(ordering: .acquiring)
-        pair.gpu.arm(sessionToken: token)
-        pair.capture.arm(sessionToken: token)
+        armWatchdogs()
 
         startAEMonitor(device: device)
 
@@ -338,14 +348,17 @@ public actor CameraEngine {
             await self.setProcessingParams(persistedProcessing)
         }
 
+        // Mirror the requested crop into `currentCropRegion` so subsequent
+        // `publishStreamConfiguration()` callers reflect the open-time crop even
+        // before any `setCropRegion(_:)`. Source of truth for published config is
+        // pipeline state (`Self.activeCropRect(for:)`), not this mirror.
+        currentCropRegion = configuration.cropRegion
+
         // 11. Build and return SessionCapabilities.
         let supportedSizes = await device.supportedSizes
-        let activeCropRegion = Rect(
-            x: 0,
-            y: 0,
-            width: Constants.cropDefaultWidthPx,
-            height: Constants.cropDefaultHeightPx
-        )
+        // P2a — the REAL crop rect, derived from the pipeline's outputSize +
+        // cropOrigin: full-frame Rect(0,0,sensorW,sensorH) when uncropped.
+        let activeCropRegion = Self.activeCropRect(for: pipeline)
         let isoRange = await device.isoRange
         let exposureDurationRangeNs = await device.exposureDurationRangeNs
         let zoomMin = await device.minAvailableVideoZoomFactor
@@ -364,11 +377,8 @@ public actor CameraEngine {
             activeCaptureResolution: captureSize,
             activeCropRegion: activeCropRegion,
             // Lane-buffer format (what `currentPixelBuffer(stream:)` returns),
-            // NOT camera source format. Phase-2 §2d.7 + pre-Phase-3 RGBA8:
-            // default-on flag emits "BGRA8"; opt-out keeps "RGBA16F".
-            streamPixelFormat: configuration.lanesEightBit
-                ? Constants.streamPixelFormatStringEightBit
-                : Constants.streamPixelFormatStringSixteenBit,
+            // NOT camera source format. Phase-2 §2d.7; BGRA8 is unconditional.
+            streamPixelFormat: Constants.streamPixelFormatString,
             isoRange: isoRange,
             exposureDurationRangeNs: exposureDurationRangeNs,
             focusRange: 0.0...1.0,
@@ -465,17 +475,27 @@ public actor CameraEngine {
         return stream
     }
 
+    /// P2a — the REAL active crop rect for a pipeline: the sub-region the output
+    /// textures cover.
+    ///
+    /// `Rect(cropOrigin.x, cropOrigin.y, outputSize.width, outputSize.height)`,
+    /// which collapses to full-frame `Rect(0, 0, sensorW, sensorH)` when
+    /// uncropped. Single source of truth for `activeCropRegion` in both
+    /// `open()`'s `SessionCapabilities` and `publishStreamConfiguration()` —
+    /// derived from pipeline state, not the `currentCropRegion` mirror.
+    private static func activeCropRect(for pipeline: MetalPipeline) -> Rect {
+        Rect(
+            x: pipeline.cropOrigin.x,
+            y: pipeline.cropOrigin.y,
+            width: pipeline.outputSize.width,
+            height: pipeline.outputSize.height)
+    }
+
     private func publishStreamConfiguration() {
         guard let pipeline = metalPipeline else { return }
-        let crop =
-            currentCropRegion
-            ?? Rect(
-                x: 0, y: 0,
-                width: pipeline.captureSize.width,
-                height: pipeline.captureSize.height)
         let cfg = StreamConfiguration(
             activeCaptureResolution: pipeline.captureSize,
-            activeCropRegion: crop)
+            activeCropRegion: Self.activeCropRect(for: pipeline))
         streamConfigContinuationBox.withLock { $0?.yield(cfg) }
     }
 
@@ -516,8 +536,41 @@ public actor CameraEngine {
     /// transition into `SessionState` so downstream consumers
     /// (`ErrorPresenterViewModel`, Phase-3's Pigeon adapter) see a consistent
     /// pause/resume signal.
+    ///
+    /// The mirror defers to OS-driven events when the state machine sits in an
+    /// OS-owned origin (`.interrupted`, `.recovering`, `.error`). From those
+    /// states the only legitimate `.command` transition is `.closed`, so a
+    /// scenePhase-driven `.streaming`/`.paused` is off-map — and worse, would
+    /// overwrite the OS's truth with a wrong value. `SessionStateMachine` is the
+    /// single source of truth: if `classify` rejects the mirrored transition we
+    /// skip the publish (logged) and let the OS event path restore `.streaming`
+    /// (`onSessionEvent(.otherInterruptionEnded)`, recovery completion). This
+    /// also closes the symmetric `.opening → .paused` hole. Caught under
+    /// `test_device`, where a harness/bring-up AVF interruption races a
+    /// `.active` scenePhase into the off-map path in `publishState` — a
+    /// wrong-value overwrite of OS-owned state (a DEBUG abort too, before Fix 2). The
+    /// background stall-watchdog disarm (`.otherInterruption` / `backgroundSuspend`)
+    /// is the complementary half of the HITL background-crash fix (measurements
+    /// 2026-05-20 §1, case #12).
+    ///
+    /// Known gap (out of scope — D-06 gate owns correctness): if an interruption
+    /// ends while the app is backgrounded, the OS publishes `.streaming (event)`
+    /// but the ViewModel won't re-issue `notifyScenePhasePaused(true)` until the
+    /// next scenePhase change — the machine reads `.streaming` while the gate is
+    /// still closed. A truthfulness gap, not a crash.
     public func notifyScenePhasePaused(_ paused: Bool) {
-        publishState(paused ? .paused : .streaming, kind: .command)
+        let target: SessionState = paused ? .paused : .streaming
+        let from = stateMachine.current
+        if SessionStateMachine.classify(from: from, to: target, kind: .command) == .offMap {
+            CameraKitLog.notice(
+                .engine,
+                "[scenePhase] skipping mirror from=\(from.rawValue) "
+                    + "to=\(target.rawValue) kind=command caller=\(#function) "
+                    + "(deferring to OS-driven state)"
+            )
+            return
+        }
+        publishState(target, kind: .command)
     }
 
     /// Test-only: drive the state machine into `.streaming` so teardown paths
@@ -538,6 +591,9 @@ public actor CameraEngine {
     func _markOpenForTest() {
         stateMachine._setCurrentForTest(.streaming)
     }
+
+    /// Test-only: read the state machine's current `SessionState` (stateStream only yields on publish).
+    var _currentStateForTest: SessionState { stateMachine.current }
 
     /// Called from `CaptureDelegate` on every sample buffer (nonisolated — delivery queue).
     nonisolated func tickFrame() {
@@ -589,9 +645,13 @@ public actor CameraEngine {
             throw EngineError.notOpen
         }
 
-        // 1. Merge onto prior state.
+        // 1. Merge onto prior state, then promote a single-field manual request
+        //    so it pins both ISO and exposure (iOS couples them in one
+        //    setIsoExposureManual call — measurements 2026-05-20 §1, case #4).
         let prior = currentSettings ?? CameraSettings()
-        let merged = settings.merging(onto: prior)
+        let merged = SettingsCoupling.promoteSingleFieldManual(
+            request: settings,
+            merged: settings.merging(onto: prior))
 
         // 2. Couple (Rules 1/2/3). Reads the last KVO snapshot for Rule 3.
         let latched = await device.lastSnapshot
@@ -660,8 +720,7 @@ public actor CameraEngine {
             captureSize: size,
             gate: submissionGate,
             consumers: consumers,
-            engineSessionToken: sessionToken,
-            lanesEightBit: lanesEightBitCurrent
+            engineSessionToken: sessionToken
         )
         pipeline.onMetalError = { [weak self] mErr in
             Task { [weak self] in
@@ -676,6 +735,9 @@ public actor CameraEngine {
         }
         metalPipeline = pipeline
         _metalPipeline.store(pipeline)
+        // Seed preview mailboxes for the new pipeline so the lanes don't blank
+        // during a resolution change (measurements 2026-05-20 §1, P2b).
+        pipeline.seedPreviewMailboxes()
 
         captureDelegate?.logNextFrame = true
         submissionGate.store(true, ordering: .sequentiallyConsistent)
@@ -692,11 +754,17 @@ public actor CameraEngine {
     /// Gates GPU submission, drains any in-flight
     /// frame, and stops the capture session via sessionQueue with timeout (ADR-30).
     ///
-    /// Step 1 (disarm watchdogs) is intentionally omitted: watchdogs must stay armed
-    /// during background suspension so the capture stall is detected and recovery fires.
+    /// Disarms the stall watchdogs and cancels any pending recovery retry (Inv 9):
+    /// the session is being stopped on purpose, so no frames are expected and a
+    /// stall is not a fault. Leaving them armed fires spurious recovery while
+    /// backgrounded, which collides with the OS-interruption state and aborts in
+    /// DEBUG — the HITL background crash (measurements 2026-05-20 §1). Re-armed by
+    /// `backgroundResume()`.
     public func backgroundSuspend() async {
         CameraKitLog.notice(.engine, "[bgsuspend] enter gate=false stopRunning")
         submissionGate.store(false, ordering: .sequentiallyConsistent)
+        watchdogs?.disarmAll()
+        await recovery?.cancelPendingRetry()
         if recording != nil {
             CameraKitLog.notice(
                 .engine, "[bgsuspend] active recording — finalizing via background-task drain")
@@ -725,6 +793,8 @@ public actor CameraEngine {
             CameraKitLog.notice(
                 .engine,
                 "[bgresume] startRunning returned sessionRunning=\(session.avSession.isRunning)")
+            // Frames resume — re-arm the watchdogs disarmed by backgroundSuspend().
+            armWatchdogs()
         }
     }
 
@@ -739,40 +809,36 @@ public actor CameraEngine {
         return await device.dumpAllFormats()
     }
 
-    /// Exposes the live natural-tex mailbox for the MTKView draw pass.
+    /// Exposes the live natural-lane texture for the MTKView draw pass.
     ///
-    /// Always `.rgba16Float` — the texture path preserves HDR-grade precision
-    /// for in-process Metal consumers (calibration sampling, MTKView preview,
-    /// the dev harness's `MTKViewRepresentable` configured
-    /// `colorPixelFormat = .rgba16Float`). The buffer accessor
-    /// `currentPixelBuffer(stream:)` may emit BGRA8 instead, depending on
-    /// `OpenConfiguration.lanesEightBit` — see its doc-comment for the
-    /// load-bearing texture/buffer asymmetry. Forwards to
-    /// `MetalPipeline.latestNaturalTex` (single writer: delivery queue). MUST
-    /// be re-evaluated each draw; do not cache (Bug 4: pool rotation strands
-    /// cached pointers).
+    /// `.bgra8Unorm` — the same IOSurface delivered by
+    /// `currentPixelBuffer(stream: .natural)`, exposed as an `MTLTexture` for
+    /// the preview. One 8-bit surface per lane; the camera is 8-bit-locked, so
+    /// there is no precision to preserve at the delivery boundary (RGBA16F
+    /// survives only as an internal compute intermediate for the Metal math /
+    /// calibration sampling). Forwards to `MetalPipeline.latestNaturalBgra8Tex`
+    /// (single writer: delivery queue). MUST be re-evaluated each draw; do not
+    /// cache (Bug 4: pool rotation strands cached pointers).
     public nonisolated func currentTexture() -> (any MTLTexture)? {
-        _metalPipeline.latest?.latestNaturalTex
+        _metalPipeline.latest?.latestNaturalBgra8Tex
     }
 
-    /// Exposes the live processed-tex mailbox for the right-half MTKView draw.
+    /// Exposes the live processed-lane texture for the right-half MTKView draw.
     ///
-    /// Always `.rgba16Float` — see `currentTexture()` for the rationale and
-    /// the load-bearing texture/buffer asymmetry. Same live-mailbox contract
-    /// as `currentTexture()` — re-evaluate per draw.
+    /// `.bgra8Unorm` — see `currentTexture()`. Same live-mailbox contract;
+    /// re-evaluate per draw.
     public nonisolated func currentProcessedTexture() -> (any MTLTexture)? {
-        _metalPipeline.latest?.latestProcessedTex
+        _metalPipeline.latest?.latestProcessedBgra8Tex
     }
 
     /// Stage 06: returns the latest tracker texture for external consumers.
     ///
-    /// Always `.rgba16Float`. The tracker lane is **not** converted to 8-bit
-    /// by `OpenConfiguration.lanesEightBit` — `.tracker` has no Phase-3
-    /// Pigeon counterpart, so the conversion would be unused cost (Pre-Phase-3
-    /// design Open Q #4). `nonisolated` so callers can access synchronously
-    /// without an actor hop. Reads `latestTrackerTex` from the pipeline's
-    /// `Mailbox<T>` (G-13). Returns nil if no frame has been encoded yet or
-    /// the engine is closed.
+    /// Returns `.bgra8Unorm`. Pass-4's tracker downsample kernel writes `float4` via
+    /// `texture2d<float, access::write>` into a BGRA8 pool texture — the hardware
+    /// clamps [0,1] and stores 8-bit BGRA with no shader change. `nonisolated` so
+    /// callers can access synchronously without an actor hop. Reads `latestTrackerTex`
+    /// from the pipeline's `Mailbox<T>` (G-13). Returns nil if no frame has been
+    /// encoded yet or the engine is closed.
     public nonisolated func currentTrackerTexture() -> (any MTLTexture)? {
         _metalPipeline.latest?.latestTrackerTex
     }
@@ -783,19 +849,10 @@ public actor CameraEngine {
     /// `nonisolated` + synchronous — Phase-3's `FlutterTexture.copyPixelBuffer()`
     /// is called on the GPU thread and must not suspend.
     ///
-    /// **Format depends on `OpenConfiguration.lanesEightBit`:**
-    ///   - default (`true`) — `.natural` / `.processed` return
-    ///     `kCVPixelFormatType_32BGRA` (BGRA8, `.bgra8Unorm`). `.tracker`
-    ///     stays `kCVPixelFormatType_64RGBAHalf` (RGBA16F).
-    ///   - opt-out (`false`) — every lane returns RGBA16F (today's behavior).
+    /// **Format:** All three lanes return `kCVPixelFormatType_32BGRA` (BGRA8).
     ///
-    /// **Asymmetry: this accessor's format can differ from the texture
-    /// accessors above.** `currentTexture()` / `currentProcessedTexture()` /
-    /// `currentTrackerTexture()` **always** return `.rgba16Float` — internal
-    /// in-process Metal consumers (preview MTKView, calibration sampling)
-    /// need the precision, while out-of-process Phase-3 bridge consumers want
-    /// the 8-bit wire-format parity with Android. Don't refactor this
-    /// asymmetry away. Phase-2 design §2c + pre-Phase-3 RGBA8.
+    /// - `.natural` / `.processed`: Pass-7 RGBA16F→BGRA8 conversion.
+    /// - `.tracker`: fused — `trackerPool` is BGRA8; Pass-4 writes BGRA8 directly.
     public nonisolated func currentPixelBuffer(stream: StreamId) -> CVPixelBuffer? {
         switch stream {
         case .natural: return _metalPipeline.latest?.latestNaturalBuffer
@@ -842,34 +899,92 @@ public actor CameraEngine {
         Task.detached { SettingsPersistence.saveProcessing(toSave) }
     }
 
-    /// Stage 04: writes the Pass-1 crop rectangle into the pipeline's `UniformsHost.crop` field.
+    /// Validates a P2a true-crop rect against the sensor bounds and the 4:2:0
+    /// chroma-alignment constraint.
     ///
-    /// Coordinates are pixel-space within the active capture size; pixels outside the rect render as black.
-    ///
-    /// - Throws: `EngineError.notOpen` if the session is not open.
-    /// - Throws: `EngineError.settingsConflict` if the rect is degenerate
-    ///   (zero width/height) or extends past the capture bounds.
-    public func setCropRegion(_ rect: Rect) async throws {
-        guard let pipeline = metalPipeline else { throw EngineError.notOpen }
-        let texW = pipeline.captureSize.width
-        let texH = pipeline.captureSize.height
+    /// - Throws: `EngineError.settingsConflict` if the rect is degenerate (zero
+    ///   width/height), extends past the sensor bounds, or has any odd
+    ///   coordinate. Odd luma offsets/extents skew the half-resolution chroma
+    ///   plane sampling and cause color fringing, so all four fields must be
+    ///   even (4:2:0). Shared by `open()` and `setCropRegion(_:)`.
+    private func validateCropRegion(_ rect: Rect, sensor: Size) throws {
         guard rect.width > 0, rect.height > 0,
             rect.x >= 0, rect.y >= 0,
-            rect.x + rect.width <= texW,
-            rect.y + rect.height <= texH
+            rect.x + rect.width <= sensor.width,
+            rect.y + rect.height <= sensor.height
         else {
             throw EngineError.settingsConflict(
-                reason: "crop rect \(rect) outside capture bounds \(texW)x\(texH)")
+                reason: "crop rect \(rect) outside sensor bounds \(sensor.width)x\(sensor.height)")
         }
-        // Route through the mutex so the delivery-queue snapshot in encode() is always coherent (Inv 6).
-        pipeline.uniforms.withLock { storage in
-            storage.crop = CropUniform(
-                originX: UInt32(rect.x),
-                originY: UInt32(rect.y),
-                width: UInt32(rect.width),
-                height: UInt32(rect.height)
-            )
+        guard rect.x % 2 == 0, rect.y % 2 == 0,
+            rect.width % 2 == 0, rect.height % 2 == 0
+        else {
+            throw EngineError.settingsConflict(
+                reason: "crop rect \(rect) has odd coordinate(s); 4:2:0 chroma requires even x/y/width/height")
         }
+    }
+
+    /// P2a: applies a TRUE crop — the natural/processed output resolution becomes
+    /// the crop-region size.
+    ///
+    /// The AVCaptureSession keeps producing full sensor-size buffers; Pass-1
+    /// reads the `rect`-offset sub-region at 1:1 into `rect.width × rect.height`
+    /// output textures (no zoom, no masking). Implemented by recreating the
+    /// `MetalPipeline` with the new `outputSize`/`cropOrigin` — the sensor
+    /// resolution is unchanged, so (unlike `setResolution`) the AVF session is
+    /// NOT reconfigured. Overrides state.md #67 (which recommended dropping this
+    /// API); see DECISIONS.md.
+    ///
+    /// - Throws: `EngineError.notOpen` if the session is not open.
+    /// - Throws: `EngineError.calibrationInProgress` if a calibration is in
+    ///   flight (the rebuild would invalidate its pipeline reference).
+    /// - Throws: `EngineError.settingsConflict` if the rect is degenerate,
+    ///   out of sensor bounds, or has odd coordinates (4:2:0 chroma).
+    public func setCropRegion(_ rect: Rect) async throws {
+        guard let pipeline = metalPipeline else { throw EngineError.notOpen }
+        // A pipeline rebuild would strand an in-flight calibration's reference.
+        if calibrationTask != nil { throw EngineError.calibrationInProgress }
+
+        let sensor = pipeline.captureSize
+        try validateCropRegion(rect, sensor: sensor)
+
+        submissionGate.store(false, ordering: .sequentiallyConsistent)
+        await drainSubmittedFrame()
+
+        metalPipeline = nil
+        _metalPipeline.store(nil)
+
+        guard let mtlDevice = MTLCreateSystemDefaultDevice() else {
+            throw EngineError.metal(MetalError.unsupportedFormat)
+        }
+        let newPipeline = try MetalPipeline(
+            device: mtlDevice,
+            captureSize: sensor,
+            outputSize: Size(width: rect.width, height: rect.height),
+            cropOrigin: (rect.x, rect.y),
+            gate: submissionGate,
+            consumers: consumers,
+            engineSessionToken: sessionToken
+        )
+        newPipeline.onMetalError = { [weak self] mErr in
+            Task { [weak self] in
+                let err = CameraError(
+                    code: .unknownError,
+                    message: "metal: \(mErr)",
+                    isFatal: false
+                )
+                await self?.publishErrorAsync(err)
+                await self?.recovery?.enterRecovery(error: err)
+            }
+        }
+        metalPipeline = newPipeline
+        _metalPipeline.store(newPipeline)
+        // Seed preview mailboxes so the lanes don't blank during the crop change
+        // (measurements 2026-05-20 §1, P2b).
+        newPipeline.seedPreviewMailboxes()
+
+        submissionGate.store(true, ordering: .sequentiallyConsistent)
+
         currentCropRegion = rect
         // Phase-2 §2c: emit active-config-changed.
         publishStreamConfiguration()
@@ -1175,9 +1290,19 @@ public actor CameraEngine {
         guard isOpen, let pipeline = metalPipeline, let capture = stillCapture else {
             throw EngineError.notOpen
         }
-        guard let session = cameraSession, session.avSession.isRunning else {
-            throw EngineError.capture(.metalReadbackFailed)
+        // Source the latest processed-lane BGRA8 buffer directly (no Pass-6 GPU
+        // readback). Like captureNaturalPicture, gating is by buffer
+        // availability rather than session-running state — capture during pause
+        // returns the last delivered frame, which is the right "capture the
+        // current picture" semantics.
+        guard let buffer = pipeline.latestProcessedBuffer else {
+            CameraKitLog.warning(.engine, "[still] no processed-lane buffer available")
+            throw EngineError.capture(.bufferUnavailable)
         }
+        CameraKitLog.notice(
+            .engine,
+            "[still] capture start size=\(pipeline.captureSize.width)x\(pipeline.captureSize.height)"
+        )
 
         let snap = await cameraSession?.device?.lastSnapshot
 
@@ -1188,15 +1313,24 @@ public actor CameraEngine {
             apertureValue = 0
         }
 
+        let writeURL: URL
+        do {
+            writeURL = try PhotosLibraryClient.resolve(outputURL: outputURL, defaultExt: "tif")
+        } catch let e as EngineError {
+            throw e
+        }
+
         let output: StillCaptureOutput
         do {
-            output = try await capture.captureImage(
-                pipeline: pipeline,
+            output = try await capture.encode(
+                buffer: buffer,
                 captureSize: pipeline.captureSize,
                 deviceSnapshot: snap,
                 focalLengthMm: 0,
                 apertureValue: apertureValue,
-                outputURL: outputURL
+                outputURL: writeURL,
+                format: .tiff,
+                laneTag: "processed"
             )
         } catch let e as StillCaptureError {
             throw EngineError.capture(e)
@@ -1237,9 +1371,9 @@ public actor CameraEngine {
     ///
     /// Pre-P3 sibling of `captureImage` for the Pigeon contract's
     /// `captureNaturalPicture` method. Reads the latest natural-lane buffer
-    /// from `MetalPipeline` (Pass-1 output, RGBA16F, IOSurface-backed),
-    /// JPEG-encodes via the shared `StillCapture.encode` path, and optionally
-    /// publishes to Photos. Does NOT touch `AVCapturePhotoOutput`
+    /// from `MetalPipeline` (BGRA8, IOSurface-backed — the single delivery
+    /// format), JPEG-encodes via the shared `StillCapture.encode` path, and
+    /// optionally publishes to Photos. Does NOT touch `AVCapturePhotoOutput`
     /// (`DECISIONS.md` D-2P-10).
     ///
     /// EXIF carries `"lane": "natural"` inside the `CamPlugin/v1` envelope so
@@ -1271,12 +1405,11 @@ public actor CameraEngine {
         guard isOpen, let pipeline = metalPipeline, let capture = stillCapture else {
             throw EngineError.notOpen
         }
-        // Pre-Phase-3 — read the parallel RGBA16F mailbox so HDR precision is
-        // preserved regardless of `OpenConfiguration.lanesEightBit`. The
-        // bridge-facing `currentPixelBuffer(stream: .natural)` may emit BGRA8,
-        // but capture must keep the half-float buffer the StillCapture encode
-        // path expects (vImage RGBA16F → 8-bit).
-        guard let buffer = pipeline.latestNaturalBufferRGBA16F else {
+        // Source the latest natural-lane BGRA8 buffer — the same surface
+        // delivered to the preview/bridge. The camera is 8-bit-locked, so there
+        // is no half-float precision to preserve at capture; StillCapture.encode
+        // consumes BGRA8 directly.
+        guard let buffer = pipeline.latestNaturalBuffer else {
             CameraKitLog.warning(.engine, "[natural] no natural-lane buffer available")
             throw EngineError.capture(.bufferUnavailable)
         }
@@ -1553,17 +1686,21 @@ public actor CameraEngine {
         let from = stateMachine.current
         let classification = stateMachine.transition(to: state, kind: kind)
         if classification == .offMap {
+            // Observability-first: log with full context, then apply. Off-map is
+            // NOT fatal in any config — the OS event space (interruptions,
+            // runtime errors, system-pressure orderings) is not fully
+            // enumerable, and a DEBUG-only `assertionFailure` here aborted device
+            // builds on legitimate-but-rare lifecycle races while RELEASE handled
+            // the same transition gracefully (measurements 2026-05-20 §1: the
+            // DEBUG/RELEASE divergence was itself the bug-amplifier). The log is
+            // the diagnostic instrument; correlate an off-map entry with the
+            // preceding OS notification to tell a legitimate ordering from a
+            // genuine state-logic regression.
             CameraKitLog.warning(
                 .engine,
                 "[state] off-map transition from=\(from.rawValue) "
                     + "to=\(state.rawValue) kind=\(kind.rawValue) caller=\(function)"
             )
-            #if DEBUG
-            assertionFailure(
-                "off-map SessionState transition: \(from) → \(state) "
-                    + "(kind=\(kind)) from \(function)"
-            )
-            #endif
         }
         stateContinuationBox.withLock { $0?.yield(state) }
     }
@@ -1577,6 +1714,34 @@ public actor CameraEngine {
     }
     func publishErrorAsync(_ e: CameraError) { publishError(e) }
     func disarmWatchdogsAsync() { watchdogs?.disarmAll() }
+
+    /// Arm both stall watchdogs against the current session token.
+    ///
+    /// `Watchdog.arm` is self-canceling (it cancels any prior poller), so this
+    /// is safe to call to (re-)arm on `open()`, on `backgroundResume()`, and on
+    /// `.otherInterruptionEnded`. No-op when the engine is closed
+    /// (`watchdogs == nil`).
+    ///
+    /// Gate-guarded: if `submissionGate` is closed, arming is skipped (HITL
+    /// 2026-05-20 §1 case #14). On backgrounding, `stopRunning` triggers an OS
+    /// interruption whose `.otherInterruptionEnded` fires while the app is still
+    /// backgrounded; the unconditional re-arm armed the stall watchdog with no
+    /// frames flowing, it fired ~9 s later, and drove `interrupted → recovering`
+    /// (off-map — it aborted DEBUG builds before Fix 2, and still spuriously
+    /// recovers a backgrounded session). The watchdog must only arm when frames
+    /// can actually flow, which the gate tracks. `open()` and `backgroundResume()`
+    /// both open the gate before calling this, so they are unaffected.
+    private func armWatchdogs() {
+        guard let pair = watchdogs else { return }
+        guard submissionGate.load(ordering: .acquiring) else {
+            CameraKitLog.notice(
+                .engine, "[watchdog] arm skipped — submission gate closed (HITL §1 #14)")
+            return
+        }
+        let token = sessionToken.load(ordering: .acquiring)
+        pair.gpu.arm(sessionToken: token)
+        pair.capture.arm(sessionToken: token)
+    }
 
     private func startAEMonitor(device: any CaptureDeviceProviding) {
         aeMonitorTask?.cancel()
@@ -1693,16 +1858,62 @@ public actor CameraEngine {
                 .engine, "[interruption] entering .interrupted (raw=\(raw))")
             // Phase-2 §2b — abort any in-flight calibration on .interrupted.
             calibrationTask?.cancel()
+            // HITL crash fix (measurements 2026-05-20 §1): the OS stopped frame
+            // delivery, so the stall watchdogs would fire spuriously and drive
+            // recovery — interrupted → recovering is off-map (it aborted DEBUG
+            // builds before Fix 2; still a spurious recovery). Disarm them and
+            // cancel any pending retry (mirror of the .cameraInUseBegan path);
+            // re-armed on .otherInterruptionEnded only when the gate is open.
+            watchdogs?.disarmAll()
+            await recovery?.cancelPendingRetry()
             publishState(.interrupted, kind: .event)
         case .otherInterruptionEnded:
             CameraKitLog.notice(
                 .engine, "[interruption] ended — reverting to .streaming")
             publishState(.streaming, kind: .event)
+            // Frames resume — re-arm the watchdogs disarmed on .otherInterruption.
+            armWatchdogs()
         }
     }
 
     /// Test-only: inject a session event directly (avoids needing avSession reference).
     func _postSessionEventForTest(_ event: CameraSession.SessionEvent) async {
         await onSessionEvent(event)
+    }
+
+    /// Test-only: armed token of the capture stall watchdog (nil when disarmed).
+    ///
+    /// Lets a test observe disarm-on-interruption / re-arm-on-resume directly.
+    var _captureWatchdogArmedTokenForTest: UInt64? { watchdogs?.capture.armedSessionToken }
+
+    /// Test-only: build and arm the stall watchdogs + recovery coordinator the
+    /// way `open()` does, without a real `AVCaptureSession`.
+    ///
+    /// Exercises the lifecycle disarm/re-arm paths and the watchdog→recovery
+    /// wiring under an injected clock. `performTeardownAndReopen` is a no-op —
+    /// these tests assert that recovery is NOT spuriously triggered on the
+    /// interrupted / background path.
+    func _armWatchdogsForTest() {
+        let gpu = Watchdog(kind: .gpu, clock: clock) { [weak self] fire in
+            Task { [weak self] in await self?.handleWatchdogFire(fire) }
+        }
+        let cap = Watchdog(kind: .capture, clock: clock) { [weak self] fire in
+            Task { [weak self] in await self?.handleWatchdogFire(fire) }
+        }
+        let pair = WatchdogPair(gpu: gpu, capture: cap)
+        self.watchdogs = pair
+        self.recovery = RecoveryCoordinator(
+            clock: clock,
+            hooks: RecoveryCoordinator.Hooks(
+                performTeardownAndReopen: {},
+                emitStateRecovering: { [weak self] in await self?.publishStateAsync(.recovering) },
+                emitError: { [weak self] err in await self?.publishErrorAsync(err) },
+                disarmWatchdogs: { [weak self] in await self?.disarmWatchdogsAsync() },
+                incrementSessionToken: { [weak self] in
+                    self?.sessionToken.wrappingIncrement(ordering: .sequentiallyConsistent)
+                }
+            )
+        )
+        armWatchdogs()
     }
 }

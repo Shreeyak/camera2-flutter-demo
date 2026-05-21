@@ -29,7 +29,7 @@ public protocol CaptureDeviceProviding: AnyObject, Sendable {
     func lockForConfiguration() async throws
     func unlockForConfiguration() async
 
-    func setExposureModeCustom(durationNs: Int64, iso: Float) async throws
+    func setIsoExposureManual(durationNs: Int64, iso: Float) async throws
     func setContinuousAutoExposure() async throws
 
     func setFocusModeLocked(lensPosition: Float) async throws
@@ -255,7 +255,7 @@ final actor LiveCaptureDevice: CaptureDeviceProviding {
     func lockForConfiguration() throws { try avDevice.lockForConfiguration() }
     func unlockForConfiguration() { avDevice.unlockForConfiguration() }
 
-    func setExposureModeCustom(durationNs: Int64, iso: Float) throws {
+    func setIsoExposureManual(durationNs: Int64, iso: Float) throws {
         let duration = CMTimeMake(value: durationNs, timescale: 1_000_000_000)
         avDevice.setExposureModeCustom(duration: duration, iso: iso, completionHandler: nil)
     }

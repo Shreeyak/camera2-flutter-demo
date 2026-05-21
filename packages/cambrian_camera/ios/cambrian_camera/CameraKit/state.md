@@ -1,4 +1,53 @@
+# state.md — 8-bit BGRA end-to-end delivery (2026-05-20)
+
+Pre-Phase-3 cleanup that commits CameraKit to a single delivery format.
+Supersedes the 2026-05-15 RGBA8 work below. Spec:
+`docs/superpowers/specs/2026-05-20-8bit-bgra-end-to-end-delivery-design.md`.
+Plan: `docs/superpowers/plans/2026-05-20-8bit-bgra-end-to-end-delivery.md`.
+Handoff: `docs/superpowers/plans/2026-05-20-8bit-bgra-HANDOFF.md`.
+Rationale: `DECISIONS.md` D-2P-12 (supersedes D-2P-11; retains D-2P-09, D-2P-10).
+
+## What's now permanent — 8-bit BGRA end-to-end
+
+- **BGRA8 is the single delivery format** for every lane (natural, processed,
+  tracker) and every surface type. `currentPixelBuffer(stream:)` and
+  `currentTexture()` / `currentProcessedTexture()` / `currentTrackerTexture()`
+  all return the *same* `.bgra8Unorm` IOSurface per lane — the old
+  texture(16F)/buffer(8-bit) asymmetry is gone.
+- **RGBA16F is internal-compute-only**: Pass-1/2/4/5/7 render targets plus the
+  `_latestNaturalTex16F` (WB/BB calibration) and `_latestProcessedTex16F`
+  (`sampleCenterPatch`) mailboxes. The camera is 8-bit-locked, so float
+  precision is useful only in-shader, never at the boundary.
+- **Per-lane conversion**: natural/processed via the standalone `rgba16fToBgra8`
+  Pass-7; tracker *fused* — its pool is BGRA8 so Pass-4 writes 8-bit directly
+  (no extra pass, no shader edit).
+- **Still capture** reads the latest BGRA8 lane buffer directly: `captureImage`
+  → `latestProcessedBuffer` (TIFF, `lane:"processed"`), `captureNaturalPicture`
+  → `latestNaturalBuffer` (JPEG, `lane:"natural"`). `StillCapture.encode` builds
+  the CGImage with BGRA byte order (`byteOrder32Little | noneSkipFirst`).
+  Gating is by buffer availability, not session-running (capture during pause OK).
+- **`FrameSet`** (C++ `CannyConsumer` / AsyncStream) carries BGRA8 for all three
+  lanes; `CannyConsumer` already format-branches on `_32BGRA`.
+- App dev-harness MTKView now uses `colorPixelFormat = .bgra8Unorm`.
+
+## What was removed
+
+- `OpenConfiguration.lanesEightBit` flag (conversion is unconditional).
+- The texture/buffer format asymmetry D-2P-11 declared load-bearing.
+- The parallel `MetalPipeline.latestNaturalBufferRGBA16F` still mailbox.
+- The Pass-6 GPU-readback still pipeline: `makeStillCapturePool`, `armCapture`,
+  the pending-capture continuation, `stillCaptureDequeueCount`.
+- `StillCapture.captureImage(pipeline:…)` + `convertRGBA16FtoRGBA8` (vImage) +
+  the `captureInFlight` CAS guard.
+- Dead `Constants.processedPixelFormat`.
+
+---
+
 # state.md — Pre-Phase-3 RGBA8 lane conversion (2026-05-15)
+
+> **Superseded 2026-05-20 by the 8-bit BGRA end-to-end work above.** The
+> `lanesEightBit` flag, the texture/buffer asymmetry, and the parallel RGBA16F
+> still mailbox described in this section no longer exist.
 
 Pre-Phase-3 additive capabilities stage outside brief discipline. Spec:
 `docs/superpowers/specs/2026-05-15-rgba16f-to-rgba8-conversion-design.md`.
