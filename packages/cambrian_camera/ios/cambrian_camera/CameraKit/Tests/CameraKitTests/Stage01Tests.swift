@@ -140,7 +140,7 @@ struct Stage01Tests {
     /// `as? LiveCaptureDevice` cast that silently returned `[]` on fakes; now
     /// it forwards to the protocol's `dumpAllFormats()`.
     @Test func engineDumpDeviceFormatsReturnsEmptyWhenClosed() async {
-        let engine = CameraEngine()
+        let engine = CameraEngine(initialPhase: .active)
         let formats = await engine.dumpDeviceFormats()
         #expect(formats.isEmpty)
     }
@@ -177,7 +177,7 @@ struct Stage01Tests {
     /// Verifies CameraEngine initializes without throwing and exposes stateStream(),
     /// and that close() on a non-open engine completes without throwing.
     @Test func engineOpenCloseTransitions() async throws {
-        let engine = CameraEngine()
+        let engine = CameraEngine(initialPhase: .active)
 
         // stateStream() must return an AsyncStream<SessionState> (type-checks at compile time).
         let stream: AsyncStream<SessionState> = await engine.stateStream()

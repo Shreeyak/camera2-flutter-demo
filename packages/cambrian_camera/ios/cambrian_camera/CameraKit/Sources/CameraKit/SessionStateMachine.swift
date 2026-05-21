@@ -105,12 +105,12 @@ struct SessionStateMachine {
     /// listed as expected so the table accommodates the future state
     /// without immediately producing off-map logs.
     ///
-    /// `closed → paused` covers the SwiftUI scenePhase pre-`open()` path:
-    /// `notifyScenePhasePaused(true)` can fire at app launch before
-    /// `engine.open()` resolves. D-2P-07 makes the publish intentional
-    /// (Phase-3 Pigeon adapter / ErrorPresenter need to see pre-open
-    /// pauses on `stateStream`), so the table allows it as an expected
-    /// command-driven transition.
+    /// `closed → paused` is the pre-`open()` pause edge (D-2P-07). The
+    /// declarative model *records* a pre-open `.inactive`/`.background` phase as
+    /// `currentPhase` and `open()` applies it, rather than publishing `.paused`
+    /// from `.closed` directly (field guide §3a) — so the table keeps this as a
+    /// tolerated edge (Phase-3 Pigeon adapter / ErrorPresenter consume pre-open
+    /// pauses on `stateStream`), not an actively host-driven transition.
     private static let commandMap: [SessionState: Set<SessionState>] = [
         .closed: [.opening, .streaming, .paused],
         .opening: [.streaming, .closed, .error],

@@ -13,15 +13,36 @@ import UniformTypeIdentifiers
 /// ADR-07: All AVCaptureSession mutations go through sessionQueue.
 /// ADR-09: submissionGate guards every commandBuffer.commit() on the delivery queue.
 /// ADR-22: stateStream() returns AsyncStream<SessionState> buffered with .bufferingOldest.
-/// ADR-30: backgroundSuspend() / backgroundResume() use async-with-timeout for session lifecycle.
+/// ADR-30: async-with-timeout (runOnQueue) for session lifecycle — see Recording.swift finalize.
 /// ADR-32: Production code never creates AVCaptureDevice directly — CameraSession handles that.
+
+/// Test-only seam for the `.background` reconcile path (P2).
+///
+/// Nil in production, so the ordered suspend pays no array allocation and no park
+/// `await`. Consolidates the action trace and the one-shot latest-intent-wins
+/// interleave park that the suspend path used to thread through four standalone
+/// actor fields. Mutated only from `CameraEngine`'s actor-isolated methods, so it
+/// needs no `Sendable` conformance — the actor serializes every access and the
+/// instance never crosses an isolation boundary.
+final class LifecycleTestHook {
+    /// Ordered trace of the suspend steps (`disarm` / `finalize` / `drain` / `stop`).
+    var actions: [String] = []
+    /// One-shot: when set, the next `.background` reconcile parks at its
+    /// post-disarm checkpoint and suspends until released.
+    var parkArmed = false
+    /// True once an armed reconcile has parked.
+    var parked = false
+    /// Continuation the parked reconcile suspends on.
+    var parkRelease: CheckedContinuation<Void, Never>?
+}
+
 public actor CameraEngine {
 
     // MARK: - Private state
 
-    private var cameraSession: CameraSession?
-    private var captureDelegate: CaptureDelegate?
-    private var metalPipeline: MetalPipeline?
+    var cameraSession: CameraSession?
+    var captureDelegate: CaptureDelegate?
+    var metalPipeline: MetalPipeline?
     private var stillCapture: StillCapture?
     /// Stage 06: public consumer registry per D-01 / D-03.
     ///
@@ -45,14 +66,14 @@ public actor CameraEngine {
         Mutex<AsyncStream<CameraError>.Continuation?>(nil)
     private let cachedErrorStream = Mailbox<AsyncStream<CameraError>>()
     /// Authoritative SessionState — see `SessionStateMachine`.
-    private var stateMachine = SessionStateMachine()
+    var stateMachine = SessionStateMachine()
 
     /// Derived: open if any state other than `.closed`.
     ///
     /// Post-Stage-12 hardening: the prior stored `isOpen: Bool` was a
     /// 2-state degenerate view of a 7-case enum; `SessionStateMachine` is
     /// now the single source of truth. See DECISIONS entry 2026-05-15.
-    private var isOpen: Bool { stateMachine.current != .closed }
+    var isOpen: Bool { stateMachine.current != .closed }
     private var currentSettings: CameraSettings?
     /// Latest `ProcessingParameters` applied via `setProcessingParams(_:)`.
     ///
@@ -78,8 +99,8 @@ public actor CameraEngine {
     private let cachedStreamConfigStream = Mailbox<AsyncStream<StreamConfiguration>>()
     private var currentCropRegion: Rect?
 
-    private var watchdogs: WatchdogPair?
-    private var recovery: RecoveryCoordinator?
+    var watchdogs: WatchdogPair?
+    var recovery: RecoveryCoordinator?
     private let clock: any CameraKitClock
     private var aeMonitorTask: Task<Void, Never>?
     private var fpsWindowStartMs: UInt64 = 0
@@ -115,7 +136,59 @@ public actor CameraEngine {
 
     // MARK: - Public API
 
-    public init(clock: any CameraKitClock = SystemClock()) {
+    // Lifecycle reconciliation state (this block through `lifecycleTestHook`).
+    // The methods that read and mutate it live in `CameraEngine+Lifecycle.swift`;
+    // these are `internal` rather than `private` only so that extension can reach
+    // them. The "only the reconciliation path mutates phase/generation" invariant
+    // is by convention, not access control.
+
+    /// The host's current lifecycle phase — the single source of truth the
+    /// reconciliation routine reads.
+    ///
+    /// Set at construction (`initialPhase`) and on every `setLifecyclePhase(_:)`;
+    /// no `previousPhase`, no sticky flag. Mutated by the reconciliation path
+    /// (Task 5+); at construction it is only recorded.
+    var currentPhase: AppLifecyclePhase
+
+    /// Reconcile's last session-running *decision* — observability only.
+    ///
+    /// Never read by `reconcile` (so it is not a "sticky flag" the design
+    /// forbids — that rule bans reconcile *reading* prior phase/state). The test
+    /// pattern has no real `AVCaptureSession` to mirror (`_markOpenForTest`
+    /// leaves `cameraSession` nil), so this records the decision instead; tests
+    /// read it via `_isSessionRunningForTest`.
+    var reconciledSessionRunning = false
+
+    /// Monotonic generation for latest-intent-wins (F1).
+    ///
+    /// Bumped on every `reconcile` entry so a later call supersedes an in-flight
+    /// one; the `.background` path re-checks it after each suspending step and
+    /// aborts a superseded reconcile before it applies stale work.
+    var reconcileGeneration: UInt64 = 0
+
+    /// Camera-permission probe the `.active` reconcile reads to detect mid-session
+    /// revocation — injectable for tests (defaults to the live AVFoundation check).
+    ///
+    /// See `_setPermissionStatusForTest`. Only relevant on a `.background → .active`
+    /// resume: backgrounding stops the session, so the app survives a permission
+    /// revocation in Settings that would otherwise terminate a process holding a
+    /// live capture session.
+    var permissionStatusProvider: () -> CameraPermissionStatus = {
+        CameraEngine.cameraPermissionStatus()
+    }
+
+    /// Test-only seam for the `.background` reconcile path — nil in production (P2).
+    ///
+    /// Holds the ordered action trace (so a unit test can assert
+    /// `disarm < drain < stop` without real hardware) and the one-shot
+    /// latest-intent-wins interleave park. Installed by
+    /// `_installLifecycleTestHookForTest()` / `_armBackgroundReconcileParkForTest()`;
+    /// when nil the suspend records nothing and the park is a no-op. See
+    /// `LifecycleTestHook`.
+    var lifecycleTestHook: LifecycleTestHook?
+
+    public init(initialPhase: AppLifecyclePhase, clock: any CameraKitClock = SystemClock()) {
+        self.currentPhase = initialPhase
         self.clock = clock
         // Bug 5 (docs/stage-11-pre-existing-bugs.md): eagerly construct each
         // cached stream so its continuation is installed in the box *before*
@@ -274,10 +347,11 @@ public actor CameraEngine {
         // Install KVO ingest so `lastSnapshot` is populated for Rule 3.
         await device.installKVOIngest()
 
-        // 7. Open the gate (idempotent — starts true; explicit after any prior close).
-        submissionGate.store(true, ordering: .sequentiallyConsistent)
-
-        // 8. Stage 09: watchdogs + recovery coordinator.
+        // 7. Stage 09: watchdogs + recovery coordinator. Construct the pair +
+        //    coordinator here (reconcile()/armWatchdogs reference self.watchdogs);
+        //    the gate-open and watchdog *arm* are deferred to the reconcile() below
+        //    — it is the sole lifecycle actuator (P1), so open() no longer eagerly
+        //    actuates state the gated phases would immediately undo.
         let gpu = Watchdog(kind: .gpu, clock: clock) { [weak self] fire in
             Task { [weak self] in await self?.handleWatchdogFire(fire) }
         }
@@ -306,7 +380,6 @@ public actor CameraEngine {
             }
         )
         self.recovery = RecoveryCoordinator(clock: clock, hooks: hooks)
-        armWatchdogs()
 
         startAEMonitor(device: device)
 
@@ -335,13 +408,22 @@ public actor CameraEngine {
             }
         }
 
-        // 9b. Start running on sessionQueue (ADR-07).
-        session.sessionQueue.async {
-            session.startRunning()
-        }
-
-        // 10. Publish .streaming state.
-        publishState(.streaming, kind: .command)
+        // 9b. Reconcile hardware to the host's current phase, and publish the
+        //     phase-appropriate `SessionState` label. This is the SOLE lifecycle
+        //     actuator at open (P1): it sets the gate, starts the session, arms
+        //     the watchdogs, and publishes the label from `currentPhase` alone.
+        //     Opening into `.background` skips `startRunning` (F4 — no camera with
+        //     no foreground UI) and publishes `.paused`; `.inactive` starts with
+        //     the gate closed and publishes `.paused`; `.active` goes fully live
+        //     (gate open + watchdogs armed) and publishes `.streaming`. (ADR-07:
+        //     `startRunning` runs on sessionQueue inside the routine.)
+        //
+        //     `reconcile` owns the post-open label now (spec *OS-authoritative
+        //     label*): no separate `publishState(.streaming)` follows — that would
+        //     clobber the gated phases' `.paused` back to `.streaming` (the old
+        //     background-launch label-vs-gate mismatch). open() reaches here at
+        //     `.closed`, so the `.opening → .paused` defer rider does not bite.
+        await reconcile()
 
         // Apply persisted ProcessingParameters if any (07-settings.md §Persistence).
         if let persistedProcessing = SettingsPersistence.loadProcessing() {
@@ -515,62 +597,15 @@ public actor CameraEngine {
         return stream
     }
 
-    private func publishError(_ err: CameraError) {
+    // Internal (not private) so the reconciliation extension can surface a
+    // `.permissionDenied` on mid-session revocation — mirrors `publishState`.
+    func publishError(_ err: CameraError) {
         errorContinuationBox.withLock { $0?.yield(err) }
     }
 
     /// Test-only: emit an arbitrary CameraError without driving the recovery machine.
     func _emitErrorForTest(_ err: CameraError) {
         publishError(err)
-    }
-
-    /// Publishes `.paused` (when `paused == true`) or `.streaming` for SwiftUI scenePhase pause/resume.
-    ///
-    /// Covers Control Center pull-down, Notification Center, app-switcher
-    /// peek, etc. The camera stays bound across these transitions; only GPU
-    /// submission is gated. Phase-2 follow-up to §2d.5 (distinct from the
-    /// AVF-interruption `.interrupted` case).
-    ///
-    /// Caller (the app's SwiftUI `ScenePhase` observer) is still responsible
-    /// for the gate via `setGate` — this method only mirrors the lifecycle
-    /// transition into `SessionState` so downstream consumers
-    /// (`ErrorPresenterViewModel`, Phase-3's Pigeon adapter) see a consistent
-    /// pause/resume signal.
-    ///
-    /// The mirror defers to OS-driven events when the state machine sits in an
-    /// OS-owned origin (`.interrupted`, `.recovering`, `.error`). From those
-    /// states the only legitimate `.command` transition is `.closed`, so a
-    /// scenePhase-driven `.streaming`/`.paused` is off-map — and worse, would
-    /// overwrite the OS's truth with a wrong value. `SessionStateMachine` is the
-    /// single source of truth: if `classify` rejects the mirrored transition we
-    /// skip the publish (logged) and let the OS event path restore `.streaming`
-    /// (`onSessionEvent(.otherInterruptionEnded)`, recovery completion). This
-    /// also closes the symmetric `.opening → .paused` hole. Caught under
-    /// `test_device`, where a harness/bring-up AVF interruption races a
-    /// `.active` scenePhase into the off-map path in `publishState` — a
-    /// wrong-value overwrite of OS-owned state (a DEBUG abort too, before Fix 2). The
-    /// background stall-watchdog disarm (`.otherInterruption` / `backgroundSuspend`)
-    /// is the complementary half of the HITL background-crash fix (measurements
-    /// 2026-05-20 §1, case #12).
-    ///
-    /// Known gap (out of scope — D-06 gate owns correctness): if an interruption
-    /// ends while the app is backgrounded, the OS publishes `.streaming (event)`
-    /// but the ViewModel won't re-issue `notifyScenePhasePaused(true)` until the
-    /// next scenePhase change — the machine reads `.streaming` while the gate is
-    /// still closed. A truthfulness gap, not a crash.
-    public func notifyScenePhasePaused(_ paused: Bool) {
-        let target: SessionState = paused ? .paused : .streaming
-        let from = stateMachine.current
-        if SessionStateMachine.classify(from: from, to: target, kind: .command) == .offMap {
-            CameraKitLog.notice(
-                .engine,
-                "[scenePhase] skipping mirror from=\(from.rawValue) "
-                    + "to=\(target.rawValue) kind=command caller=\(#function) "
-                    + "(deferring to OS-driven state)"
-            )
-            return
-        }
-        publishState(target, kind: .command)
     }
 
     /// Test-only: drive the state machine into `.streaming` so teardown paths
@@ -590,10 +625,69 @@ public actor CameraEngine {
     /// running session, i.e. an already-open engine.
     func _markOpenForTest() {
         stateMachine._setCurrentForTest(.streaming)
+        // Seed the phase-derived hardware mirror the way open()-then-reconcile
+        // would leave it for `currentPhase`, so phase-dependent tests (cheap
+        // pause, F4) start from a faithful post-open state without real hardware
+        // (`cameraSession` stays nil). Task 5 as-built.
+        reconciledSessionRunning = (currentPhase != .background)
+        setGate(currentPhase == .active)
     }
 
     /// Test-only: read the state machine's current `SessionState` (stateStream only yields on publish).
     var _currentStateForTest: SessionState { stateMachine.current }
+
+    /// Test-only: read the engine's current lifecycle phase.
+    var _currentPhaseForTest: AppLifecyclePhase { currentPhase }
+
+    /// Test-only: drive the state machine to an arbitrary `SessionState` without emission.
+    ///
+    /// Mirrors `_markOpenForTest`'s direct poke. The only way to observe the
+    /// `.opening` origin — no engine command publishes `.opening` (`open()`
+    /// jumps `.closed → .streaming`), so the `shouldDeferCommandLabel`
+    /// `.opening → .paused` rider is otherwise untestable at the engine level.
+    func _setStateForTest(_ state: SessionState) { stateMachine._setCurrentForTest(state) }
+
+    /// Test-only: reconcile's last session-running decision.
+    ///
+    /// Logical mirror, not a hardware probe — see `reconciledSessionRunning`.
+    /// `_markOpenForTest` seeds it from `currentPhase`.
+    var _isSessionRunningForTest: Bool { reconciledSessionRunning }
+
+    /// Test-only: install the `.background` reconcile seam (idempotent).
+    ///
+    /// Required before a test reads `_backgroundActionsForTest` after a plain
+    /// `.background` transition; the park accessors install it implicitly.
+    func _installLifecycleTestHookForTest() {
+        if lifecycleTestHook == nil { lifecycleTestHook = LifecycleTestHook() }
+    }
+
+    /// Test-only: override the camera-permission probe the `.active` reconcile
+    /// reads (drives the mid-session-revocation guard without real Settings).
+    func _setPermissionStatusForTest(_ status: CameraPermissionStatus) {
+        permissionStatusProvider = { status }
+    }
+
+    /// Test-only: ordered trace of the most recent `.background` reconcile.
+    var _backgroundActionsForTest: [String] { lifecycleTestHook?.actions ?? [] }
+
+    /// Test-only: arm a one-shot park of the next `.background` reconcile at its
+    /// post-disarm checkpoint (latest-intent-wins interleave test).
+    ///
+    /// Installs the seam if needed. One-shot — call again to re-arm for a second park.
+    func _armBackgroundReconcileParkForTest() {
+        _installLifecycleTestHookForTest()
+        lifecycleTestHook?.parkArmed = true
+    }
+
+    /// Test-only: true once the armed `.background` reconcile has parked.
+    var _isBackgroundReconcileParkedForTest: Bool { lifecycleTestHook?.parked ?? false }
+
+    /// Test-only: release a parked `.background` reconcile so it resumes (and
+    /// aborts if a later phase superseded it).
+    func _releaseBackgroundReconcileParkForTest() {
+        lifecycleTestHook?.parkRelease?.resume()
+        lifecycleTestHook?.parkRelease = nil
+    }
 
     /// Called from `CaptureDelegate` on every sample buffer (nonisolated — delivery queue).
     nonisolated func tickFrame() {
@@ -739,7 +833,7 @@ public actor CameraEngine {
         // during a resolution change (measurements 2026-05-20 §1, P2b).
         pipeline.seedPreviewMailboxes()
 
-        captureDelegate?.logNextFrame = true
+        captureDelegate?.framesToLog = 1
         submissionGate.store(true, ordering: .sequentiallyConsistent)
         await session.startRunningAsync()
         CameraKitLog.notice(
@@ -749,54 +843,11 @@ public actor CameraEngine {
         publishStreamConfiguration()
     }
 
-    /// Signals the app entered background.
-    ///
-    /// Gates GPU submission, drains any in-flight
-    /// frame, and stops the capture session via sessionQueue with timeout (ADR-30).
-    ///
-    /// Disarms the stall watchdogs and cancels any pending recovery retry (Inv 9):
-    /// the session is being stopped on purpose, so no frames are expected and a
-    /// stall is not a fault. Leaving them armed fires spurious recovery while
-    /// backgrounded, which collides with the OS-interruption state and aborts in
-    /// DEBUG — the HITL background crash (measurements 2026-05-20 §1). Re-armed by
-    /// `backgroundResume()`.
-    public func backgroundSuspend() async {
-        CameraKitLog.notice(.engine, "[bgsuspend] enter gate=false stopRunning")
-        submissionGate.store(false, ordering: .sequentiallyConsistent)
-        watchdogs?.disarmAll()
-        await recovery?.cancelPendingRetry()
-        if recording != nil {
-            CameraKitLog.notice(
-                .engine, "[bgsuspend] active recording — finalizing via background-task drain")
-            _ = await finalizeActiveRecording(reason: .user)
-        }
-        await drainSubmittedFrame()
-        if let session = cameraSession {
-            captureDelegate?.logNextFrame = true
-            await session.stopRunningAsync()
-        }
-        CameraKitLog.notice(.engine, "[bgsuspend] stopRunning returned")
-    }
-
-    /// Signals the app returned to foreground.
-    ///
-    /// Re-opens the GPU submission gate and restarts the capture session that was
-    /// stopped by `backgroundSuspend()`.
-    public func backgroundResume() async {
-        CameraKitLog.notice(
-            .engine,
-            "[bgresume] enter gate=true sessionRunning=\(cameraSession?.avSession.isRunning == true)")
-        submissionGate.store(true, ordering: .sequentiallyConsistent)
-        CameraKitLog.notice(.engine, "[bgresume] gate opened")
-        if let session = cameraSession {
-            await session.startRunningAsync()
-            CameraKitLog.notice(
-                .engine,
-                "[bgresume] startRunning returned sessionRunning=\(session.avSession.isRunning)")
-            // Frames resume — re-arm the watchdogs disarmed by backgroundSuspend().
-            armWatchdogs()
-        }
-    }
+    // MARK: - App lifecycle (reconciliation)
+    //
+    // The host-intent reconciliation cluster — `setLifecyclePhase` / `reconcile` /
+    // `startSessionIfNeeded` / the OS-owned guard / command-label publish — lives
+    // in CameraEngine+Lifecycle.swift.
 
     /// Debug: dump every `AVCaptureDevice.Format` the active device exposes.
     ///
@@ -1482,7 +1533,7 @@ public actor CameraEngine {
 
     // MARK: - Stage 10: Recording
 
-    private var recording: Recording?
+    var recording: Recording?
     private nonisolated let recordingContinuationBox =
         Mutex<AsyncStream<RecordingState>.Continuation?>(nil)
     private let cachedRecordingStream = Mailbox<AsyncStream<RecordingState>>()
@@ -1581,9 +1632,9 @@ public actor CameraEngine {
     /// background-task assertion inside `Recording.stop`,
     /// 06-capture-and-recording.md §Background drain — then optionally
     /// publishes the result to Photos. Shared by `stopRecording()`, `pause()`,
-    /// and `backgroundSuspend()`, the three triggers named in the Stage 12
-    /// brief. Returns the output URI, or `""` when no recording is active.
-    private func finalizeActiveRecording(reason: Recording.StopReason) async -> String {
+    /// and `reconcile()`'s `.background` path (the three triggers named in the
+    /// Stage 12 brief). Returns the output URI, or `""` when no recording is active.
+    func finalizeActiveRecording(reason: Recording.StopReason) async -> String {
         guard let rec = recording, let pipeline = metalPipeline else { return "" }
         pipeline.isRecording.store(false, ordering: .sequentiallyConsistent)
         let uri = await rec.stop(reason: reason)
@@ -1625,27 +1676,6 @@ public actor CameraEngine {
         return uri
     }
 
-    /// Pauses capture and finalizes any active recording.
-    ///
-    /// The finalize runs through `Recording.stop`, whose drain is wrapped in a
-    /// `UIApplication` background-task assertion (06-capture-and-recording.md
-    /// §Background drain) so a concurrent backgrounding cannot truncate it
-    /// into a corrupt MP4.
-    public func pause() async throws {
-        _ = await finalizeActiveRecording(reason: .pause)
-        await cameraSession?.stopRunningAsync()
-        publishState(.paused, kind: .command)
-    }
-
-    /// Resumes capture after a pause().
-    ///
-    /// - Throws: `EngineError.notOpen` if the engine has not been opened.
-    public func resume() async throws {
-        guard isOpen, let session = cameraSession else { throw EngineError.notOpen }
-        await session.startRunningAsync()
-        publishState(.streaming, kind: .command)
-    }
-
     func publishRecordingStateFromHook(_ s: RecordingState) {
         publishRecordingState(s)
     }
@@ -1659,7 +1689,7 @@ public actor CameraEngine {
 
     /// Sets the GPU submission gate (ADR-09, D-06).
     /// `.inactive` policy is strict — always gates, regardless of UIApplication state.
-    public func setGate(_ open: Bool) {
+    func setGate(_ open: Bool) {
         submissionGate.store(open, ordering: .sequentiallyConsistent)
     }
 
@@ -1667,7 +1697,7 @@ public actor CameraEngine {
     ///
     /// Bounds the drain window to FRAME_LATENCY_BUDGET_MS (ADR-09).
     /// No-op if no buffer has been committed yet this session.
-    public func drainSubmittedFrame() async {
+    func drainSubmittedFrame() async {
         metalPipeline?.drainLastBuffer()
     }
 
@@ -1678,7 +1708,7 @@ public actor CameraEngine {
 
     // MARK: - Private helpers
 
-    private func publishState(
+    func publishState(
         _ state: SessionState,
         kind: SessionStateMachine.Kind,
         function: String = #function
@@ -1718,8 +1748,8 @@ public actor CameraEngine {
     /// Arm both stall watchdogs against the current session token.
     ///
     /// `Watchdog.arm` is self-canceling (it cancels any prior poller), so this
-    /// is safe to call to (re-)arm on `open()`, on `backgroundResume()`, and on
-    /// `.otherInterruptionEnded`. No-op when the engine is closed
+    /// is safe to call to (re-)arm on `open()`, on `reconcile()`'s `.active` path,
+    /// and on `.otherInterruptionEnded`. No-op when the engine is closed
     /// (`watchdogs == nil`).
     ///
     /// Gate-guarded: if `submissionGate` is closed, arming is skipped (HITL
@@ -1729,9 +1759,9 @@ public actor CameraEngine {
     /// frames flowing, it fired ~9 s later, and drove `interrupted → recovering`
     /// (off-map — it aborted DEBUG builds before Fix 2, and still spuriously
     /// recovers a backgrounded session). The watchdog must only arm when frames
-    /// can actually flow, which the gate tracks. `open()` and `backgroundResume()`
-    /// both open the gate before calling this, so they are unaffected.
-    private func armWatchdogs() {
+    /// can actually flow, which the gate tracks. `open()` and reconcile()'s
+    /// `.active` path both open the gate before calling this, so they are unaffected.
+    func armWatchdogs() {
         guard let pair = watchdogs else { return }
         guard submissionGate.load(ordering: .acquiring) else {
             CameraKitLog.notice(
@@ -1754,6 +1784,14 @@ public actor CameraEngine {
                 if snap.isAdjustingExposure {
                     if searchStartMs == nil { searchStartMs = clock.nowMs() }
                 } else {
+                    // Resume-latency instrumentation (t2): log AE convergence after
+                    // a search. After a Control Center / interruption resume the
+                    // camera may re-converge exposure — if frames arrive fast (t1
+                    // small) but the preview still looks delayed, this is the cause.
+                    if let start = searchStartMs {
+                        CameraKitLog.notice(
+                            .engine, "[ae] converged (t2) after \(clock.nowMs() &- start)ms searching")
+                    }
                     searchStartMs = nil
                 }
                 if let start = searchStartMs,
@@ -1868,11 +1906,26 @@ public actor CameraEngine {
             await recovery?.cancelPendingRetry()
             publishState(.interrupted, kind: .event)
         case .otherInterruptionEnded:
+            // Resume-latency instrumentation (t0): arm the one-shot first-frame
+            // log so the capture delegate's `[resume] first frame (t1)` measures
+            // AVF's re-delivery latency after the OS ends the interruption (t1−t0).
+            captureDelegate?.framesToLog = 1
             CameraKitLog.notice(
-                .engine, "[interruption] ended — reverting to .streaming")
+                .engine, "[resume] interruption ended (t0) — reconciling against currentPhase")
+            // OS → phase, the third `reconcile` actuation site (spec *The OS-owned
+            // guard*): OS recovery must not fight the host. Clear the OS-owned
+            // state FIRST with an `.event`-kind `.streaming` (the OS's
+            // authoritative "interruption ended"), so `osOwnsDevice` is already
+            // false when `reconcile` runs — otherwise `reconcile`'s own
+            // `publishCommandLabel(.streaming)` would defer under `osOwnsDevice`
+            // and the label would stay stuck at `.interrupted`. THEN reconcile
+            // against `currentPhase`: while `.background` the session stays
+            // stopped (no camera LED — the gate gates GPU submission, not
+            // `AVCaptureSession` running) and the label settles at `.paused`;
+            // while `.inactive` it restarts gate-closed; only `.active` goes fully
+            // live (re-arming the watchdogs disarmed on `.otherInterruption`).
             publishState(.streaming, kind: .event)
-            // Frames resume — re-arm the watchdogs disarmed on .otherInterruption.
-            armWatchdogs()
+            await reconcile()
         }
     }
 

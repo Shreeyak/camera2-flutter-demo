@@ -13,6 +13,17 @@ public enum SessionState: String, Sendable, Hashable {
     case interrupted
 }
 
+/// The host's current visibility.
+///
+/// The only lifecycle vocabulary a host needs — nothing about gates, drains, or
+/// sessions. The host forwards it via `CameraEngine.setLifecyclePhase(_:)`; the
+/// engine reconciles hardware to the target each phase implies.
+public enum AppLifecyclePhase: Sendable {
+    case active  // foreground & interactive
+    case inactive  // visible but not receiving input (Control Center, call banner, app-switcher peek)
+    case background  // not visible
+}
+
 public enum RecordingState: Sendable, Hashable {
     case idle(lastUri: String?)
     case recording

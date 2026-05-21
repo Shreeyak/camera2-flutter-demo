@@ -1,3 +1,135 @@
+# state.md — Lifecycle ownership (2026-05-21)
+
+Single declarative lifecycle API: the host forwards `AppLifecyclePhase` via
+`CameraEngine.setLifecyclePhase(_:)`; the package owns one reconciliation routine
+that derives all hardware state (gate, session, watchdogs, label) from the
+current phase alone. See the field guide `docs/ios-camera-lifecycle.md`.
+
+## What's now permanent — lifecycle ownership
+
+- **Public API:** `AppLifecyclePhase` (`.active`/`.inactive`/`.background`,
+  `Sendable`); `CameraEngine.setLifecyclePhase(_:) async` (never throws, latest
+  call wins); a **required** `initialPhase: AppLifecyclePhase` init parameter —
+  no default (an `.active` default would turn the camera on before any foreground
+  UI; adversarial review F4).
+- **One reconciliation routine, three actuation sites** — `open()`,
+  `setLifecyclePhase`, and the OS-recovery exit
+  (`onSessionEvent(.otherInterruptionEnded)`). Each reads `currentPhase` alone
+  (no previous-phase tracking) and reconciles to the target table: `.active` →
+  gate open / session running / watchdogs armed; `.inactive` → gate closed /
+  running / disarmed (cheap ~4 ms pause); `.background` → gate closed / session
+  stopped (recording finalized first) / disarmed.
+- **latest-intent-wins (F1):** a monotonic `reconcileGeneration` captured at
+  entry and re-checked after each suspending `.background` step; a superseded
+  in-flight reconcile aborts before applying stale work.
+- **OS-owned guard (F2), both directions:** `osOwnsDevice` (`current ∈
+  {.interrupted,.recovering,.error}`) blocks `startRunning` + watchdog-arm in
+  `.active`/`.inactive`; the OS-recovery exit reconciles against `currentPhase`,
+  so `interruptionEnded` while backgrounded leaves the session stopped (no camera
+  LED). `shouldDeferCommandLabel` (adds the `.opening→.paused` rider) defers the
+  reconcile-owned `.streaming`/`.paused` label to OS truth.
+- **Host migrated:** `ViewModel.handleScenePhase` is a 1:1
+  `setLifecyclePhase(map(scenePhase))` forward; `cameFromBackground` removed.
+
+## What changed / was removed — lifecycle ownership
+
+- `open()`'s step-10 unconditional `publishState(.streaming)` removed — reconcile
+  owns the post-open label (a `.background`/`.inactive` launch now publishes
+  `.paused`, closing the old label-vs-gate launch gap).
+- `setGate` / `drainSubmittedFrame` / `notifyScenePhasePaused` /
+  `backgroundSuspend` / `backgroundResume` demoted `public → internal` (host no
+  longer calls them; tests reach them via `@testable import`).
+- `pause()` / `resume()` removed (committed earlier; baseline-verified).
+
+## Public API exposed — lifecycle additions
+
+- `enum AppLifecyclePhase: Sendable { case active, inactive, background }`
+- `CameraEngine.init(initialPhase:clock:)` — `initialPhase` required, no default.
+- `func setLifecyclePhase(_ phase: AppLifecyclePhase) async`
+
+## Manual test evidence — lifecycle
+
+- **210/210** unit tests green on device (iPad Pro 11", iPad8,9, iOS 26.4),
+  including the `LifecycleTests` suite (25 tests: reconciliation, latest-intent-
+  wins F1, OS-owned guard F2, third actuation site OS→phase, event-vs-event F5).
+- **Device HITL: verified 2026-05-21** (iPad Pro 11", iPad8,9, iOS 26.4.2) —
+  preview live on launch; foreground/background round-trips (short + long >5 s)
+  resume fast with the camera LED off while backgrounded; recording across a
+  background produces an uncorrupted `.mp4` (finalize-before-stop); Control Center
+  interrupt + dismiss resumes with no error. No off-map / spurious recovery /
+  crash in any HITL session; the F2 `osOwnsDevice` deferral and Task 8 OS→phase
+  reconcile both fire correctly on device. The ~500 ms Control Center resume is
+  **root-caused as iOS/iPadOS platform behavior** (not an app defect): with
+  full-pipeline instrumentation, AVF delivery resumes at +10 ms, the preview
+  texture is live at +38 ms, and fresh frames are blitted + GPU-presented at
+  +13–19 ms — but the system holds a snapshot of the app during the Control
+  Center transition, so the last frame stays visible ~500–1000 ms. Confirmed
+  against Apple's first-party Camera app, which shows the identical delay on the
+  same device. Not app-fixable; an optional cosmetic match (blur-while-`.inactive`)
+  is noted in the measurements doc. F4 (camera-off on
+  background *launch*) not separately
+  reproduced — structurally guaranteed by `initialPhase: .background` + reconcile;
+  defer to natural occurrence. Evidence:
+  `measurements/lifecycle-ownership/2026-05-21-device-hitl.md`.
+
+## Follow-ups
+
+### Closed (this branch)
+
+- **Dead `backgroundSuspend`/`backgroundResume` pair** — ✅ removed (commit
+  `7f6e6c4`), along with `notifyScenePhasePaused` and the redundant tests; the
+  doc refs were repointed and coverage folded into the `setLifecyclePhase`-driven
+  tests. `reconcile`'s `.active`/`.background` paths own the behavior.
+- **`sensitiveContentMitigationActivated` interruption reason** — ✅ addressed
+  (diagnostics): `CameraSession.interruptionReasonName` decodes every
+  `AVCaptureSession.InterruptionReason` (incl. this one) in the `[interruption]`
+  log. No control-flow change, because the reason **cannot fire for CameraKit** —
+  it requires an `SCVideoStreamAnalyzer` associated with the device input (we
+  attach none) and would not auto-recover via `interruptionEndedNotification`
+  (it needs the analyzer's `continueStream`). Marked N/A inline.
+- **Mid-session permission revocation** — ✅ modeled (camera): `reconcile`'s
+  `.active` path re-checks `permissionStatusProvider()`; if not `.authorized` it
+  skips the session restart and emits `.permissionDenied` on the error stream
+  (state stays `.paused`) — matching `open()`'s `cameraDenied` precedent. Only the
+  `.background → .active` resume is reachable (backgrounding stops the session, so
+  the app survives a Settings revocation that would otherwise terminate a process
+  holding a live session; revocation *while active* kills the app — unmodelable).
+  **Route revocation is N/A — CameraKit captures no audio.** Test:
+  `LifecycleTests.activeResumeBlockedWhenPermissionRevoked`.
+
+### Seam-adjacent — but really a different subsystem
+
+- **`StopReason.pause` production-dead** ⚠️ — surfaced because recording-finalize
+  is the `.background` suspend step (and we edited `finalizeActiveRecording`'s
+  doc), but the dead `.pause` case is a Recording-API artifact (no `pause()`
+  caller; the suspend uses `.user`). Fix it as recording dead-code cleanup, not as
+  part of the lifecycle phase model — file under recording, not here.
+
+### Does not fit — orthogonal
+
+- **`Stage06Tests.frameSetPublication` cold-build flake** ❌ — a pre-existing
+  test-reliability bug in the tracker/frame-publication path (force-unwrap of a
+  not-yet-delivered frame at `:61`). No connection to lifecycle, not in code we
+  touched — a test-infra/timing issue; track it separately. Root cause: a clean
+  build's first run finds the tracker `FrameSet` hasn't arrived within the fixed
+  200 ms `Task.sleep` because uncached Metal shader compilation slows the first
+  `pipeline.encode` (the test drives `MetalPipeline` directly with `gateOpen:
+  true`, no engine lifecycle); the crash cascades to the 4 parallel timing tests,
+  and a warm re-run is green. Harden: force-unwrap → `#require`/guarded `XCTFail`,
+  fixed sleep → bounded polling.
+
+## Downstream — cam2fd Flutter plugin (documented, not edited here)
+
+The plugin's **native** Swift layer (`FlutterSceneLifeCycleDelegate`) maps
+UIScene callbacks → `AppLifecyclePhase` → `setLifecyclePhase`
+(`resumed→.active`, `inactive→.inactive`, `hidden`/`paused→.background`,
+`detached→`skip); the **Dart** layer stops forwarding lifecycle and drives its
+own widget rendering off `stateStream`/`EventChannel`. Mirror
+`CameraKit/README.md`'s Dart-side guidance into the cam2fd Flutter-facing README
+(the CameraKit README is the source of truth).
+
+---
+
 # state.md — 8-bit BGRA end-to-end delivery (2026-05-20)
 
 Pre-Phase-3 cleanup that commits CameraKit to a single delivery format.
@@ -1098,7 +1230,7 @@ Per Stage 11 brief §11. iPad device manual passes captured separately; not bloc
 
 ## Open questions for next stage
 
-- Bug 4 from `docs/stage-11-pre-existing-bugs.md` — `processedTex` long-session freeze. Needs HITL on iPad: 5+ min run + temporary Pass 2 / pool-state logging in `MetalPipeline`. Hypotheses (unverified): silent Pass 2 error, processed pool exhaustion, uniforms.withLock contention, ObservationIgnored race on `DisplayViewModel.processedTex`. Fix before retiring `10:synchronous-drain-pause` in Stage 12.
+- ~~Bug 4 from `docs/stage-11-pre-existing-bugs.md` — `processedTex` long-session freeze. Needs HITL on iPad: 5+ min run + temporary Pass 2 / pool-state logging in `MetalPipeline`. Hypotheses (unverified): silent Pass 2 error, processed pool exhaustion, uniforms.withLock contention, ObservationIgnored race on `DisplayViewModel.processedTex`. Fix before retiring `10:synchronous-drain-pause` in Stage 12.~~ **RESOLVED (2026-05-21 audit).** Stale entry: bug was fixed 2026-04-30 / verified on iPad 2026-05-09 (live mailbox forwarding), and the strand-prone still-capture mailbox was later deleted entirely by D-2P-12 (8-bit BGRA, 2026-05-20) — grep for `stillCapturePool|armCapture|pendingCaptureContinuation` under `CameraKit/Sources/` returns 0 hits. Processed lane now uses per-frame `Mailbox` forwarding (`MetalPipeline.swift:684-686, 766-767`). See `docs/pending-issues-2026-05-21.md`.
 - `SessionState.closing` enum reconciliation (Decision #50). Either add the case in `architecture/04-state.md` and use it, or drop `.closing` from brief §8 enablement matrix.
 - HITL evidence under `measurements/stage-11/` — three slugs deferred.
 - ADR-22 error routing for `updateSettings` failures (Decision #58).

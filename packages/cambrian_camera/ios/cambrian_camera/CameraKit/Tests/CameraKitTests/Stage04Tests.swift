@@ -155,7 +155,7 @@ struct Stage04Tests {
 
         // Engine-level out-of-bounds throw — exercise via CameraEngine when
         // session is nil → notOpen path. (Open path requires camera hardware.)
-        let engine = CameraEngine()
+        let engine = CameraEngine(initialPhase: .active)
         let oob = Rect(x: 0, y: 0, width: 99999, height: 99999)
         await #expect(throws: EngineError.self) {
             try await engine.setCropRegion(oob)
@@ -171,7 +171,7 @@ struct Stage04Tests {
     /// `notOpen` guard, so this asserts `EngineError` like the OOB case (an
     /// opened engine maps the same rect to `.settingsConflict`).
     @Test func setCropRegionRejectsOddCoords() async throws {
-        let engine = CameraEngine()
+        let engine = CameraEngine(initialPhase: .active)
         let odd = Rect(x: 1, y: 0, width: 800, height: 600)
         await #expect(throws: EngineError.self) {
             try await engine.setCropRegion(odd)

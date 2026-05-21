@@ -65,7 +65,7 @@ public actor RecoveryCoordinator {
         consecutiveHwErrors = 0
     }
 
-    /// Cancel any pending retry — called from close() and backgroundSuspend() (Inv 9).
+    /// Cancel any pending retry — called from close() and reconcile()'s .background path (Inv 9).
     public func cancelPendingRetry() {
         retryTask?.cancel()
         retryTask = nil

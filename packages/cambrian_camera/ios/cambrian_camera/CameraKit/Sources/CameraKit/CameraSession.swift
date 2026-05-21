@@ -342,11 +342,39 @@ final class CameraSession: @unchecked Sendable {
 
     // MARK: - Private event handlers
 
+    /// Human-readable name for an interruption reason — diagnostics only.
+    ///
+    /// The engine treats every reason except `videoDeviceInUseByAnotherClient`
+    /// through the same generic interrupted → reconcile path, so this is for the
+    /// log, not control flow. `sensitiveContentMitigationActivated` is decoded for
+    /// completeness but is not expected for CameraKit: it only fires when an
+    /// `SCVideoStreamAnalyzer` is associated with the device input (CameraKit
+    /// attaches none) and would not auto-recover via `interruptionEndedNotification`
+    /// (it needs the analyzer's `continueStream`).
+    private static func interruptionReasonName(_ raw: Int) -> String {
+        guard let reason = AVCaptureSession.InterruptionReason(rawValue: raw) else {
+            return "invalid(\(raw))"
+        }
+        switch reason {
+        case .videoDeviceNotAvailableInBackground: return "videoDeviceNotAvailableInBackground"
+        case .audioDeviceInUseByAnotherClient: return "audioDeviceInUseByAnotherClient"
+        case .videoDeviceInUseByAnotherClient: return "videoDeviceInUseByAnotherClient"
+        case .videoDeviceNotAvailableWithMultipleForegroundApps:
+            return "videoDeviceNotAvailableWithMultipleForegroundApps"
+        case .videoDeviceNotAvailableDueToSystemPressure:
+            return "videoDeviceNotAvailableDueToSystemPressure"
+        case .sensitiveContentMitigationActivated: return "sensitiveContentMitigationActivated"
+        @unknown default: return "unknown(\(raw))"
+        }
+    }
+
     private func handleInterruption(note: Notification, ended: Bool) {
         let rawReason = note.userInfo?[AVCaptureSessionInterruptionReasonKey] as? Int ?? -1
         let keys = note.userInfo?.keys.map { "\($0)" } ?? []
         CameraKitLog.notice(
-            .engine, "[interruption] ended=\(ended) rawReason=\(rawReason) keys=\(keys)")
+            .engine,
+            "[interruption] ended=\(ended) reason=\(Self.interruptionReasonName(rawReason)) "
+                + "rawReason=\(rawReason) keys=\(keys)")
         let reason = AVCaptureSession.InterruptionReason(rawValue: rawReason)
         if reason == .videoDeviceInUseByAnotherClient {
             onSessionEvent?(ended ? .cameraInUseEnded : .cameraInUseBegan)

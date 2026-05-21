@@ -31,8 +31,15 @@ final class CaptureDelegate: NSObject, AVCaptureVideoDataOutputSampleBufferDeleg
     /// Set by `CameraEngine` in `open()` before `startRunning()`.
     var watchdogs: WatchdogPair?
 
-    /// Set to true by backgroundSuspend; logs once when the next frame arrives.
-    nonisolated(unsafe) var logNextFrame: Bool = false
+    /// Resume-cadence probe: number of upcoming delivered frames still to log.
+    ///
+    /// Armed by the engine (`reconcile(.active)`, interruption-ended, resolution
+    /// change) to a small budget; each delivered frame logs its arrival
+    /// (dims/format + the log's own timestamp) and decrements. The sequence of
+    /// timestamps reveals whether AVF delivery is continuous after a resume or
+    /// stalls after the first frame. nonisolated(unsafe): set on the actor,
+    /// read/decremented on the delivery queue — a benign diagnostic race.
+    nonisolated(unsafe) var framesToLog: Int = 0
 
     // MARK: - Init
 
@@ -51,8 +58,14 @@ final class CaptureDelegate: NSObject, AVCaptureVideoDataOutputSampleBufferDeleg
         didOutput sampleBuffer: CMSampleBuffer,
         from connection: AVCaptureConnection
     ) {
-        if logNextFrame {
-            logNextFrame = false
+        if framesToLog > 0 {
+            framesToLog -= 1
+            // PTS = capture timestamp. Advancing ~33 ms/frame through a resume ⇒
+            // AVF delivers FRESH content (so a frozen preview is downstream =
+            // compositor). Frozen/stale PTS ⇒ AVF is handing back stale frames.
+            let ptsS = String(
+                format: "%.3f",
+                CMTimeGetSeconds(CMSampleBufferGetPresentationTimeStamp(sampleBuffer)))
             if let pb = CMSampleBufferGetImageBuffer(sampleBuffer) {
                 let w = CVPixelBufferGetWidth(pb)
                 let h = CVPixelBufferGetHeight(pb)
@@ -68,9 +81,10 @@ final class CaptureDelegate: NSObject, AVCaptureVideoDataOutputSampleBufferDeleg
                         encoding: .ascii) ?? "????"
                 CameraKitLog.notice(
                     .engine,
-                    "[capture] first-frame after restart actual=\(w)x\(h) pf='\(four)'")
+                    "[resume] delivery frame (t1) pts=\(ptsS)s actual=\(w)x\(h) pf='\(four)'")
             } else {
-                CameraKitLog.notice(.engine, "[capture] first-frame after restart (no image buffer)")
+                CameraKitLog.notice(
+                    .engine, "[resume] delivery frame (t1) pts=\(ptsS)s (no image buffer)")
             }
         }
         watchdogs?.gpu.refresh()
