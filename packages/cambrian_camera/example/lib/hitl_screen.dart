@@ -260,10 +260,6 @@ class _HitlScreenState extends State<HitlScreen> {
                 _section('Lifecycle', [
                   _btn('open', _open, enabled: !open),
                   _btn('close', _close, enabled: open),
-                  _btn('pause', () => _run('pause', _camera!.pause),
-                      enabled: open),
-                  _btn('resume', () => _run('resume', _camera!.resume),
-                      enabled: open),
                 ]),
                 _section('Settings', [
                   _btn('updateSettings: manual ISO 400', () => _run(

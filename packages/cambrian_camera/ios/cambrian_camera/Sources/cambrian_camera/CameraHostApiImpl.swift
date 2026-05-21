@@ -93,7 +93,17 @@ final class CameraHostApiImpl: CameraHostApi {
 
             do {
                 // 2. Construct engine + OpenConfiguration.
-                let engine = CameraEngine()
+                // Seed the engine with the app's ACTUAL current lifecycle phase:
+                // `open()` reconciles hardware against this phase (CameraKit
+                // `CameraEngine.open` step 9b), and opening into `.background`
+                // skips `startRunning`. The scene-delegate observer only forwards
+                // subsequent *transitions*, so a blind `.background` here would
+                // leave the camera open-but-not-streaming when the app is already
+                // foreground at open() (the common case). Reading the real phase
+                // streams when foreground and stays gated when not — preserving
+                // the README's privacy guarantee without its streaming gap.
+                let initialPhase = await LifecycleObserver.currentPhase()
+                let engine = CameraEngine(initialPhase: initialPhase)
 
                 // Hardcoded capture resolution per Plan 2 — matches the
                 // natural-stream default the rest of the pipeline assumes.
@@ -542,59 +552,6 @@ final class CameraHostApiImpl: CameraHostApi {
             } catch {
                 completion(.failure(PigeonError(
                     code: "recording_stop_failed",
-                    message: String(describing: error),
-                    details: nil
-                )))
-            }
-        }
-    }
-
-    /// Pauses capture. Maps to `CameraEngine.pause()` — the semantic
-    /// (caller-initiated) pause, distinct from the plugin-internal scene-phase
-    /// observer route. Engine finalizes any in-flight recording before
-    /// publishing `SessionState.paused`.
-    func pause(
-        handle: Int64,
-        completion: @escaping (Result<Void, Error>) -> Void
-    ) {
-        guard let state = resolveState(for: handle) else {
-            completion(.failure(Self.handleNotFound(handle)))
-            return
-        }
-        Task {
-            do {
-                try await state.engine.pause()
-                completion(.success(()))
-            } catch let e as EngineError {
-                completion(.failure(Self.mapEngineError(e)))
-            } catch {
-                completion(.failure(PigeonError(
-                    code: "pause_failed",
-                    message: String(describing: error),
-                    details: nil
-                )))
-            }
-        }
-    }
-
-    /// Resumes capture after `pause()`. Maps to `CameraEngine.resume()`.
-    func resume(
-        handle: Int64,
-        completion: @escaping (Result<Void, Error>) -> Void
-    ) {
-        guard let state = resolveState(for: handle) else {
-            completion(.failure(Self.handleNotFound(handle)))
-            return
-        }
-        Task {
-            do {
-                try await state.engine.resume()
-                completion(.success(()))
-            } catch let e as EngineError {
-                completion(.failure(Self.mapEngineError(e)))
-            } catch {
-                completion(.failure(PigeonError(
-                    code: "resume_failed",
                     message: String(describing: error),
                     details: nil
                 )))

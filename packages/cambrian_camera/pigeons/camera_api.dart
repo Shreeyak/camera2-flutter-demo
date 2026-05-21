@@ -296,8 +296,10 @@ class CamStateUpdate {
   /// One of: "closed", "opening", "streaming", "recovering", "paused", "error",
   /// "interrupted".
   ///
-  /// - "paused" — pipeline gate closed (explicit `pause()` or app scenePhase
-  ///   inactive); resumes on `resume()` / scenePhase active.
+  /// - "paused" — pipeline gate closed because the app is not foreground
+  ///   (scene phase inactive/background); resumes automatically when the app
+  ///   becomes active. Driven natively by the plugin's scene-lifecycle
+  ///   observer, not by Dart.
   /// - "interrupted" — iOS-only — AVCaptureSession was interrupted by a
   ///   routine iOS event (Control Center claim, Split View / Stage Manager
   ///   peer, phone call). Auto-resumes when the system clears the
@@ -560,12 +562,6 @@ abstract class CameraHostApi {
 
   @async
   void close(int handle);
-
-  @async
-  void pause(int handle);
-
-  @async
-  void resume(int handle);
 
   /// Returns persisted processing params from a previous session, or null if none exist.
   ///

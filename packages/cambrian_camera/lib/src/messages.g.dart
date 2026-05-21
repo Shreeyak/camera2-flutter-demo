@@ -489,8 +489,10 @@ class CamStateUpdate {
   /// One of: "closed", "opening", "streaming", "recovering", "paused", "error",
   /// "interrupted".
   ///
-  /// - "paused" — pipeline gate closed (explicit `pause()` or app scenePhase
-  ///   inactive); resumes on `resume()` / scenePhase active.
+  /// - "paused" — pipeline gate closed because the app is not foreground
+  ///   (scene phase inactive/background); resumes automatically when the app
+  ///   becomes active. Driven natively by the plugin's scene-lifecycle
+  ///   observer, not by Dart.
   /// - "interrupted" — iOS-only — AVCaptureSession was interrupted by a
   ///   routine iOS event (Control Center claim, Split View / Stage Manager
   ///   peer, phone call). Auto-resumes when the system clears the
@@ -1034,6 +1036,9 @@ class CameraHostApi {
   /// the natural-lane tap (iOS). Does NOT include GPU post-processing
   /// (saturation, contrast, brightness, black balance, gamma).
   ///
+  /// Neutral hardware baseline: captured with auto AE/AWB at 1.0x zoom. Manual
+  /// ISO/exposure/WB/zoom from [updateSettings] are NOT applied (use captureImage).
+  ///
   /// Returns a [CamCaptureResult] whose populated field depends on
   /// [destination] and platform — see [CamPhotosDestination] /
   /// [CamCaptureResult] for the per-platform semantics.
@@ -1177,50 +1182,6 @@ class CameraHostApi {
 
   Future<void> close(int handle) async {
     final String pigeonVar_channelName = 'dev.flutter.pigeon.cambrian_camera.CameraHostApi.close$pigeonVar_messageChannelSuffix';
-    final BasicMessageChannel<Object?> pigeonVar_channel = BasicMessageChannel<Object?>(
-      pigeonVar_channelName,
-      pigeonChannelCodec,
-      binaryMessenger: pigeonVar_binaryMessenger,
-    );
-    final List<Object?>? pigeonVar_replyList =
-        await pigeonVar_channel.send(<Object?>[handle]) as List<Object?>?;
-    if (pigeonVar_replyList == null) {
-      throw _createConnectionError(pigeonVar_channelName);
-    } else if (pigeonVar_replyList.length > 1) {
-      throw PlatformException(
-        code: pigeonVar_replyList[0]! as String,
-        message: pigeonVar_replyList[1] as String?,
-        details: pigeonVar_replyList[2],
-      );
-    } else {
-      return;
-    }
-  }
-
-  Future<void> pause(int handle) async {
-    final String pigeonVar_channelName = 'dev.flutter.pigeon.cambrian_camera.CameraHostApi.pause$pigeonVar_messageChannelSuffix';
-    final BasicMessageChannel<Object?> pigeonVar_channel = BasicMessageChannel<Object?>(
-      pigeonVar_channelName,
-      pigeonChannelCodec,
-      binaryMessenger: pigeonVar_binaryMessenger,
-    );
-    final List<Object?>? pigeonVar_replyList =
-        await pigeonVar_channel.send(<Object?>[handle]) as List<Object?>?;
-    if (pigeonVar_replyList == null) {
-      throw _createConnectionError(pigeonVar_channelName);
-    } else if (pigeonVar_replyList.length > 1) {
-      throw PlatformException(
-        code: pigeonVar_replyList[0]! as String,
-        message: pigeonVar_replyList[1] as String?,
-        details: pigeonVar_replyList[2],
-      );
-    } else {
-      return;
-    }
-  }
-
-  Future<void> resume(int handle) async {
-    final String pigeonVar_channelName = 'dev.flutter.pigeon.cambrian_camera.CameraHostApi.resume$pigeonVar_messageChannelSuffix';
     final BasicMessageChannel<Object?> pigeonVar_channel = BasicMessageChannel<Object?>(
       pigeonVar_channelName,
       pigeonChannelCodec,

@@ -425,8 +425,10 @@ data class CamStateUpdate (
    * One of: "closed", "opening", "streaming", "recovering", "paused", "error",
    * "interrupted".
    *
-   * - "paused" — pipeline gate closed (explicit `pause()` or app scenePhase
-   *   inactive); resumes on `resume()` / scenePhase active.
+   * - "paused" — pipeline gate closed because the app is not foreground
+   *   (scene phase inactive/background); resumes automatically when the app
+   *   becomes active. Driven natively by the plugin's scene-lifecycle
+   *   observer, not by Dart.
    * - "interrupted" — iOS-only — AVCaptureSession was interrupted by a
    *   routine iOS event (Control Center claim, Split View / Stage Manager
    *   peer, phone call). Auto-resumes when the system clears the
@@ -847,6 +849,9 @@ interface CameraHostApi {
    * the natural-lane tap (iOS). Does NOT include GPU post-processing
    * (saturation, contrast, brightness, black balance, gamma).
    *
+   * Neutral hardware baseline: captured with auto AE/AWB at 1.0x zoom. Manual
+   * ISO/exposure/WB/zoom from [updateSettings] are NOT applied (use captureImage).
+   *
    * Returns a [CamCaptureResult] whose populated field depends on
    * [destination] and platform — see [CamPhotosDestination] /
    * [CamCaptureResult] for the per-platform semantics.
@@ -867,8 +872,6 @@ interface CameraHostApi {
   fun startRecording(handle: Long, outputDirectory: String?, fileName: String?, bitrate: Long?, fps: Long?, callback: (Result<String>) -> Unit)
   fun stopRecording(handle: Long, callback: (Result<String>) -> Unit)
   fun close(handle: Long, callback: (Result<Unit>) -> Unit)
-  fun pause(handle: Long, callback: (Result<Unit>) -> Unit)
-  fun resume(handle: Long, callback: (Result<Unit>) -> Unit)
   /**
    * Returns persisted processing params from a previous session, or null if none exist.
    *
@@ -1166,44 +1169,6 @@ interface CameraHostApi {
             val args = message as List<Any?>
             val handleArg = args[0] as Long
             api.close(handleArg) { result: Result<Unit> ->
-              val error = result.exceptionOrNull()
-              if (error != null) {
-                reply.reply(wrapError(error))
-              } else {
-                reply.reply(wrapResult(null))
-              }
-            }
-          }
-        } else {
-          channel.setMessageHandler(null)
-        }
-      }
-      run {
-        val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.cambrian_camera.CameraHostApi.pause$separatedMessageChannelSuffix", codec)
-        if (api != null) {
-          channel.setMessageHandler { message, reply ->
-            val args = message as List<Any?>
-            val handleArg = args[0] as Long
-            api.pause(handleArg) { result: Result<Unit> ->
-              val error = result.exceptionOrNull()
-              if (error != null) {
-                reply.reply(wrapError(error))
-              } else {
-                reply.reply(wrapResult(null))
-              }
-            }
-          }
-        } else {
-          channel.setMessageHandler(null)
-        }
-      }
-      run {
-        val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.cambrian_camera.CameraHostApi.resume$separatedMessageChannelSuffix", codec)
-        if (api != null) {
-          channel.setMessageHandler { message, reply ->
-            val args = message as List<Any?>
-            val handleArg = args[0] as Long
-            api.resume(handleArg) { result: Result<Unit> ->
               val error = result.exceptionOrNull()
               if (error != null) {
                 reply.reply(wrapError(error))

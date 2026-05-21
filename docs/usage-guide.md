@@ -133,32 +133,25 @@ Future<void> close()
 
 Closes the camera and releases all native resources. The instance must not be used after this call.
 
-#### `camera.pause()` / `camera.resume()`
+#### App lifecycle (pause/resume) is automatic — there is no Dart API
 
-```dart
-Future<void> pause()
-Future<void> resume()
-```
+The plugin has **no** `pause()`/`resume()` method, and you must **not** drive the
+camera from `didChangeAppLifecycleState`. App lifecycle is observed and handled
+**natively** on both platforms:
 
-`pause()` tears down the capture session and GPU pipeline but keeps the `CameraDevice` open for fast restart. The camera state transitions to `CameraState.paused`. `resume()` restarts the capture session on the already-open device, transitioning through `opening` back to `streaming`.
+- **iOS** — a `FlutterSceneLifeCycleDelegate` forwards each UIScene phase to the
+  CameraKit engine (`setLifecyclePhase(.active/.inactive/.background)`), which
+  closes the GPU gate, stops/starts the capture session, and finalizes any
+  in-flight recording — all without crossing the Dart boundary.
+- **Android** — a `ProcessLifecycleOwner` observer fully releases the camera
+  device on `onStop` and reopens it on `onStart`, so other apps can use the
+  camera while yours is invisible.
 
-- `pause()` is a no-op if the camera is not streaming.
-- `resume()` is a no-op if the camera is not in the paused state (unless the app was backgrounded while paused — see below).
-- Use these for **in-app navigation** (e.g. switching away from the camera screen while the app stays in the foreground).
-
-**Background lifecycle is automatic.** You do **not** need to call `pause()`/`resume()` from `didChangeAppLifecycleState`. The plugin registers a `ProcessLifecycleOwner` observer that fully releases the camera device when the app goes to the background (`onStop`) and reopens it when the app returns (`onStart`). This ensures other apps can use the camera while yours is invisible.
-
-If Dart calls `pause()` and the app then goes to background, the plugin remembers the Dart-paused intent. On foreground return, the camera is **not** automatically reopened — Dart must call `resume()` when it is ready for frames (e.g. when the user navigates back to the camera screen). `resume()` detects that the device was fully closed during the background cycle and performs a full reopen.
-
-```dart
-// In-app navigation example:
-void onLeaveCameraScreen() {
-  _camera?.pause();   // fast: session-only teardown
-}
-void onReturnToCameraScreen() {
-  _camera?.resume();  // fast if app stayed foreground; full reopen if backgrounded
-}
-```
+This is native by design: a Dart round-trip over the method channel adds latency
+that can let a backgrounding outrun an in-flight recording's finalize and corrupt
+the file. Watch `stateStream` if you want to react in UI (e.g. show a "paused"
+overlay) — see the `paused`/`suspended` states in the [state reference](#camerastate)
+— but do not try to pause/resume the camera yourself.
 
 #### `camera.setResolution()`
 
@@ -751,8 +744,8 @@ camera.stateStream.listen((state) {
 | `opening` | Initializing (opening device, configuring session) |
 | `streaming` | Actively delivering frames |
 | `recovering` | Non-fatal error occurred; auto-recovering with exponential backoff |
-| `paused` | Dart-initiated pause (in-app navigation). Session torn down, device still held. Call `resume()` to restart |
-| `suspended` | App moved to background. Camera device fully released so other apps can use it. Automatically reopens on foreground return (unless Dart-paused) |
+| `paused` | App is not foreground (scene phase inactive/background). Pipeline gate closed; frames not delivered. Driven natively — resumes automatically when the app becomes active. (Primarily iOS.) |
+| `suspended` | App moved to background. Camera device fully released so other apps can use it. Automatically reopens on foreground return. (Primarily Android.) |
 | `error` | Fatal error, or retries exhausted. Automatically recovers when the camera becomes available again (via `AvailabilityCallback`). Call `close()` to give up permanently |
 
 #### `camera.errorStream`
@@ -1317,7 +1310,7 @@ You can safely call `updateSettings()` on every slider tick without worrying abo
 
 ## App Lifecycle
 
-The plugin automatically manages the camera across all Android lifecycle transitions. **No manual lifecycle code is needed in your app.**
+The plugin automatically manages the camera across all app lifecycle transitions on both platforms — natively, with no Dart involvement. **No manual lifecycle code is needed in your app**, and there is no `pause()`/`resume()` API to call. (iOS observes UIScene phases via a `FlutterSceneLifeCycleDelegate`; Android observes `ProcessLifecycleOwner`.)
 
 ### What happens automatically
 
@@ -1330,21 +1323,10 @@ The plugin automatically manages the camera across all Android lifecycle transit
 | OS kills app for memory | Kernel reclaims resources; no leak | (fresh start) |
 | Screen rotation | Camera stays alive (ProcessLifecycleOwner ignores config changes) | (no change) |
 
-### Dart-paused + background round-trip
-
-If your app calls `pause()` (e.g. user navigated to a settings screen) and the app then goes to background:
-
-1. The plugin fully closes the camera device (emits `suspended`)
-2. On foreground return, the plugin sees Dart had paused — it does **not** reopen
-3. When Dart calls `resume()`, a full reopen happens automatically
-
-This prevents wasteful streaming to a screen the user isn't looking at.
-
 ### What your app should do
 
-- Listen to `stateStream` for UI feedback (show "Camera paused" overlay during `suspended`, "Reconnecting..." during `recovering`)
-- Use `pause()` / `resume()` only for in-app navigation (leave/return to camera screen)
-- Do **not** call `pause()`/`resume()` from `didChangeAppLifecycleState` — the plugin handles this
+- Listen to `stateStream` for UI feedback (show a "paused" overlay during `paused`/`suspended`, "Reconnecting..." during `recovering`)
+- Do **not** call any lifecycle method from `didChangeAppLifecycleState` — the plugin observes app lifecycle natively on both platforms. Dart driving it as well would race the native observer and can corrupt an in-flight recording.
 
 ---
 

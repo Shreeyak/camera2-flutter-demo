@@ -478,8 +478,10 @@ struct CamStateUpdate {
   /// One of: "closed", "opening", "streaming", "recovering", "paused", "error",
   /// "interrupted".
   ///
-  /// - "paused" — pipeline gate closed (explicit `pause()` or app scenePhase
-  ///   inactive); resumes on `resume()` / scenePhase active.
+  /// - "paused" — pipeline gate closed because the app is not foreground
+  ///   (scene phase inactive/background); resumes automatically when the app
+  ///   becomes active. Driven natively by the plugin's scene-lifecycle
+  ///   observer, not by Dart.
   /// - "interrupted" — iOS-only — AVCaptureSession was interrupted by a
   ///   routine iOS event (Control Center claim, Split View / Stage Manager
   ///   peer, phone call). Auto-resumes when the system clears the
@@ -891,6 +893,9 @@ protocol CameraHostApi {
   /// the natural-lane tap (iOS). Does NOT include GPU post-processing
   /// (saturation, contrast, brightness, black balance, gamma).
   ///
+  /// Neutral hardware baseline: captured with auto AE/AWB at 1.0x zoom. Manual
+  /// ISO/exposure/WB/zoom from [updateSettings] are NOT applied (use captureImage).
+  ///
   /// Returns a [CamCaptureResult] whose populated field depends on
   /// [destination] and platform — see [CamPhotosDestination] /
   /// [CamCaptureResult] for the per-platform semantics.
@@ -908,8 +913,6 @@ protocol CameraHostApi {
   func startRecording(handle: Int64, outputDirectory: String?, fileName: String?, bitrate: Int64?, fps: Int64?, completion: @escaping (Result<String, Error>) -> Void)
   func stopRecording(handle: Int64, completion: @escaping (Result<String, Error>) -> Void)
   func close(handle: Int64, completion: @escaping (Result<Void, Error>) -> Void)
-  func pause(handle: Int64, completion: @escaping (Result<Void, Error>) -> Void)
-  func resume(handle: Int64, completion: @escaping (Result<Void, Error>) -> Void)
   /// Returns persisted processing params from a previous session, or null if none exist.
   ///
   /// Dart should call this after [open] to initialize slider UI with the user's last-known
@@ -1062,6 +1065,9 @@ class CameraHostApiSetup {
     /// the natural-lane tap (iOS). Does NOT include GPU post-processing
     /// (saturation, contrast, brightness, black balance, gamma).
     ///
+    /// Neutral hardware baseline: captured with auto AE/AWB at 1.0x zoom. Manual
+    /// ISO/exposure/WB/zoom from [updateSettings] are NOT applied (use captureImage).
+    ///
     /// Returns a [CamCaptureResult] whose populated field depends on
     /// [destination] and platform — see [CamPhotosDestination] /
     /// [CamCaptureResult] for the per-platform semantics.
@@ -1184,40 +1190,6 @@ class CameraHostApiSetup {
       }
     } else {
       closeChannel.setMessageHandler(nil)
-    }
-    let pauseChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.cambrian_camera.CameraHostApi.pause\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
-    if let api = api {
-      pauseChannel.setMessageHandler { message, reply in
-        let args = message as! [Any?]
-        let handleArg = args[0] as! Int64
-        api.pause(handle: handleArg) { result in
-          switch result {
-          case .success:
-            reply(wrapResult(nil))
-          case .failure(let error):
-            reply(wrapError(error))
-          }
-        }
-      }
-    } else {
-      pauseChannel.setMessageHandler(nil)
-    }
-    let resumeChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.cambrian_camera.CameraHostApi.resume\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
-    if let api = api {
-      resumeChannel.setMessageHandler { message, reply in
-        let args = message as! [Any?]
-        let handleArg = args[0] as! Int64
-        api.resume(handle: handleArg) { result in
-          switch result {
-          case .success:
-            reply(wrapResult(nil))
-          case .failure(let error):
-            reply(wrapError(error))
-          }
-        }
-      }
-    } else {
-      resumeChannel.setMessageHandler(nil)
     }
     /// Returns persisted processing params from a previous session, or null if none exist.
     ///

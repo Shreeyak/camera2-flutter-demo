@@ -112,7 +112,7 @@ class CameraController(
     // -------------------------------------------------------------------------
 
     /** Internal camera lifecycle state. */
-    private enum class State { CLOSED, OPENING, STREAMING, RECOVERING, PAUSED, ERROR }
+    private enum class State { CLOSED, OPENING, STREAMING, RECOVERING, ERROR }
 
     @Volatile private var state: State = State.CLOSED
 
@@ -128,16 +128,6 @@ class CameraController(
      * handle the race where an in-flight [openCamera] completes after we have already suspended.
      */
     @Volatile private var backgroundSuspended = false
-
-    /**
-     * True when Dart has explicitly called [pause] and has not yet called [resume].
-     *
-     * Tracks Dart-side intent so that [backgroundResume] does not wastefully reopen the camera
-     * when the user is on a non-camera screen.  If Dart paused the camera (e.g. user navigated
-     * away from the camera page), then the app goes to background and returns, [backgroundResume]
-     * sees this flag and skips the reopen — Dart will call [resume] when the user navigates back.
-     */
-    @Volatile private var dartPaused = false
 
     // -------------------------------------------------------------------------
     // Camera2 resources
@@ -158,11 +148,11 @@ class CameraController(
     private val cameraAvailabilityCallback = object : CameraManager.AvailabilityCallback() {
         override fun onCameraAvailable(cameraId: String) {
             if (cameraId != resolvedCameraId) return
-            if (released || backgroundSuspended || dartPaused) return
+            if (released || backgroundSuspended) return
             if (state != State.ERROR) return
             Log.i("CC/Cam", "[$handle] camera $cameraId available again — recovering from ERROR")
             backgroundHandler.post {
-                if (released || backgroundSuspended || dartPaused) return@post
+                if (released || backgroundSuspended) return@post
                 if (state != State.ERROR) return@post
                 retryCount = 0
                 doReopenCamera()
@@ -543,63 +533,6 @@ class CameraController(
     }
 
     /**
-     * Pauses the camera: tears down the capture session and Camera2 resources
-     * without marking the controller as released. The instance can be resumed
-     * with [resume].
-     *
-     * Emits a "paused" state event to Dart.
-     */
-    fun pause(callback: (Result<Unit>) -> Unit) {
-        if (state != State.STREAMING) {
-            callback(Result.success(Unit))
-            return
-        }
-        Log.i("CC/Cam", "[$handle] pausing (Dart-initiated)")
-        dartPaused = true
-        // Tear down only the capture session; keep CameraDevice open for fast resume.
-        // OPENING reuses its existing meaning: "device held, no capture session running".
-        setState(State.OPENING)
-        teardownSession()
-        // NOTE: do NOT set released=true and do NOT quit backgroundThread — instance stays alive
-        emitState("paused")
-        callback(Result.success(Unit))
-    }
-
-    /**
-     * Resumes the camera after [pause]: restarts the capture session on the already-open
-     * [CameraDevice]. Much faster than a full reopen.
-     *
-     * No-op if the controller is not in [State.OPENING] (i.e. not currently paused or the
-     * HAL already closed the device — in that case [onDisconnected] transitions to RECOVERING).
-     */
-    fun resume(callback: (Result<Unit>) -> Unit) {
-        dartPaused = false
-        // If the controller was background-suspended while Dart-paused, the device is fully
-        // closed.  A lightweight session restart is not possible — do a full reopen instead.
-        if (backgroundSuspended) {
-            Log.i("CC/Cam", "[$handle] resume after background suspend — full reopen")
-            backgroundSuspended = false
-            retryCount = 0
-            backgroundHandler.post { doReopenCamera() }
-            callback(Result.success(Unit))
-            return
-        }
-        if (state != State.OPENING || cameraDevice == null) {
-            // Not in a paused state or device was lost — if ERROR, availability callback
-            // will handle recovery; otherwise nothing to do.
-            callback(Result.success(Unit))
-            return
-        }
-        Log.i("CC/Cam", "[$handle] resuming")
-        startCaptureSession { result ->
-            result.fold(
-                onSuccess = { callback(Result.success(Unit)) },
-                onFailure = { e -> callback(Result.failure(e)) },
-            )
-        }
-    }
-
-    /**
      * Fully releases the camera device and all resources when the app moves to the background
      * (process [onStop]).
      *
@@ -644,9 +577,7 @@ class CameraController(
      * rest of the app is unaffected because the reopen happens entirely on the background thread
      * and errors feed into the existing non-fatal recovery path.
      *
-     * No-op if the controller was never suspended, has been permanently released, or if Dart
-     * had explicitly [pause]d the camera before the app went to background (Dart will call
-     * [resume] when it is ready for frames again — no point streaming to a hidden screen).
+     * No-op if the controller was never suspended or has been permanently released.
      */
     fun backgroundResume(callback: (Result<Unit>) -> Unit) {
         if (released) {
@@ -655,13 +586,6 @@ class CameraController(
         }
         backgroundHandler.post {
             if (released || !backgroundSuspended) {
-                mainHandler.post { callback(Result.success(Unit)) }
-                return@post
-            }
-            if (dartPaused) {
-                // Dart explicitly paused the camera before the app went to background.
-                // Stay suspended — Dart will call resume() when it is ready for frames.
-                Log.i("CC/Cam", "[$handle] backgroundResume skipped — Dart-paused")
                 mainHandler.post { callback(Result.success(Unit)) }
                 return@post
             }
@@ -689,31 +613,6 @@ class CameraController(
                 emitState("closed")
                 setState(State.CLOSED)
                 callback(Result.success(Unit))
-            }
-        }
-    }
-
-    /**
-     * Pauses the camera session by tearing down Camera2 resources without closing the controller.
-     *
-     * If a recording is in progress it is stopped first to avoid leaving the recorder running
-     * with no incoming frames. Emits a "paused" state event to Dart after teardown completes.
-     */
-    fun pause() {
-        backgroundHandler.post {
-            if (isRecording) {
-                Log.w("CC/Cam", "[$handle] auto-stopping recording before pause")
-                isRecording = false
-                gpuPipeline?.setEncoderSurface(null)
-                try { videoRecorder?.stop() } catch (e: Exception) {
-                    Log.w("CC/Cam", "recording stop on pause failed: ${e.message}")
-                }
-                mainHandler.post { flutterApi.onRecordingStateChanged(handle, "idle") {} }
-            }
-            teardown()
-            mainHandler.post {
-                emitState("paused")
-                setState(State.CLOSED)
             }
         }
     }

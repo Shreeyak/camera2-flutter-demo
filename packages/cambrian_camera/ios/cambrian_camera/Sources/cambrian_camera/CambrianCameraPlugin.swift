@@ -7,8 +7,8 @@ import CameraKit
 /// - `HandleRegistry` — actor that maps `Int64` handles → engines.
 /// - `FlutterTextureRegistry` — Flutter's texture-registration entry point.
 /// - `CameraFlutterApi` — Pigeon-generated Dart-bound callback channel.
-/// - `LifecycleObserver` — UIScene observer fanning scene-phase transitions
-///   out to every open engine via `notifyScenePhasePaused`.
+/// - `LifecycleObserver` — `FlutterSceneLifeCycleDelegate` that forwards each
+///   scene-phase transition to every open engine via `setLifecyclePhase`.
 ///
 /// `CameraHostApiSetup.setUp` retains `api` strongly via channel handler
 /// closures, but Flutter plugins are otherwise transient — `register(with:)`
@@ -36,8 +36,11 @@ public class CambrianCameraPlugin: NSObject, FlutterPlugin {
         CameraHostApiSetup.setUp(binaryMessenger: registrar.messenger(), api: api)
 
         // Lifecycle observer holds a weak reference to the registry — the
-        // static slot below is what keeps it alive.
+        // static slot below is what keeps it alive. Registering it as a scene
+        // delegate is what makes the host's FlutterSceneDelegate fan UIScene
+        // phase transitions out to it (see LifecycleObserver doc).
         let lifecycle = LifecycleObserver(registry: registry)
+        registrar.addSceneDelegate(lifecycle)
 
         sharedRegistry = registry
         sharedApi = api

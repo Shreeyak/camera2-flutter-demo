@@ -16,14 +16,16 @@ enum CameraState {
   /// The app may show a "reconnecting…" indicator.
   recovering,
 
-  /// Camera session is paused (Dart-initiated). The [CameraDevice] is still
-  /// held open for fast resume. Call [CambrianCamera.resume] to restart.
+  /// Camera session is paused because the app is not foreground (scene phase
+  /// inactive/background). The pipeline gate is closed and frames are not
+  /// delivered. Driven natively by the plugin's scene-lifecycle observer — it
+  /// resumes automatically when the app becomes active again. App code does
+  /// not pause/resume the camera.
   paused,
 
   /// Camera is fully released because the app moved to the background
   /// (process [onStop]). The device is closed so other apps can use it.
-  /// The library will automatically reopen when the app returns to the
-  /// foreground, or when Dart calls [CambrianCamera.resume].
+  /// The library automatically reopens when the app returns to the foreground.
   suspended,
 
   /// A fatal error occurred. The app must call [CambrianCamera.close] and
