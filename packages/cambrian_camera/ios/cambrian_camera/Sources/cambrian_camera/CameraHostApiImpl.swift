@@ -522,7 +522,10 @@ final class CameraHostApiImpl: CameraHostApi {
         Task {
             do {
                 let start = try await state.engine.startRecording(options: options)
-                completion(.success(start.uri))
+                // Match Android's "uri|displayName" wire format so Dart's
+                // startRecording() split produces (filePath, displayName)
+                // instead of (fileURL, "").
+                completion(.success("\(start.uri)|\(start.displayName)"))
             } catch let e as EngineError {
                 completion(.failure(Self.mapEngineError(e)))
             } catch {

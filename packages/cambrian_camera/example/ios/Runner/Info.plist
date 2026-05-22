@@ -12,6 +12,13 @@
 	<string>Cambrian Camera uses the local network so Flutter debugging tools can connect over Wi-Fi during development.</string>
 	<key>CADisableMinimumFrameDurationOnPhone</key>
 	<true/>
+	<!-- Expose the app's Documents directory (where captures are saved) in the
+	     Files app under "On My iPhone" and over USB/Finder. -->
+	<key>UIFileSharingEnabled</key>
+	<true/>
+	<!-- Allow the system to open captured files in place rather than copying. -->
+	<key>LSSupportsOpeningDocumentsInPlace</key>
+	<true/>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
