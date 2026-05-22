@@ -141,7 +141,7 @@ struct Stage10HappyPathTests {
                 pts: CMTimeMake(value: Int64(i), timescale: 30)
             )
         }
-        let uri = await rec.stop(reason: .user)
+        let uri = await rec.stop()
         #expect(uri == start.uri)
         let snap = states.snapshot
         #expect(snap.contains(.recording))
@@ -186,7 +186,7 @@ struct Stage10DeadlineCancelTests {
             makeDummyPixelBuffer(),
             pts: CMTimeMake(value: 0, timescale: 30)
         )
-        let uri = await rec.stop(reason: .user)
+        let uri = await rec.stop()
         #expect(errors.snapshot.contains { $0.code == .recordingTruncated && !$0.isFatal })
         #expect(await writer.cancelled == true)
         #expect(uri.hasSuffix(".mp4"))
@@ -241,62 +241,7 @@ struct Stage10NV12PoolTests {
     }
 }
 
-// MARK: - Suite 5: pause during recording
-
-@Suite("Stage 10 — pause during recording", .progressLogged)
-struct Stage10PauseTests {
-    @Test("stop(reason: .pause) transitions to paused state")
-    func pauseDuringRecordingFinalizesSynchronously() async throws {
-        let writer = FakeAssetWriter()
-        let adaptor = FakeAdaptor()
-        let states = StateLog()
-        let rec = Recording(
-            clock: FastClock(),
-            hooks: Recording.Hooks(
-                publishState: { states.append($0) },
-                emitError: { _ in }
-            ),
-            writerFactory: makeFakeFactory(writer: writer, adaptor: adaptor)
-        )
-        _ = try await rec.start(
-            options: RecordingOptions(),
-            captureSize: Size(width: 256, height: 256)
-        )
-        _ = await rec.stop(reason: .pause)
-        let snap = states.snapshot
-        #expect(snap.contains(.recording))
-        #expect(snap.contains(.finalizing))
-        #expect(snap.last == .paused)
-        let writerStatus = await writer._status
-        // Completed or cancelled — either way finalize ran.
-        #expect(writerStatus == .completed || writerStatus == .cancelled)
-    }
-}
-
-// MARK: - Suite 6: resume from pause
-
-@Suite("Stage 10 — resume from pause", .progressLogged)
-struct Stage10ResumeTests {
-    @Test("Recording is paused after stop(reason:.pause)")
-    func pauseYieldsPausedState() async throws {
-        let writer = FakeAssetWriter()
-        let adaptor = FakeAdaptor()
-        let rec = Recording(
-            clock: FastClock(),
-            hooks: Recording.Hooks(publishState: { _ in }, emitError: { _ in }),
-            writerFactory: makeFakeFactory(writer: writer, adaptor: adaptor)
-        )
-        _ = try await rec.start(
-            options: RecordingOptions(),
-            captureSize: Size(width: 256, height: 256)
-        )
-        _ = await rec.stop(reason: .pause)
-        let finalState = await rec.currentState()
-        #expect(finalState == .paused)
-    }
-}
-
-// MARK: - Suite 7: adaptor back-pressure
+// MARK: - Suite 5: adaptor back-pressure
 
 @Suite("Stage 10 — adaptor back-pressure", .progressLogged)
 struct Stage10AdaptorBackPressureTests {
@@ -324,7 +269,7 @@ struct Stage10AdaptorBackPressureTests {
                 pts: CMTimeMake(value: Int64(i), timescale: 30)
             )
         }
-        _ = await rec.stop(reason: .user)
+        _ = await rec.stop()
         #expect(await adaptor.appended.count == 27)
         #expect(await rec.currentDroppedNotReady() == 3)
     }
@@ -352,7 +297,7 @@ struct Stage10FatalFinalizeTests {
             captureSize: Size(width: 256, height: 256)
         )
         await writer.setStatus(.failed, error: NSError(domain: "test", code: 7))
-        _ = await rec.stop(reason: .user)
+        _ = await rec.stop()
         #expect(errors.snapshot.contains { $0.code == .recordingFailed && $0.isFatal })
     }
 }
@@ -384,7 +329,7 @@ struct Stage10StopPromptnessTests {
             captureSize: Size(width: 256, height: 256)
         )
         let t0 = ContinuousClock.now
-        let uri = await rec.stop(reason: .user)
+        let uri = await rec.stop()
         let elapsed = ContinuousClock.now - t0
         #expect(
             elapsed < .milliseconds(1000),
@@ -414,7 +359,7 @@ struct Stage10StopPromptnessTests {
                 makeDummyPixelBuffer(),
                 pts: CMTimeMake(value: 0, timescale: 30)
             )
-            _ = await rec.stop(reason: .user)
+            _ = await rec.stop()
             let status = await writer._status
             #expect(status == .completed, "cycle \(cycle): writer status \(status), expected .completed")
             let appended = await adaptor.appended.count

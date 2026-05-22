@@ -28,7 +28,6 @@ public enum RecordingState: Sendable, Hashable {
     case idle(lastUri: String?)
     case recording
     case finalizing
-    case paused
 }
 
 public enum StreamId: String, Sendable, Hashable, CaseIterable {

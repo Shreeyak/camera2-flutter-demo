@@ -6,13 +6,15 @@ using namespace metal;
 // Order (user-directed; overrides architecture/07-settings.md §Processing order
 // — see CameraKit/state.md "Decisions taken that weren't in briefs"):
 //   1. Brightness     (positive: power curve; negative: linear scale)
-//   2. Contrast       (linear around 0.5 midpoint)
+//   2. Contrast       (linear scale around 0.5 midpoint, multiplier 1+contrast)
 //   3. Saturation     (luma-based mix, COLOR_LUMA_WEIGHT R/G/B per G-18)
 //   4. Gamma          (pow(x, 1/gamma))
 //   5. Black balance  (subtract per channel, clamp ≥ 0) — applied to graded output
 //
-// Identity when ColorUniform = { brightness:0, contrast:1, saturation:0,
-// gamma:1, blackR:0, blackG:0, blackB:0 } — verified per channel below.
+// Contrast/brightness/saturation share one [-1,1] convention with 0.0 = identity
+// (contrast uses a 1+contrast multiplier, structurally identical to saturation's
+// 1+saturation mix factor). Identity when ColorUniform = { brightness:0,
+// contrast:0, saturation:0, gamma:1, blackR:0, blackG:0, blackB:0 }.
 //
 struct ColorUniform {
     float brightness;
@@ -49,8 +51,10 @@ kernel void colorTransform(texture2d<float, access::read>  inTex  [[texture(0)]]
         c = c * (1.0 + u.brightness);
     }
 
-    // 2. Contrast — centered linear scale around 0.5. At contrast=1 → identity.
-    c = (c - 0.5) * u.contrast + 0.5;
+    // 2. Contrast — centered linear scale around 0.5 via a 1+contrast multiplier.
+    //    At contrast=0 → identity; -1 → fully flat grey; +1 → 2x contrast. Matches
+    //    the [-1,1] convention of brightness/saturation (see header).
+    c = (c - 0.5) * (1.0 + u.contrast) + 0.5;
 
     // 3. Saturation — luma-based mix. At saturation=0, mix factor = 1 → identity.
     //    saturation = -1.0 → fully desaturated (grayscale).

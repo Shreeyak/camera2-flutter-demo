@@ -159,10 +159,8 @@ public actor Recording {
         return await adaptor.append(buffer, pts: pts)
     }
 
-    public enum StopReason: Sendable { case user, pause }
-
     /// Stop the recording and finalize (or cancel on deadline).
-    public func stop(reason: StopReason = .user) async -> String {
+    public func stop() async -> String {
         guard case .recording = state, let writer else {
             CameraKitLog.notice(
                 .engine,
@@ -267,7 +265,7 @@ public actor Recording {
             hooks.publishState(state)
             return url
         }
-        state = reason == .pause ? .paused : .idle(lastUri: url)
+        state = .idle(lastUri: url)
         hooks.publishState(state)
         return url
     }

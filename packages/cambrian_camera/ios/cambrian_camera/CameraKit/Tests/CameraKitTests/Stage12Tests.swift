@@ -80,7 +80,7 @@ struct Stage12BackgroundTaskTests {
             options: RecordingOptions(), captureSize: Size(width: 256, height: 256))
         _ = await rec.submitEncodedBuffer(
             makeDummyPixelBuffer(), pts: CMTimeMake(value: 0, timescale: 30))
-        let uri = await rec.stop(reason: .user)
+        let uri = await rec.stop()
 
         #expect(uri.hasSuffix(".mp4"))
         #expect(await writer._status == .completed)
@@ -112,7 +112,7 @@ struct Stage12BackgroundTaskTests {
         _ = await rec.submitEncodedBuffer(
             makeDummyPixelBuffer(), pts: CMTimeMake(value: 0, timescale: 30))
 
-        async let stopResult: String = rec.stop(reason: .user)
+        async let stopResult: String = rec.stop()
         // Let stop() reach the in-flight drain, then fire the expiration handler.
         try await Task.sleep(for: .milliseconds(100))
         provider.expireLatest()
@@ -143,7 +143,7 @@ struct Stage12BackgroundTaskTests {
             )
             _ = try await rec.start(
                 options: RecordingOptions(), captureSize: Size(width: 256, height: 256))
-            _ = await rec.stop(reason: .user)
+            _ = await rec.stop()
             #expect(provider.beginCount == 1)
             #expect(provider.endCount == 1, "(a) normal finalize must endBackgroundTask")
         }
@@ -160,7 +160,7 @@ struct Stage12BackgroundTaskTests {
             )
             _ = try await rec.start(
                 options: RecordingOptions(), captureSize: Size(width: 256, height: 256))
-            async let stopResult: String = rec.stop(reason: .user)
+            async let stopResult: String = rec.stop()
             try await Task.sleep(for: .milliseconds(100))
             provider.expireLatest()
             _ = await stopResult
@@ -179,7 +179,7 @@ struct Stage12BackgroundTaskTests {
             _ = try await rec.start(
                 options: RecordingOptions(), captureSize: Size(width: 256, height: 256))
             await writer.setStatus(.failed, error: NSError(domain: "test", code: 7))
-            _ = await rec.stop(reason: .user)
+            _ = await rec.stop()
             #expect(provider.endCount == 1, "(c) writer-error path must endBackgroundTask")
         }
     }
@@ -277,7 +277,7 @@ struct Stage12CarriedForwardTests {
             _ = await rec.submitEncodedBuffer(
                 makeDummyPixelBuffer(), pts: CMTimeMake(value: Int64(i), timescale: 30))
         }
-        let uri = await rec.stop(reason: .user)
+        let uri = await rec.stop()
         #expect(uri == start.uri)
         #expect(await adaptor.appended.count == 30)
         #expect(provider.beginCount == 1)
@@ -304,7 +304,7 @@ struct Stage12CarriedForwardTests {
             options: RecordingOptions(), captureSize: Size(width: 256, height: 256))
         _ = await rec.submitEncodedBuffer(
             makeDummyPixelBuffer(), pts: CMTimeMake(value: 0, timescale: 30))
-        let uri = await rec.stop(reason: .user)
+        let uri = await rec.stop()
 
         #expect(errors.snapshot.contains { $0.code == .recordingTruncated && !$0.isFatal })
         #expect(await writer.cancelled == true)

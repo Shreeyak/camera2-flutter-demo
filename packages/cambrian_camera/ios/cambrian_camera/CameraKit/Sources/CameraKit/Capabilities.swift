@@ -200,6 +200,12 @@ public struct CameraSettings: Sendable, Hashable, Codable {
 /// All fields required. Full implementation Stage 04.
 public struct ProcessingParameters: Sendable, Hashable, Codable {
     public var brightness: Double
+    /// Contrast adjustment in `[-1, 1]`, `0.0` = identity.
+    ///
+    /// Linear scale around the 0.5 luma midpoint via a `1 + contrast` multiplier:
+    /// `-1.0` = fully flat grey, `+1.0` = 2× contrast. Shares the `[-1, 1]` /
+    /// `0.0`-identity convention with `brightness` and `saturation`. See
+    /// `Shaders/ColorShaders.metal`.
     public var contrast: Double
     public var saturation: Double
     /// Per-channel black-balance pedestal.
@@ -215,7 +221,7 @@ public struct ProcessingParameters: Sendable, Hashable, Codable {
 
     public init(
         brightness: Double = 0.0,
-        contrast: Double = 1.0,
+        contrast: Double = 0.0,
         saturation: Double = 0.0,
         blackR: Double = 0.0,
         blackG: Double = 0.0,
