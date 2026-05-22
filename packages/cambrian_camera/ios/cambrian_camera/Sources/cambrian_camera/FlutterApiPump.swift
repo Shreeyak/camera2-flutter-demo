@@ -187,7 +187,6 @@ final class FlutterApiPump {
         case .idle: return "idle"
         case .recording: return "recording"
         case .finalizing: return "finalizing"
-        case .paused: return "paused"
         }
     }
 }
