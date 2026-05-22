@@ -50,12 +50,14 @@ void main() {
       ),
     );
 
-    // Wait until the camera is actively streaming before any capture call.
-    // On a real device this is typically < 1 s, but allow up to 10 s for
-    // slow hardware or permission-grant delays.
-    await camera.stateStream
-        .firstWhere((s) => s == CameraState.streaming)
-        .timeout(const Duration(seconds: 10));
+    // open() returns with initialState: CameraState.streaming already set, so
+    // the state event fires before we can subscribe. Check the cached state
+    // first; only block on the stream if we somehow aren't streaming yet.
+    if (camera.state != CameraState.streaming) {
+      await camera.stateStream
+          .firstWhere((s) => s == CameraState.streaming)
+          .timeout(const Duration(seconds: 10));
+    }
   });
 
   tearDownAll(() async {
@@ -172,6 +174,8 @@ void main() {
       equals(startUri),
       reason: 'stopRecording must return the same path as startRecording',
     );
+    // Clean up so the next test does not collide on a same-second filename.
+    File(stopUri).deleteSync();
   });
 
   testWidgets('stopRecording: finalized file exists on disk', (tester) async {
