@@ -7,7 +7,7 @@ android {
     namespace = "com.cambrian.camera"
     // API 35 for latest Camera2 features; minSdk 33 targets Android 13+.
     compileSdk = 35
-    // NDK version matching the OpenCV prebuilt used by the C++ pipeline.
+    // Pinned NDK version for reproducible C++/OpenGL ES pipeline builds.
     ndkVersion = "27.0.12077973"
 
     compileOptions {
@@ -29,13 +29,13 @@ android {
         // Targets OPD2403 hardware running API 33+. Single-device target for now.
         minSdk = 33
         ndk {
-            // OpenCV prebuilt static libs are arm64-v8a only, so this module
-            // currently packages native code for arm64-v8a devices only.
+            // Targets arm64-v8a only — the OPD2403 hardware ABI. This excludes
+            // x86/x86_64 (including emulators) and 32-bit ABIs from the NDK
+            // build and final AAR/APK packaging.
             //
-            // This intentionally excludes x86/x86_64 (including emulators) and
-            // other 32-bit ABIs from the NDK build and final AAR/APK packaging.
-            // To add broader device/emulator support, matching OpenCV and pipeline
-            // prebuilts would be needed for each additional ABI.
+            // The native pipeline (libjpeg-turbo + OpenGL ES) builds from source
+            // for any ABI, so this filter can be widened later if emulator or
+            // multi-device support is needed.
             abiFilters += "arm64-v8a"
         }
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"

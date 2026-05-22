@@ -640,12 +640,6 @@ DEV_SHA="$(git rev-parse origin/dev)"
 mkdir -p "${WORKTREE_BASE}"
 git worktree add -b "${BRANCH_NAME}" "${WORKTREE_PATH}" "${DEV_SHA}"
 
-# Copy OpenCV symlink if it exists in main worktree
-OPENCV_LINK="$(readlink "${REPO_ROOT}/packages/cambrian_camera/android/opencv" 2>/dev/null || true)"
-if [ -n "${OPENCV_LINK}" ]; then
-    ln -sf "${OPENCV_LINK}" "${WORKTREE_PATH}/packages/cambrian_camera/android/opencv"
-fi
-
 echo "WORKTREE_PATH=${WORKTREE_PATH}"
 echo "WORKTREE_BRANCH=${BRANCH_NAME}"
 echo "BASE_SHA=${DEV_SHA}"

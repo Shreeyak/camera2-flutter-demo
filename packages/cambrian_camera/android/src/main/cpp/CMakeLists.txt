@@ -11,8 +11,9 @@ add_library(cambrian_camera SHARED
     src/fpng.cpp
 )
 
-# Pixel-processing code needs optimization even in Debug — without it, our
-# per-pixel loops run ~20x slower than OpenCV's pre-compiled (always -O2) functions.
+# Pixel-processing code (PNG encode in fpng, per-pixel math) needs optimization
+# even in Debug — at -O0 these per-pixel loops run roughly an order of magnitude
+# slower, which stalls the capture path.
 # -O2 baseline for all configs; -O3 + -ffast-math for Release.
 # -ffast-math enables NEON FMA; safe for uint8 [0,255] pixel math.
 target_compile_options(cambrian_camera PRIVATE

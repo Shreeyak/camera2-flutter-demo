@@ -2,7 +2,7 @@
 
 A Flutter plugin for Camera2-backed camera control with C++ post-processing.
 The iOS implementation is backed by the CameraKit Swift engine; Android uses
-Camera2 + an OpenGL/OpenCV pipeline.
+Camera2 + an OpenGL ES / libjpeg-turbo pipeline.
 
 ## Platform Setup
 
@@ -34,10 +34,10 @@ flutter config --enable-swift-package-manager
 
 ### Android
 
-The Android pipeline uses OpenCV, which is **not** checked in. Symlink an
-OpenCV Android SDK into the plugin before building (see the repo `CLAUDE.md`
-for the exact path). Without it the NDK build fails with a missing
-`OpenCV_DIR` error.
+No manual native setup is required. The plugin's NDK build compiles the C++
+pipeline (OpenGL ES + libjpeg-turbo) automatically — `libjpeg-turbo` is
+fetched and built from source by CMake. The module targets `arm64-v8a` and
+`minSdk 33`.
 
 ### Updating the vendored CameraKit engine (iOS)
 
@@ -246,7 +246,6 @@ Transient camera errors (disconnection, session failure) are handled automatical
 | Blank / black preview on iOS | Known texture-bridge issue under investigation — see `docs/plans/2026-05-20-ios-texture-bridge-blank-preview-debug.md`. Host methods other than the preview lane still function. |
 | `calibration_in_progress` error | An `updateSettings` or `setResolution` was called while a calibration was running. Debounce control changes in Dart while a calibration `Future` is pending. |
 | Camera permission stays denied after granting | Missing `NSCameraUsageDescription` in `Info.plist`, or a stale per-bundle-ID permission cache (delete and reinstall the app to reset). |
-| Android NDK build: missing `OpenCV_DIR` | The OpenCV SDK symlink is absent. See Platform Setup → Android. |
 
 ## Cleanup
 

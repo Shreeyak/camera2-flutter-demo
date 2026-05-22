@@ -65,19 +65,6 @@ through v26.3.3 that generates incorrect type casts in callback error parsing.
 This script runs Pigeon and patches the generated output. See
 `docs/plans/04-06-2026-fix-pigeon-codegen-type-casts.md` for full context.
 
-## OpenCV (Android)
-
-The native pipeline uses OpenCV. The SDK is **not** checked in; it is symlinked from a host build:
-
-```bash
-ln -s <OPENCV_ANDROID_SDK_PATH> \
-      packages/cambrian_camera/android/opencv
-```
-
-Replace `<OPENCV_ANDROID_SDK_PATH>` with the absolute path to your OpenCV Android SDK (e.g. `$HOME/software/opencv-build-android/opencv-android-sdk`).
-
-Run this once per worktree clone. The symlink is git-ignored. Without it, the NDK build will fail with a missing `OpenCV_DIR` error.
-
 ## CameraController Threading Model
 
 `CameraController.kt` uses two `Handler` threads with strict rules:
