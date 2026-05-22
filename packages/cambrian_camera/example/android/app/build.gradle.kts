@@ -24,7 +24,9 @@ android {
         applicationId = "com.cambrian.cambrian_camera_example"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
-        minSdk = flutter.minSdkVersion
+        // cambrian_camera requires API 33+ (Camera2 features); the
+        // flutter.minSdkVersion default is lower and fails the manifest merge.
+        minSdk = 33
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
