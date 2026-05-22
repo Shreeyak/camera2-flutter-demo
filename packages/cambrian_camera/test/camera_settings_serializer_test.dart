@@ -218,7 +218,9 @@ void main() {
       expect(cam.blackR, 0.05);
       expect(cam.gamma, 2.2);
       expect(cam.saturation, 0.8);
-      expect(cam.contrast, 0.5);
+      // Contrast is translated to the engine convention (1.0 = identity):
+      // Dart 0.5 → engine 1.5.
+      expect(cam.contrast, 1.5);
     });
 
     test('contrast defaults to 0.0', () {
@@ -229,8 +231,21 @@ void main() {
       expect(ProcessingParams().copyWith(contrast: 0.5).contrast, 0.5);
     });
 
-    test('toCam includes contrast', () {
-      expect(ProcessingParams(contrast: 0.5).toCam().contrast, 0.5);
+    test('toCam translates contrast to engine convention (1.0 = identity)', () {
+      // Dart contrast 0.5 (0.0 = identity) → engine 1.5 (1.0 = identity).
+      expect(ProcessingParams(contrast: 0.5).toCam().contrast, 1.5);
+    });
+
+    test('fromCam inverts the contrast translation', () {
+      // Engine identity (1.0) → Dart identity (0.0).
+      expect(ProcessingParams.fromCam(ProcessingParams().toCam()).contrast, 0.0);
+    });
+
+    test('toCam/fromCam contrast round-trips', () {
+      const original = 0.5;
+      final back =
+          ProcessingParams.fromCam(ProcessingParams(contrast: original).toCam());
+      expect(back.contrast, closeTo(original, 1e-9));
     });
 
     test('contrast NaN throws', () {
@@ -295,7 +310,8 @@ void main() {
     test('identity roundtrip through toCam', () {
       final cam = ProcessingParams().toCam();
       expect(cam.brightness, 0.0);
-      expect(cam.contrast, 0.0);
+      // Dart identity contrast (0.0) maps to the engine's identity (1.0).
+      expect(cam.contrast, 1.0);
       expect(cam.saturation, 0.0);
       expect(cam.gamma, 1.0);
       expect(cam.blackR, 0.0);

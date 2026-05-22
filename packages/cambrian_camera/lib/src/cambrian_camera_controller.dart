@@ -252,6 +252,11 @@ class CambrianCamera {
   Stream<CameraTextureInfo> get toneMappedTexture => _toneMappedTextureStream();
 
   Stream<CameraTextureInfo> _toneMappedTextureStream() async* {
+    // Gate on streaming intent only, NOT on the texture id value: `0` is a valid
+    // FlutterTextureRegistry id (the first-registered lane gets it), so a `!= 0`
+    // guard would wrongly hide the processed lane when it registers first.
+    // Matches _rawTextureStream's intent-only gating. (The "grey" symptom was the
+    // contrast convention, not an unregistered texture — see engine fix.)
     if (_currentState == CameraState.streaming) {
       yield CameraTextureInfo(
         textureId: _capabilities.streamTextureId,
@@ -280,9 +285,12 @@ class CambrianCamera {
   Stream<CameraTextureInfo> get rawTexture => _rawTextureStream();
 
   Stream<CameraTextureInfo> _rawTextureStream() async* {
-    if (_currentState == CameraState.streaming &&
-        _enableNaturalStream &&
-        _capabilities.naturalStreamTextureId != 0) {
+    // Gate on intent (`_enableNaturalStream`), NOT on the texture id value:
+    // `0` is a valid FlutterTextureRegistry id (the first-registered lane gets
+    // it), so a `!= 0` guard would wrongly hide the natural lane whenever it
+    // registers first. The processed lane (toneMappedTexture) uses the same
+    // intent-only gating.
+    if (_currentState == CameraState.streaming && _enableNaturalStream) {
       yield CameraTextureInfo(
         textureId: _capabilities.naturalStreamTextureId,
         width: _capabilities.naturalStreamWidth,
@@ -291,10 +299,7 @@ class CambrianCamera {
     }
     yield* stateStream
         .where(
-          (s) =>
-              s == CameraState.streaming &&
-              _enableNaturalStream &&
-              _capabilities.naturalStreamTextureId != 0,
+          (s) => s == CameraState.streaming && _enableNaturalStream,
         )
         .map(
           (_) => CameraTextureInfo(
@@ -401,15 +406,7 @@ class CambrianCamera {
   Future<ProcessingParams?> getPersistedProcessingParams() async {
     final cam = await _hostApi.getPersistedProcessingParams(_handle);
     if (cam == null) return null;
-    return ProcessingParams(
-      blackR: cam.blackR,
-      blackG: cam.blackG,
-      blackB: cam.blackB,
-      gamma: cam.gamma,
-      brightness: cam.brightness,
-      contrast: cam.contrast,
-      saturation: cam.saturation,
-    );
+    return ProcessingParams.fromCam(cam);
   }
 
   /// Samples the center 96×96 pixel patch of the most recent GPU-processed frame.

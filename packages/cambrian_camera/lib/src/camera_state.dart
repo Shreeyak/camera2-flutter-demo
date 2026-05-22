@@ -155,10 +155,10 @@ class CameraCapabilities {
         evCompMin: 0,
         evCompMax: 0,
         evCompensationStep: 0,
-        naturalStreamTextureId: 0,
+        naturalStreamTextureId: noTextureId,
         naturalStreamWidth: 0,
         naturalStreamHeight: 0,
-        streamTextureId: 0,
+        streamTextureId: noTextureId,
         streamWidth: 0,
         streamHeight: 0,
         sensorStreamWidth: 0,
@@ -207,8 +207,16 @@ class CameraCapabilities {
   final int evCompMax;
   final double evCompensationStep;
 
+  /// Sentinel for "no texture" in [naturalStreamTextureId] / [streamTextureId].
+  ///
+  /// `-1` because `FlutterTextureRegistry.register()` only ever returns
+  /// non-negative ids — the first-registered lane legitimately gets `0`, so a
+  /// real id can never collide with this sentinel. Test `>= 0` for presence,
+  /// never `!= 0` (that would hide the lane that registered first).
+  static const int noTextureId = -1;
+
   /// Flutter texture ID for the GPU natural stream (passthrough, no color adjustments).
-  /// 0 if natural stream is disabled.
+  /// [noTextureId] if the natural stream is disabled.
   final int naturalStreamTextureId;
 
   /// Actual computed width of the GPU natural stream (pixels). 0 if natural stream is disabled.
@@ -222,6 +230,7 @@ class CameraCapabilities {
   /// brightness, contrast, saturation, and gamma applied. Minted at [open] and
   /// stable for the session. Distinct from the camera handle on iOS (separate
   /// texture registry); equal to the handle on Android by coincidence.
+  /// [noTextureId] before a session is open (see [CameraCapabilities.empty]).
   final int streamTextureId;
 
   /// Width of the GPU processed stream texture (pixels). Matches the largest 4:3 YUV size.

@@ -135,39 +135,56 @@ The earlier "left lane pure black" symptom (2026-05-20) has since resolved — t
 **natural lane now renders correctly** (verified: live preview + `captureNaturalPicture`
 produces a correct image).
 
-### Bug B — processed lane's 8-bit buffer is grey (ENGINE; fix in eva-swift-stitch)
+### Bug B — processed lane renders grey (cam2fd CONTRAST CONVENTION; engine exonerated)
+
+> **Earlier drafts of this section were wrong.** They blamed the engine (first a
+> Pass-7 shader bug, then a `TexturePoolManager` IOSurface-sharing bug). On-device
+> probes (2026-05-22) disproved both. The engine is **not** at fault.
 
 With Bug A fixed, the processed pane correctly targets the processed lane — and
-renders **solid grey**. This is **not** a texture-delivery / clear-color issue:
-the **pixel data itself is grey**. Decisive discriminators:
+still rendered **solid grey**. Device-log probes (`grey-probe` NSLog/debugPrint in
+`CameraLaneBridge`, `CameraLaneTexture`, `lib/main.dart`, read via `idevicesyslog`)
+showed the **delivery path is fully healthy**:
 
-| Consumer | Reads | Result |
+| Probe | Observed | Meaning |
 |---|---|---|
-| `sampleCenterPatch` (calibration) | processed **16F** texture (`latestProcessedTex16F` / `processedTexI`) | ✅ correct — reflects black-balance, responds to scene |
-| Flutter preview **+ `captureImage`** | processed **8-bit** buffer (`latestProcessedBuffer`) | ❌ **grey** |
-| `captureNaturalPicture` | natural **8-bit** buffer | ✅ correct |
+| `bridge signal stream=processed id=1` | firing steadily | engine delivers `.processed` to cam2fd |
+| `copyPixelBuffer stream=processed` | `bufferNil=false fmt=0x42475241` | Flutter pulls a **valid BGRA8** buffer |
+| Dart `PROCESSED hasData=true id=1` | building `Texture(1)` | widget is fed |
 
-So the processed **16F** copy is correct (sampling works) but the processed
-**8-bit BGRA** copy is grey, while the natural 8-bit copy is fine.
+So the buffer was valid BGRA8 the whole time — its **content** was grey. Root
+cause: a **contrast convention mismatch**. The engine color shader
+(`ColorShaders.metal`) computes `out = (in-0.5)*contrast + 0.5`, so **contrast
+1.0 = identity** (like `gamma`). But cam2fd's `ProcessingParams` defaulted
+`contrast = 0.0` (a normalized "[-1,1], 0 = identity" API matching brightness/
+saturation) and passed it straight through `toCam()` **without translation** — so
+the default reached the engine as zero-contrast → solid mid-grey on every startup.
+(White-balance still read non-uniform values because it samples a pre-contrast
+tap, which is why "frames are arriving" was true even while the preview was grey.)
 
-**Localization:** `MetalPipeline.swift` **Pass-7** (RGBA16F→BGRA8 conversion).
-`Pass-7p` (processed, ~line 584-595) reads `processedTexI` and writes the
-processed 8-bit pool pair; `Pass-7n` (natural, ~line 572-582) does the same for
-natural. Pass ordering is correct (Pass-2 writes `processedTexI` at ~line 516,
-before Pass-7p reads it at ~line 589) and the two dispatches are **code-symmetric**
-(same `rgba16fToBgra8PSO`, pools created identically). So the failure is **not
-visible in static source** — it needs a **Metal GPU frame capture** in the engine
-repo to inspect what `processedTexI` / the `eightBitProcessedPool` surface
-actually contains at Pass-7p execution.
+**Fix (cam2fd Dart, not the engine):** translate at the serialization boundary —
+`ProcessingParams.toCam()` adds `engineContrastIdentityOffset` (1.0); new
+`ProcessingParams.fromCam()` subtracts it; `getPersistedProcessingParams` routes
+through `fromCam`. Stale "piecewise sigmoid" docstring corrected to the engine's
+linear math. Device-verified: processed pane shows the live scene at the default
+slider position.
 
-**This fix belongs in eva-swift-stitch (CameraKit), then re-vendor via the
-`camerakit-only` subtree.** Do NOT patch the vendored copy in cam2fd.
+### Bug C — raw/natural lane stayed black (`0`-as-sentinel, cam2fd Dart)
 
-### Net status
+`FlutterTextureRegistry.register()` assigns the first-registered lane id **`0`**
+(a valid id — Flutter paints `Texture(0)` fine, confirmed by a now-present
+`copyPixelBuffer stream=natural` probe). But `_rawTextureStream` guarded on
+`naturalStreamTextureId != 0`, hiding the lane whenever it registered first. Fixed
+by gating on intent (`_enableNaturalStream`) like the processed lane, plus
+hardening `CameraCapabilities.empty()` to seed `noTextureId = -1`. Device-verified:
+raw pane now renders.
 
-- Natural lane: works (preview + still).
-- Processed lane: correctly **wired** (Bug A fixed); renders grey pending the
-  engine Pass-7 fix (Bug B).
-- The `.interrupted`-mismapped-to-`.error` lifecycle loose-end above was also
-  fixed separately (added `CameraState.interrupted` to the Dart enum +
-  `fromString`).
+### Net status (2026-05-22, all device-verified)
+
+- Natural/raw lane: **works** (preview + still).
+- Processed lane: **works** (preview + still); grey was the contrast default, now
+  fixed.
+- Engine (`eva-swift-stitch` / CameraKit): **exonerated** — no changes needed; the
+  `PROCESSED_LANE_GREY_HANDOFF.md` handoff is moot.
+- The `.interrupted`-mismapped-to-`.error` lifecycle loose-end was also fixed
+  separately (added `CameraState.interrupted` to the Dart enum + `fromString`).

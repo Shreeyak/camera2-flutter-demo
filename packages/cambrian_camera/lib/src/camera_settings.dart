@@ -416,6 +416,17 @@ class ProcessingParams {
     _validate();
   }
 
+  /// Offset between this Dart API's contrast convention (0.0 = identity) and the
+  /// native engine shader convention (1.0 = identity; `out = (in-0.5)*c + 0.5`).
+  ///
+  /// The Dart side normalizes contrast to [-1.0, +1.0] with 0.0 = identity to
+  /// match [brightness] and [saturation]; the engine instead treats 1.0 as
+  /// identity (like [gamma]). The two are bridged by adding this offset when
+  /// serializing to the engine ([toCam]) and subtracting it when deserializing
+  /// ([fromCam]). Without this translation, the default contrast (0.0) reaches
+  /// the engine as zero-contrast and renders a solid mid-grey frame.
+  static const double engineContrastIdentityOffset = 1.0;
+
   /// Per-channel black level subtraction in [0.0, 0.5].
   final double blackR;
   final double blackG;
@@ -430,9 +441,10 @@ class ProcessingParams {
   final double brightness;
 
   /// Contrast in [-1.0, +1.0]. 0.0 = identity.
-  /// Uses a piecewise sigmoid: positive values squeeze the tonal curve (S-curve),
-  /// negative values flatten it (expand toward grey). The shader guards against
-  /// division by zero at the ±1.0 endpoints.
+  /// Linear scaling around the 0.5 luma midpoint: positive values increase
+  /// contrast, negative values flatten it toward mid-grey (-1.0 = fully flat
+  /// grey). Translated to the engine's native convention (1.0 = identity) at the
+  /// serialization boundary via [engineContrastIdentityOffset]; see [toCam].
   final double contrast;
 
   /// Saturation adjustment in [-1.0, +1.0]. 0.0 = no change (identity/full natural color).
@@ -489,8 +501,22 @@ class ProcessingParams {
         blackB: blackB,
         gamma: gamma,
         brightness: brightness,
-        contrast: contrast,
+        // Dart 0.0 = identity → engine 1.0 = identity (see
+        // [engineContrastIdentityOffset]).
+        contrast: contrast + engineContrastIdentityOffset,
         saturation: saturation,
+      );
+
+  /// Reconstructs from the Pigeon transport type, inverting the contrast
+  /// convention translation applied by [toCam].
+  factory ProcessingParams.fromCam(CamProcessingParams cam) => ProcessingParams(
+        blackR: cam.blackR,
+        blackG: cam.blackG,
+        blackB: cam.blackB,
+        gamma: cam.gamma,
+        brightness: cam.brightness,
+        contrast: cam.contrast - engineContrastIdentityOffset,
+        saturation: cam.saturation,
       );
 
   ProcessingParams copyWith({
