@@ -99,24 +99,39 @@ current phase alone. See the field guide `docs/ios-camera-lifecycle.md`.
 
 ### Seam-adjacent — but really a different subsystem
 
-- **`StopReason.pause` production-dead** ⚠️ — surfaced because recording-finalize
-  is the `.background` suspend step (and we edited `finalizeActiveRecording`'s
-  doc), but the dead `.pause` case is a Recording-API artifact (no `pause()`
-  caller; the suspend uses `.user`). Fix it as recording dead-code cleanup, not as
-  part of the lifecycle phase model — file under recording, not here.
+- **`StopReason.pause` production-dead** ✅ **(resolved on branch
+  `followup-recording-cleanup-test-flake`, full removal)** — surfaced because
+  recording-finalize is the `.background` suspend step (and we edited
+  `finalizeActiveRecording`'s doc), but the dead `.pause` case was a Recording-API
+  artifact (no `pause()` caller; the suspend uses `.user`). Removed end-to-end:
+  the `StopReason` enum, the `reason:` parameter on `Recording.stop()` and
+  `finalizeActiveRecording()`, and the never-produced public `RecordingState.paused`
+  case; the two Stage10 `.pause` suites were deleted. The package has no
+  pause/resume recording API (only `start`/`stop`), so nothing was lost. **Downstream
+  follow-up (separate repo, not this branch):** re-sync the vendored CameraKit copy
+  in `camera2_flutter_demo/packages/cambrian_camera/ios/cambrian_camera/CameraKit/`
+  and delete `FlutterApiPump.swift`'s `case .paused: return "paused"` arm (exhaustive
+  switch — won't compile otherwise). The Dart `RecordingState` enum already lacks
+  `paused`, so no Dart change is needed.
 
 ### Does not fit — orthogonal
 
-- **`Stage06Tests.frameSetPublication` cold-build flake** ❌ — a pre-existing
-  test-reliability bug in the tracker/frame-publication path (force-unwrap of a
-  not-yet-delivered frame at `:61`). No connection to lifecycle, not in code we
-  touched — a test-infra/timing issue; track it separately. Root cause: a clean
-  build's first run finds the tracker `FrameSet` hasn't arrived within the fixed
-  200 ms `Task.sleep` because uncached Metal shader compilation slows the first
-  `pipeline.encode` (the test drives `MetalPipeline` directly with `gateOpen:
-  true`, no engine lifecycle); the crash cascades to the 4 parallel timing tests,
-  and a warm re-run is green. Harden: force-unwrap → `#require`/guarded `XCTFail`,
-  fixed sleep → bounded polling.
+- **`Stage06Tests.frameSetPublication` cold-build flake** ✅ **(resolved on branch
+  `followup-recording-cleanup-test-flake`)** — a pre-existing test-reliability bug
+  in the tracker/frame-publication path (force-unwrap of a not-yet-delivered frame
+  at `:61`). Root cause: a clean build's first run found the tracker `FrameSet`
+  hadn't arrived within the fixed 200 ms `Task.sleep` because uncached Metal shader
+  compilation slows the first `pipeline.encode` (the test drives `MetalPipeline`
+  directly with `gateOpen: true`, no engine lifecycle); the crash cascaded to the 4
+  parallel timing tests, and a warm re-run was green. Fixed exactly as prescribed:
+  the pre-encode fixed sleep → a bounded poll on `registry.subscriberCount(for:)`;
+  the post-encode fixed sleep + `.cancel()` removed in favor of awaiting each
+  subscriber task directly (resolves whenever the lane delivers, however slow the
+  cold compile); force-unwraps → `try #require`; and a `.timeLimit(.minutes(1))`
+  trait so genuine non-delivery fails cleanly instead of hanging. Verified green on
+  device (warm); cold-build repro deferred (would require a full OpenCV rebuild —
+  the fix eliminates the timing dependency that caused it, so a cold run can no
+  longer force-unwrap nil).
 
 ## Downstream — cam2fd Flutter plugin (documented, not edited here)
 
@@ -1227,6 +1242,26 @@ Per Stage 11 brief §11. iPad device manual passes captured separately; not bloc
       bounded at 1000 yields so a genuinely-broken chain fails cleanly
       instead of hanging. Test-only change.
     Result: every CameraKitTests file now runs on device with zero skips.
+71. **2026-05-22 — Contrast convention unified to `[-1, 1]` / `0.0`-identity.**
+    `ColorShaders.metal` contrast changed from `(c-0.5)*contrast+0.5` (identity
+    at `1.0`, range `[0, 2]`) to `(c-0.5)*(1.0+contrast)+0.5` (identity at `0.0`,
+    range `[-1, 1]`), making contrast structurally identical to saturation's
+    `1+saturation` mix and uniform with brightness/saturation. `-1` = flat grey,
+    `+1` = 2×; same internal multiplier range as before, just re-centred.
+    `ProcessingParameters.contrast` default `1.0 → 0.0` + doc-comment;
+    `SettingsPersistence.processingKey` bumped to `.v2` so pre-change persisted
+    blobs (old `1.0`-identity) aren't re-applied as max contrast; native app
+    contrast slider range `0...2 → -1...1` (`CameraView.swift`). Regression test
+    `Stage04Tests.contrastConventionIdentityAtZero` locks `0`=identity (the
+    direct guard against the cam2fd grey-frame: a `0.0` default reaching the old
+    shader collapsed every pixel to 0.5). **Why:** the engine's contrast was the
+    lone non-`[-1,1]`/`0.0` perceptual param; cam2fd carried an
+    `engineContrastIdentityOffset` workaround to bridge it. Moves toward
+    `architecture/07-settings.md`'s `0.0`-identity intent (the *sigmoid* curve
+    there remains the deferred open question — orthogonal to this re-centring).
+    **Consumers must update:** cam2fd removes `engineContrastIdentityOffset`
+    (contrast becomes a pass-through); Eva picks up the new convention on next
+    pull. Device-verified: Stage04 + Stage11 suites 10/0/0.
 
 ## Open questions for next stage
 

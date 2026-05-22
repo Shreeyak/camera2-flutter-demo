@@ -173,7 +173,7 @@ struct RecordingPhotosDestinationTests {
             captureSize: Size(width: 1920, height: 1080)
         )
         #expect(await rec.photosDestination == .copy)
-        _ = await rec.stop(reason: .user)
+        _ = await rec.stop()
     }
 
     @Test("Recording.start defaults photosDestination to .none")
@@ -194,7 +194,7 @@ struct RecordingPhotosDestinationTests {
             captureSize: Size(width: 1920, height: 1080)
         )
         #expect(await rec.photosDestination == .none)
-        _ = await rec.stop(reason: .user)
+        _ = await rec.stop()
     }
 
     @Test("Recording.start with sandbox-escape outputURL throws EngineError.invalidOutputPath")
@@ -243,6 +243,6 @@ struct RecordingPhotosDestinationTests {
         )
         #expect(start.displayName == "custom-recording.mp4")
         #expect(start.uri == custom.absoluteString)
-        _ = await rec.stop(reason: .user)
+        _ = await rec.stop()
     }
 }

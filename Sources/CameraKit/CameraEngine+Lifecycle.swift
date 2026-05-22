@@ -157,7 +157,7 @@ extension CameraEngine {
             await recovery?.cancelPendingRetry()
             guard generation == reconcileGeneration else { return }
             if recording != nil {
-                _ = await finalizeActiveRecording(reason: .user)
+                _ = await finalizeActiveRecording()
                 lifecycleTestHook?.actions.append("finalize")
                 guard generation == reconcileGeneration else { return }
             }

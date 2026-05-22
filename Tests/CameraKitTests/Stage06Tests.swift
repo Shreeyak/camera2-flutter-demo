@@ -15,7 +15,7 @@ struct Stage06Tests {
     /// Inject a synthetic YUV CMSampleBuffer; subscribers to `.natural`, `.processed`,
     /// `.tracker` each receive one FrameSet with frameNumber == 1; each CVPixelBuffer
     /// is IOSurface-backed.
-    @Test func frameSetPublication() async throws {
+    @Test(.timeLimit(.minutes(1))) func frameSetPublication() async throws {
         let device = try #require(MTLCreateSystemDefaultDevice())
         let size = Size(width: 256, height: 256)
         let registry = ConsumerRegistry()
@@ -36,29 +36,40 @@ struct Stage06Tests {
             return nil
         }
 
-        // Allow subscribe registrations to land before encoding.
-        try await Task.sleep(nanoseconds: 50_000_000)
+        // Wait (bounded) for all three subscribe registrations to land before
+        // encoding, so the single encoded frame reaches live subscribers. A fixed
+        // sleep was flaky on cold builds — first-run Metal shader compilation can
+        // push the work past any fixed window. Poll the registry instead.
+        let deadline = ContinuousClock.now + .seconds(10)
+        while registry.subscriberCount(for: .natural) < 1
+            || registry.subscriberCount(for: .processed) < 1
+            || registry.subscriberCount(for: .tracker) < 1
+        {
+            try #require(
+                ContinuousClock.now < deadline,
+                "subscribe registrations did not land within 10s")
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
 
         let sb = try makeSyntheticYUVSampleBuffer(width: size.width, height: size.height)
         try pipeline.encode(sampleBuffer: sb)
-        // Allow completion handler to fire.
-        try await Task.sleep(nanoseconds: 200_000_000)
 
-        naturalTask.cancel()
-        processedTask.cancel()
-        trackerTask.cancel()
-        let n = await naturalTask.value
-        let p = await processedTask.value
-        let t = await trackerTask.value
+        // Each task resolves when its lane delivers the first FrameSet — however
+        // long the (possibly cold) encode/completion-handler takes. The enclosing
+        // `.timeLimit` turns a genuine non-delivery into a clean failure instead
+        // of a hang, so no fixed post-encode sleep or `.cancel()` is needed.
+        let n = try #require(await naturalTask.value, "natural lane delivered no FrameSet")
+        let p = try #require(await processedTask.value, "processed lane delivered no FrameSet")
+        let t = try #require(await trackerTask.value, "tracker lane delivered no FrameSet")
 
         // MetalPipeline assigns frameNumber, then increments — first FrameSet is 0.
         // See docs/stage-11-pre-existing-bugs.md Bug 2.
-        #expect(n?.frameNumber == 0)
-        #expect(p?.frameNumber == 0)
-        #expect(t?.frameNumber == 0)
-        #expect(CVPixelBufferGetIOSurface(n!.natural) != nil)
-        #expect(CVPixelBufferGetIOSurface(p!.processed) != nil)
-        #expect(CVPixelBufferGetIOSurface(t!.tracker) != nil)
+        #expect(n.frameNumber == 0)
+        #expect(p.frameNumber == 0)
+        #expect(t.frameNumber == 0)
+        #expect(CVPixelBufferGetIOSurface(n.natural) != nil)
+        #expect(CVPixelBufferGetIOSurface(p.processed) != nil)
+        #expect(CVPixelBufferGetIOSurface(t.tracker) != nil)
     }
 
     // MARK: - Test 2 — 06:swift-consumer-drop-on-busy

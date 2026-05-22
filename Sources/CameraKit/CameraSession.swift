@@ -30,6 +30,9 @@ final class CameraSession: @unchecked Sendable {
     /// Retained output — created in init() and wired in configure().
     private let videoOutput: AVCaptureVideoDataOutput
 
+    /// Photo output — created in init() and wired in configure().
+    private let photoOutput: AVCapturePhotoOutput
+
     // MARK: - Session event routing
 
     enum SessionEvent: Sendable {
@@ -55,6 +58,7 @@ final class CameraSession: @unchecked Sendable {
             qos: .userInitiated)
         avSession = AVCaptureSession()
         videoOutput = AVCaptureVideoDataOutput()
+        photoOutput = AVCapturePhotoOutput()
     }
 
     // MARK: - configure()
@@ -207,6 +211,10 @@ final class CameraSession: @unchecked Sendable {
             avSession.addOutput(videoOutput)
         }
 
+        if avSession.canAddOutput(photoOutput) {
+            avSession.addOutput(photoOutput)
+        }
+
         avSession.commitConfiguration()
 
         // Register interruption and runtime-error observers now that configuration is committed.
@@ -255,6 +263,16 @@ final class CameraSession: @unchecked Sendable {
             connection.preferredVideoStabilizationMode = .off
         }
 
+        // Match landscape-right rotation on the photo output connection (ADR-17).
+        // Unlike the video path, unsupported angle is a silent skip — not a throw —
+        // because photo rotation is a best-effort orientation hint, not a hard
+        // pipeline requirement.
+        if let pc = photoOutput.connection(with: .video),
+            pc.isVideoRotationAngleSupported(Constants.captureOrientationAngleDeg)
+        {
+            pc.videoRotationAngle = Constants.captureOrientationAngleDeg  // ADR-17
+        }
+
         return (device: liveDevice, captureSize: chosenSize)
     }
 
@@ -292,6 +310,20 @@ final class CameraSession: @unchecked Sendable {
         await runOnQueue(sessionQueue) { [self] in
             stopRunning()
         }
+    }
+
+    /// Shoots a one-shot still.
+    ///
+    /// The capturePhoto request runs on sessionQueue (ADR-07); returns the captured
+    /// pixel buffer. The transient `StillPhotoCapture` is retained by `output` for
+    /// the capture's duration and by this async frame.
+    ///
+    /// - Note: No timeout is installed — if the session is torn down before the
+    ///   photo delegate fires, the calling Task suspends indefinitely. A
+    ///   cancellation-aware timeout (ADR-30 / AsyncWithTimeout pattern) should be
+    ///   added if this surfaces in production.
+    func capturePhoto() async throws -> CVPixelBuffer {
+        try await StillPhotoCapture().capture(using: photoOutput, on: sessionQueue)
     }
 
     /// Re-select device format for new resolution.

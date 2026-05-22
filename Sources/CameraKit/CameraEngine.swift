@@ -1418,60 +1418,60 @@ public actor CameraEngine {
         return output
     }
 
-    /// Captures the current *natural* (unprocessed) frame as a JPEG.
+    /// ISP one-shot via `AVCapturePhotoOutput` → live Metal crop+grade → TIFF
+    /// cropped to the active region.
     ///
-    /// Pre-P3 sibling of `captureImage` for the Pigeon contract's
-    /// `captureNaturalPicture` method. Reads the latest natural-lane buffer
-    /// from `MetalPipeline` (BGRA8, IOSurface-backed — the single delivery
-    /// format), JPEG-encodes via the shared `StillCapture.encode` path, and
-    /// optionally publishes to Photos. Does NOT touch `AVCapturePhotoOutput`
-    /// (`DECISIONS.md` D-2P-10).
-    ///
+    /// Same device and grade settings as `captureImage`, differing only by
+    /// source: this method fires an ISP one-shot rather than reading the latest
+    /// processed-lane buffer. The graded output is TIFF-encoded at `outputSize`.
     /// EXIF carries `"lane": "natural"` inside the `CamPlugin/v1` envelope so
-    /// consumers can distinguish natural-lane stills from processed-lane
-    /// stills written by `captureImage` (`"lane": "processed"`).
-    ///
-    /// Capture during `SessionState.paused` is permitted — the mailbox still
-    /// holds the last frame from before the pause, which is the right
-    /// semantics for "capture the natural picture." Gating is by buffer
-    /// availability, not session state.
+    /// consumers can distinguish natural-lane stills from processed-lane stills
+    /// written by `captureImage` (`"lane": "processed"`). Errors cleanly when
+    /// the session is not running (no last-frame fallback on pause — reverses
+    /// D-2P-10).
     ///
     /// - Parameters:
     ///   - outputURL: Resolved per `PhotosLibraryClient.resolve` (default ext
-    ///     `jpg`). `nil` → `<Documents>/<timestamp>.jpg`.
+    ///     `tif`). `nil` → `<Documents>/<timestamp>.tif`.
     ///   - photosDestination: See `PhotosDestination`. Independent of
     ///     `outputURL`; defaults to `.none` (no Photos interaction).
     /// - Returns: A `StillCaptureOutput` with the on-disk file path. With
     ///   `.move` and a successful Photos publish, that file no longer exists.
-    /// - Throws: `EngineError.notOpen` if the engine is `.closed`.
+    /// - Throws: `EngineError.notOpen` if the engine is not open.
+    /// - Throws: `EngineError.capture(.bufferUnavailable)` if the session is
+    ///   not running (paused or not yet started).
     /// - Throws: `EngineError.invalidOutputPath(_:)` if `outputURL` resolves
     ///   outside the app sandbox.
-    /// - Throws: `EngineError.capture(.bufferUnavailable)` if no natural-lane
-    ///   frame has been delivered yet (engine just opened, no sample fired).
     /// - Throws: `EngineError.capture(_:)` wrapping any other `StillCaptureError`.
     public func captureNaturalPicture(
         outputURL: URL? = nil,
         photosDestination: PhotosDestination = .none
     ) async throws -> StillCaptureOutput {
-        guard isOpen, let pipeline = metalPipeline, let capture = stillCapture else {
+        guard isOpen, let pipeline = metalPipeline, let capture = stillCapture,
+            let session = cameraSession
+        else {
             throw EngineError.notOpen
         }
-        // Source the latest natural-lane BGRA8 buffer — the same surface
-        // delivered to the preview/bridge. The camera is 8-bit-locked, so there
-        // is no half-float precision to preserve at capture; StillCapture.encode
-        // consumes BGRA8 directly.
-        guard let buffer = pipeline.latestNaturalBuffer else {
-            CameraKitLog.warning(.engine, "[natural] no natural-lane buffer available")
+        // R6: the ISP one-shot needs a running session — no last-frame fallback
+        // on pause (contract change from the old natural-lane-buffer behavior).
+        guard reconciledSessionRunning else {
             throw EngineError.capture(.bufferUnavailable)
         }
         CameraKitLog.notice(
             .engine,
-            "[natural] capture start size=\(pipeline.captureSize.width)x\(pipeline.captureSize.height)"
+            "[natural] ISP capture start size=\(pipeline.outputSize.width)x\(pipeline.outputSize.height)"
         )
 
-        let snap = await cameraSession?.device?.lastSnapshot
+        // 1. Shoot the ISP one-shot (sessionQueue, ADR-07). Inherits the
+        //    device's live exposure/ISO/WB/focus.
+        let photoBuffer = try await session.capturePhoto()
+        // 2. Crop + grade through the live Metal pipeline (matches preview grade).
+        let graded = try await pipeline.gradeOneShot(pixelBuffer: photoBuffer)
+
+        // 3. Encode TIFF with the same EXIF/lane tag contract as before.
+        let snap = await session.device?.lastSnapshot
         let apertureValue: Double
-        if let device = cameraSession?.device {
+        if let device = session.device {
             apertureValue = Double(await device.lensAperture)
         } else {
             apertureValue = 0
@@ -1479,7 +1479,7 @@ public actor CameraEngine {
 
         let writeURL: URL
         do {
-            writeURL = try PhotosLibraryClient.resolve(outputURL: outputURL, defaultExt: "jpg")
+            writeURL = try PhotosLibraryClient.resolve(outputURL: outputURL, defaultExt: "tif")
         } catch let e as EngineError {
             throw e
         }
@@ -1487,21 +1487,21 @@ public actor CameraEngine {
         let output: StillCaptureOutput
         do {
             output = try await capture.encode(
-                buffer: buffer,
-                captureSize: pipeline.captureSize,
+                buffer: graded,
+                captureSize: pipeline.outputSize,
                 deviceSnapshot: snap,
                 focalLengthMm: 0,
                 apertureValue: apertureValue,
                 outputURL: writeURL,
-                format: .jpeg,
+                format: .tiff,
                 laneTag: "natural"
             )
         } catch let e as StillCaptureError {
             throw EngineError.capture(e)
         }
-        CameraKitLog.notice(.engine, "[natural] capture complete path=\(output.filePath)")
+        CameraKitLog.notice(.engine, "[natural] ISP capture complete path=\(output.filePath)")
 
-        // Optional Photos publish — same non-fatal contract as captureImage.
+        // 4. Optional Photos publish — same non-fatal contract as captureImage.
         if photosDestination != .none {
             let url = URL(fileURLWithPath: output.filePath)
             do {
@@ -1616,7 +1616,7 @@ public actor CameraEngine {
         else { throw EngineError.notOpen }
         let stopStartMs = clock.nowMs()
         CameraKitLog.notice(.engine, "[recording] stopRecording entry")
-        let uri = await finalizeActiveRecording(reason: .user)
+        let uri = await finalizeActiveRecording()
         try? await session.setPreviewFrameRateRange()
         let stopDurationMs = clock.nowMs() - stopStartMs
         CameraKitLog.notice(
@@ -1631,13 +1631,13 @@ public actor CameraEngine {
     /// Drains the writer — the drain is wrapped in a `UIApplication`
     /// background-task assertion inside `Recording.stop`,
     /// 06-capture-and-recording.md §Background drain — then optionally
-    /// publishes the result to Photos. Shared by `stopRecording()`, `pause()`,
-    /// and `reconcile()`'s `.background` path (the three triggers named in the
-    /// Stage 12 brief). Returns the output URI, or `""` when no recording is active.
-    func finalizeActiveRecording(reason: Recording.StopReason) async -> String {
+    /// publishes the result to Photos. Shared by `stopRecording()` and
+    /// `reconcile()`'s `.background` path. Returns the output URI, or `""`
+    /// when no recording is active.
+    func finalizeActiveRecording() async -> String {
         guard let rec = recording, let pipeline = metalPipeline else { return "" }
         pipeline.isRecording.store(false, ordering: .sequentiallyConsistent)
-        let uri = await rec.stop(reason: reason)
+        let uri = await rec.stop()
         let destination = await rec.photosDestination
         self.recording = nil
         pipeline.onEncodedBufferReady = nil

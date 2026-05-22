@@ -56,6 +56,51 @@ struct Stage04Tests {
         #expect(abs(br - expected) < 5e-3)
     }
 
+    // MARK: - Test 1b — contrast convention (04:contrast-zero-is-identity)
+
+    /// Locks the `[-1, 1]` / `0.0`-identity contrast convention.
+    ///
+    /// `contrast = 0` must be identity — NOT grey. (The cam2fd grey-frame bug was a
+    /// `0.0` default reaching the old `[0, 2]` / `1.0`-identity shader as
+    /// zero-contrast, collapsing every pixel to 0.5.) `-1` is fully flat grey
+    /// (0.5); `+1` is 2× around the 0.5 midpoint. Input is 0.75 (off the 0.5
+    /// pivot) so contrast actually moves the value.
+    @Test func contrastConventionIdentityAtZero() async throws {
+        let device = try #require(MTLCreateSystemDefaultDevice())
+        let size = Size(width: 64, height: 64)
+        let pipeline = try MetalPipeline(device: device, captureSize: size, gateOpen: true)
+
+        let (nBuf, nTex) = try pipeline.texturePoolForTest.dequeuePoolTexture(
+            pool: pipeline.naturalPoolForTest, width: size.width, height: size.height)
+        try fillBufferUniform(nBuf, r: 0.75, g: 0.75, b: 0.75, a: 1.0)
+        pipeline.setLatestNaturalForTest(buffer: nBuf, texture: nTex)
+
+        let (pBuf, pTex) = try pipeline.texturePoolForTest.dequeuePoolTexture(
+            pool: pipeline.processedPoolForTest, width: size.width, height: size.height)
+        pipeline.setLatestProcessedForTest(buffer: pBuf, texture: pTex)
+
+        func centerR(contrast: Double) async throws -> Float {
+            var params = ProcessingParameters.identity
+            params.contrast = contrast
+            pipeline.uniforms.withLock { $0.color = ColorUniform(params) }
+            try await pipeline.encodePass2Only()
+            let buf = try #require(pipeline.latestProcessedBufferForTest)
+            return try sampleCenterPixel(buf).0
+        }
+
+        // contrast = 0 → identity → input unchanged (0.75), NOT grey (0.5).
+        let identity = try await centerR(contrast: 0.0)
+        #expect(abs(identity - 0.75) < 1e-3, "contrast=0 must be identity, got \(identity)")
+
+        // contrast = -1 → fully flat grey → 0.5.
+        let flat = try await centerR(contrast: -1.0)
+        #expect(abs(flat - 0.5) < 1e-3, "contrast=-1 must be flat grey, got \(flat)")
+
+        // contrast = +1 → 2× around 0.5 → (0.75-0.5)*2+0.5 = 1.0.
+        let boosted = try await centerR(contrast: 1.0)
+        #expect(abs(boosted - 1.0) < 1e-3, "contrast=+1 must be 2x, got \(boosted)")
+    }
+
     // MARK: - Test 2 — 04:processing-params-persistence-roundtrip
 
     /// save → load returns identical struct; empty store returns nil.
@@ -68,7 +113,7 @@ struct Stage04Tests {
 
         var p = ProcessingParameters.identity
         p.brightness = 0.25
-        p.contrast = 1.4
+        p.contrast = 0.4
         p.saturation = -0.3
         p.gamma = 1.8
         p.blackR = 0.05

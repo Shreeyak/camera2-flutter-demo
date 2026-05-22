@@ -113,7 +113,7 @@ struct Stage11BBCalibrationScratchTests {
         pipeline.setColorUniformsForTest(
             ProcessingParameters(
                 brightness: 0,
-                contrast: 1,
+                contrast: 0,
                 saturation: 0,
                 blackR: 0.2,
                 blackG: 0.2,

@@ -133,8 +133,9 @@ final class MetalPipeline: @unchecked Sendable {
 
     var latestNaturalTex16F: MTLTexture? { _latestNaturalTex16F.latest }
     var latestProcessedTex16F: MTLTexture? { _latestProcessedTex16F.latest }
-    /// Tracker texture — `.bgra8Unorm` (Pass-4 writes directly into the BGRA8
-    /// tracker pool; no separate 16F texture exists for this lane).
+    /// Tracker texture — `.bgra8Unorm`, downsampled from the **processed**
+    /// (graded) lane (Pass-4 writes directly into the BGRA8 tracker pool; no
+    /// separate 16F texture exists for this lane).
     var latestTrackerTex: MTLTexture? { _latestTrackerTex.latest }
 
     /// Preview/bridge-facing BGRA8 lane textures (natural + processed).
@@ -298,7 +299,7 @@ final class MetalPipeline: @unchecked Sendable {
         self.cropOrigin = cropOrigin
 
         // Tracker dimensions: preserve OUTPUT aspect ratio, scale to trackerHeightPx.
-        // P2a — the tracker downsamples the rendered natural (which is now
+        // P2a — the tracker downsamples the rendered processed image (which is now
         // outputSize), so its aspect must follow outputSize, not the sensor.
         let trackerH = Constants.trackerHeightPx
         let aspect = Double(resolvedOutputSize.width) / Double(resolvedOutputSize.height)
@@ -519,12 +520,17 @@ final class MetalPipeline: @unchecked Sendable {
         pass2.dispatchThreadgroups(threadGroups, threadsPerThreadgroup: threadGroupSize)
         pass2.endEncoding()
 
-        // 8. Pass 4: tracker downsample naturalTexI → trackerTexI (when subscribed).
+        // 8. Pass 4: tracker downsample processedTexI → trackerTexI (when subscribed).
+        //    Sources the GRADED (Pass-2) image, not the raw natural lane, so
+        //    brightness/contrast/saturation/gamma/black-balance help the tracker
+        //    see (user-directed). Pass-2 writes processedTexI earlier in this same
+        //    command buffer; Metal's hazard tracking inserts the barrier (same as
+        //    Pass-5/Pass-7p, which already read processedTexI after Pass-2).
         if let trackerPair {
             let trackerTexI = trackerPair.texture
             let pass4 = commandBuffer.makeComputeCommandEncoder()!
             pass4.setComputePipelineState(trackerDownsamplePSO)
-            pass4.setTexture(naturalTexI, index: 0)
+            pass4.setTexture(processedTexI, index: 0)
             pass4.setTexture(trackerTexI, index: 1)
             pass4.setSamplerState(trackerSampler, index: 0)
             let tgTracker = MTLSize(width: 16, height: 16, depth: 1)
@@ -627,10 +633,11 @@ final class MetalPipeline: @unchecked Sendable {
         // FrameSet delivers BGRA8 for all three lanes to the C++/AsyncStream
         // consumers (CannyConsumer format-branches on _32BGRA). The `?? <16F>`
         // fallbacks only fire if a Pass-7 dequeue was dropped on pool
-        // exhaustion (rare); the tracker falls back to the BGRA8 natural buffer.
+        // exhaustion (rare); the tracker (now a processed-lane downsample) falls
+        // back to the BGRA8 processed buffer.
         let naturalForSet: CVPixelBuffer = naturalEightBitBuf ?? naturalBuf
         let processedForSet: CVPixelBuffer = processedEightBitBuf ?? processedBuf
-        let trackerForSet: CVPixelBuffer = trackerBuf ?? naturalForSet
+        let trackerForSet: CVPixelBuffer = trackerBuf ?? processedForSet
 
         // D-10: capture the session token at commit. Handler no-ops if the token has
         // advanced (close() / recovery ran) — prevents stale FrameSet publish and
@@ -718,6 +725,77 @@ final class MetalPipeline: @unchecked Sendable {
         if logFirstAfterGate {
             CameraKitLog.notice(.metal, "[resume] first commit after gate (t1b)")
         }
+    }
+
+    /// One-shot crop+grade of an arbitrary YUV buffer (e.g. an AVCapturePhotoOutput
+    /// still) into a BGRA8 `outputSize` buffer — the saved natural-capture path.
+    ///
+    /// Reuses the live crop uniform + current ColorUniform so the result matches the
+    /// graded preview. Input dims MUST equal `captureSize`; throws
+    /// `MetalError.unsupportedFormat` otherwise (1:1 crop mapping).
+    /// Dequeues from the same `naturalPool`/`processedPool`/`eightBitNaturalPool` as
+    /// the live `encode(sampleBuffer:)` path, so under an active capture session it
+    /// can throw on transient pool exhaustion.
+    func gradeOneShot(pixelBuffer: CVPixelBuffer) async throws -> CVPixelBuffer {
+        guard CVPixelBufferGetWidth(pixelBuffer) == captureSize.width,
+            CVPixelBufferGetHeight(pixelBuffer) == captureSize.height
+        else {
+            throw MetalError.unsupportedFormat
+        }
+        let yTex = try texturePool.makeYTexture(from: pixelBuffer)
+        let cbcrTex = try texturePool.makeCbCrTexture(from: pixelBuffer)
+        let nat = try texturePool.dequeuePoolTexture(
+            pool: naturalPool, width: outputSize.width, height: outputSize.height)
+        let proc = try texturePool.dequeuePoolTexture(
+            pool: processedPool, width: outputSize.width, height: outputSize.height)
+        let out = try texturePool.dequeueEightBitPoolTexture(
+            pool: eightBitNaturalPool, width: outputSize.width, height: outputSize.height)
+
+        let (color, crop) = uniforms.withLock { ($0.color, $0.crop) }
+        let cb = commandQueue.makeCommandBuffer()!
+        let tg = MTLSize(width: 16, height: 16, depth: 1)
+        let groups = MTLSize(
+            width: (outputSize.width + 15) / 16,
+            height: (outputSize.height + 15) / 16,
+            depth: 1)
+
+        let p1 = cb.makeComputeCommandEncoder()!  // Pass-1: YUV→RGB + crop
+        p1.setComputePipelineState(yuvToRgbaPSO)
+        p1.setTexture(yTex, index: 0)
+        p1.setTexture(cbcrTex, index: 1)
+        p1.setTexture(nat.texture, index: 2)
+        var cropLocal = crop
+        p1.setBytes(&cropLocal, length: MemoryLayout<CropUniform>.stride, index: 0)
+        p1.dispatchThreadgroups(groups, threadsPerThreadgroup: tg)
+        p1.endEncoding()
+
+        let p2 = cb.makeComputeCommandEncoder()!  // Pass-2: grade
+        p2.setComputePipelineState(colorTransformPSO)
+        p2.setTexture(nat.texture, index: 0)
+        p2.setTexture(proc.texture, index: 1)
+        var colorLocal = color
+        p2.setBytes(&colorLocal, length: MemoryLayout<ColorUniform>.stride, index: 0)
+        p2.dispatchThreadgroups(groups, threadsPerThreadgroup: tg)
+        p2.endEncoding()
+
+        let p3 = cb.makeComputeCommandEncoder()!  // convert RGBA16F→BGRA8
+        p3.setComputePipelineState(rgba16fToBgra8PSO)
+        p3.setTexture(proc.texture, index: 0)
+        p3.setTexture(out.texture, index: 1)
+        p3.dispatchThreadgroups(groups, threadsPerThreadgroup: tg)
+        p3.endEncoding()
+
+        try await withCheckedThrowingContinuation { (c: CheckedContinuation<Void, Error>) in
+            cb.addCompletedHandler { cb in
+                cb.status == .error
+                    ? c.resume(
+                        throwing: MetalError.commandBufferFailed(
+                            code: (cb.error as NSError?)?.code ?? -1))
+                    : c.resume()
+            }
+            cb.commit()
+        }
+        return out.buffer
     }
 
     /// Blocks until the most recently committed command buffer has been scheduled.
