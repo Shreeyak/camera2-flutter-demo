@@ -102,3 +102,72 @@ Plan 3's commit (`2de8e69 feat(plugin): Phase 3 Plan 3 — iOS calibration (fall
 
 - The `state=error` transitions without an accompanying `onError` payload need root-causing — they suggest the lifecycle state machine has a transition path that emits `.error` without invoking the error callback. Either fix the omission or downgrade those transitions.
 - Plan 4's spec §8.4 device matrix (cases 1–9) covers the basic open / preview / capture path; running it would have caught the blank preview before Plan 3 verification was attempted.
+
+---
+
+## Resolution (2026-05-22)
+
+On-device re-investigation (Shreeyak's iPad, iOS 26.4.2) found this was **two
+distinct bugs** stacked on top of each other. (Note: the example app's preview
+layout has since changed — it now shows **processed on the left, raw/natural on
+the right**; refer to lanes by name below, not by side.)
+
+### Bug A — wrong texture id for the processed pane (FIXED in cam2fd)
+
+The Dart `toneMappedTexture` getter rendered `textureId: _handle` (the camera
+handle). That holds on **Android** (the handle *is* the processed
+`SurfaceProducer.id()`), but **not on iOS** — there the engine `HandleRegistry`
+handle and the Flutter texture-registry ids are unrelated, and the low handle
+**collided with the natural texture's id**, so the "processed" pane actually
+rendered the **natural** lane. That collision is also why earlier sessions saw
+the natural image appear on the processed pane (masking Bug B).
+
+**Fix:** added `previewTextureId` to the `CamCapabilities` contract (it already
+carried `naturalStreamTextureId`; the processed id was simply never there).
+iOS populates it from the real Flutter texture id (`state.previewTextureId`);
+Android populates it explicitly (`= handle`) for contract uniformity; Dart
+exposes it as `CameraCapabilities.streamTextureId` and `toneMappedTexture`
+renders that. Engine untouched. This is the right model: a **session handle and
+a render-surface id are different concepts** and Dart must not assume they're
+equal. (Commit: `fix(ios): render processed lane on its own texture id`.)
+
+The earlier "left lane pure black" symptom (2026-05-20) has since resolved — the
+**natural lane now renders correctly** (verified: live preview + `captureNaturalPicture`
+produces a correct image).
+
+### Bug B — processed lane's 8-bit buffer is grey (ENGINE; fix in eva-swift-stitch)
+
+With Bug A fixed, the processed pane correctly targets the processed lane — and
+renders **solid grey**. This is **not** a texture-delivery / clear-color issue:
+the **pixel data itself is grey**. Decisive discriminators:
+
+| Consumer | Reads | Result |
+|---|---|---|
+| `sampleCenterPatch` (calibration) | processed **16F** texture (`latestProcessedTex16F` / `processedTexI`) | ✅ correct — reflects black-balance, responds to scene |
+| Flutter preview **+ `captureImage`** | processed **8-bit** buffer (`latestProcessedBuffer`) | ❌ **grey** |
+| `captureNaturalPicture` | natural **8-bit** buffer | ✅ correct |
+
+So the processed **16F** copy is correct (sampling works) but the processed
+**8-bit BGRA** copy is grey, while the natural 8-bit copy is fine.
+
+**Localization:** `MetalPipeline.swift` **Pass-7** (RGBA16F→BGRA8 conversion).
+`Pass-7p` (processed, ~line 584-595) reads `processedTexI` and writes the
+processed 8-bit pool pair; `Pass-7n` (natural, ~line 572-582) does the same for
+natural. Pass ordering is correct (Pass-2 writes `processedTexI` at ~line 516,
+before Pass-7p reads it at ~line 589) and the two dispatches are **code-symmetric**
+(same `rgba16fToBgra8PSO`, pools created identically). So the failure is **not
+visible in static source** — it needs a **Metal GPU frame capture** in the engine
+repo to inspect what `processedTexI` / the `eightBitProcessedPool` surface
+actually contains at Pass-7p execution.
+
+**This fix belongs in eva-swift-stitch (CameraKit), then re-vendor via the
+`camerakit-only` subtree.** Do NOT patch the vendored copy in cam2fd.
+
+### Net status
+
+- Natural lane: works (preview + still).
+- Processed lane: correctly **wired** (Bug A fixed); renders grey pending the
+  engine Pass-7 fix (Bug B).
+- The `.interrupted`-mismapped-to-`.error` lifecycle loose-end above was also
+  fixed separately (added `CameraState.interrupted` to the Dart enum +
+  `fromString`).

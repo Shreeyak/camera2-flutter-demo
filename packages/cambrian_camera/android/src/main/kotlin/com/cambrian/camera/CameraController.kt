@@ -860,6 +860,11 @@ class CameraController(
                     naturalStreamTextureId = if (gpuPipeline?.isRunning == true) rawSurfaceProducer?.id() ?: 0L else 0L,
                     naturalStreamWidth = if (gpuPipeline?.isRunning == true) rawW.toLong() else 0L,
                     naturalStreamHeight = if (gpuPipeline?.isRunning == true) rawH.toLong() else 0L,
+                    // Processed (tone-mapped) lane's Flutter texture id. On Android this is
+                    // the main SurfaceProducer's id, which is also the camera handle. Sent
+                    // explicitly so Dart reads the texture id from the contract rather than
+                    // assuming handle == texture id (which does NOT hold on iOS).
+                    previewTextureId = handle,
                     // Report the post-GPU OUTPUT dims (= sensor dims unless
                     // a crop is active). See spec §7 — "downstream blind to
                     // crop" principle: Dart callers see one source of truth

@@ -289,6 +289,17 @@ data class CamCapabilities (
   val naturalStreamWidth: Long,
   /** Requested height of the GPU natural stream (pixels). 0 if natural stream is disabled. */
   val naturalStreamHeight: Long,
+  /**
+   * Flutter texture ID for the GPU processed (tone-mapped) stream — the lane
+   * with black-balance/brightness/contrast/saturation/gamma applied. Minted at
+   * [CameraHostApi.open] and stable for the session.
+   *
+   * On Android this equals the camera handle (the handle is the processed
+   * `SurfaceProducer.id()`); on iOS the handle and texture IDs come from
+   * separate registries, so this is the only authoritative source for the
+   * processed lane's texture ID. Mirrors [CamStreamConfiguration.previewTextureId].
+   */
+  val previewTextureId: Long,
   /** Width of the GPU processed stream texture (pixels). Matches the largest 4:3 YUV size. */
   val streamWidth: Long,
   /** Height of the GPU processed stream texture (pixels). */
@@ -329,12 +340,13 @@ data class CamCapabilities (
       val naturalStreamTextureId = pigeonVar_list[12] as Long
       val naturalStreamWidth = pigeonVar_list[13] as Long
       val naturalStreamHeight = pigeonVar_list[14] as Long
-      val streamWidth = pigeonVar_list[15] as Long
-      val streamHeight = pigeonVar_list[16] as Long
-      val sensorStreamWidth = pigeonVar_list[17] as Long
-      val sensorStreamHeight = pigeonVar_list[18] as Long
-      val streamPixelFormat = pigeonVar_list[19] as String
-      return CamCapabilities(supportedSizes, isoMin, isoMax, exposureTimeMinNs, exposureTimeMaxNs, focusMin, focusMax, zoomMin, zoomMax, evCompMin, evCompMax, evCompensationStep, naturalStreamTextureId, naturalStreamWidth, naturalStreamHeight, streamWidth, streamHeight, sensorStreamWidth, sensorStreamHeight, streamPixelFormat)
+      val previewTextureId = pigeonVar_list[15] as Long
+      val streamWidth = pigeonVar_list[16] as Long
+      val streamHeight = pigeonVar_list[17] as Long
+      val sensorStreamWidth = pigeonVar_list[18] as Long
+      val sensorStreamHeight = pigeonVar_list[19] as Long
+      val streamPixelFormat = pigeonVar_list[20] as String
+      return CamCapabilities(supportedSizes, isoMin, isoMax, exposureTimeMinNs, exposureTimeMaxNs, focusMin, focusMax, zoomMin, zoomMax, evCompMin, evCompMax, evCompensationStep, naturalStreamTextureId, naturalStreamWidth, naturalStreamHeight, previewTextureId, streamWidth, streamHeight, sensorStreamWidth, sensorStreamHeight, streamPixelFormat)
     }
   }
   fun toList(): List<Any?> {
@@ -354,6 +366,7 @@ data class CamCapabilities (
       naturalStreamTextureId,
       naturalStreamWidth,
       naturalStreamHeight,
+      previewTextureId,
       streamWidth,
       streamHeight,
       sensorStreamWidth,

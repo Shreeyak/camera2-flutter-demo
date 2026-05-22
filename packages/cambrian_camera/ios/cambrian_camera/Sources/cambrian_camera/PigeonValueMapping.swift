@@ -61,12 +61,15 @@ enum PigeonValueMapping {
 
     // MARK: - Capabilities
 
-    /// `SessionCapabilities` → `CamCapabilities`. The wire type carries only
-    /// `naturalStreamTextureId`; the preview-lane texture ID is delivered
-    /// separately via `onStreamConfigurationChanged`.
+    /// `SessionCapabilities` → `CamCapabilities`. Both lane texture IDs are
+    /// carried here (minted at `open`, stable for the session): the engine
+    /// `HandleRegistry` handle and the Flutter texture-registry IDs are
+    /// unrelated on iOS, so the Dart side must read `previewTextureId` from the
+    /// bootstrap capabilities rather than assuming `handle == texture id`.
     static func toCamCapabilities(
         _ caps: SessionCapabilities,
-        naturalTextureId: Int64
+        naturalTextureId: Int64,
+        previewTextureId: Int64
     ) -> CamCapabilities {
         let sensorWidth = Int64(caps.activeCaptureResolution.width)
         let sensorHeight = Int64(caps.activeCaptureResolution.height)
@@ -96,6 +99,7 @@ enum PigeonValueMapping {
             // Natural lane is always full sensor — same dims as sensorStream.
             naturalStreamWidth: sensorWidth,
             naturalStreamHeight: sensorHeight,
+            previewTextureId: previewTextureId,
             streamWidth: streamWidth,
             streamHeight: streamHeight,
             sensorStreamWidth: sensorWidth,

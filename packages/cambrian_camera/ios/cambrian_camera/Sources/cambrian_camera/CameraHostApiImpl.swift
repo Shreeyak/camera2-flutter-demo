@@ -252,7 +252,8 @@ final class CameraHostApiImpl: CameraHostApi {
         }
         let payload = PigeonValueMapping.toCamCapabilities(
             state.capabilities,
-            naturalTextureId: state.naturalTextureId
+            naturalTextureId: state.naturalTextureId,
+            previewTextureId: state.previewTextureId
         )
         completion(.success(payload))
     }

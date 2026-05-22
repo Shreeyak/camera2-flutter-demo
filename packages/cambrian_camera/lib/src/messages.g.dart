@@ -301,6 +301,7 @@ class CamCapabilities {
     required this.naturalStreamTextureId,
     required this.naturalStreamWidth,
     required this.naturalStreamHeight,
+    required this.previewTextureId,
     required this.streamWidth,
     required this.streamHeight,
     required this.sensorStreamWidth,
@@ -343,6 +344,16 @@ class CamCapabilities {
   /// Requested height of the GPU natural stream (pixels). 0 if natural stream is disabled.
   int naturalStreamHeight;
 
+  /// Flutter texture ID for the GPU processed (tone-mapped) stream — the lane
+  /// with black-balance/brightness/contrast/saturation/gamma applied. Minted at
+  /// [CameraHostApi.open] and stable for the session.
+  ///
+  /// On Android this equals the camera handle (the handle is the processed
+  /// `SurfaceProducer.id()`); on iOS the handle and texture IDs come from
+  /// separate registries, so this is the only authoritative source for the
+  /// processed lane's texture ID. Mirrors [CamStreamConfiguration.previewTextureId].
+  int previewTextureId;
+
   /// Width of the GPU processed stream texture (pixels). Matches the largest 4:3 YUV size.
   int streamWidth;
 
@@ -382,6 +393,7 @@ class CamCapabilities {
       naturalStreamTextureId,
       naturalStreamWidth,
       naturalStreamHeight,
+      previewTextureId,
       streamWidth,
       streamHeight,
       sensorStreamWidth,
@@ -408,11 +420,12 @@ class CamCapabilities {
       naturalStreamTextureId: result[12]! as int,
       naturalStreamWidth: result[13]! as int,
       naturalStreamHeight: result[14]! as int,
-      streamWidth: result[15]! as int,
-      streamHeight: result[16]! as int,
-      sensorStreamWidth: result[17]! as int,
-      sensorStreamHeight: result[18]! as int,
-      streamPixelFormat: result[19]! as String,
+      previewTextureId: result[15]! as int,
+      streamWidth: result[16]! as int,
+      streamHeight: result[17]! as int,
+      sensorStreamWidth: result[18]! as int,
+      sensorStreamHeight: result[19]! as int,
+      streamPixelFormat: result[20]! as String,
     );
   }
 }

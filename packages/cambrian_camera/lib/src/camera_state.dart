@@ -133,6 +133,7 @@ class CameraCapabilities {
     required this.naturalStreamTextureId,
     required this.naturalStreamWidth,
     required this.naturalStreamHeight,
+    required this.streamTextureId,
     required this.streamWidth,
     required this.streamHeight,
     required this.sensorStreamWidth,
@@ -157,6 +158,7 @@ class CameraCapabilities {
         naturalStreamTextureId: 0,
         naturalStreamWidth: 0,
         naturalStreamHeight: 0,
+        streamTextureId: 0,
         streamWidth: 0,
         streamHeight: 0,
         sensorStreamWidth: 0,
@@ -183,6 +185,7 @@ class CameraCapabilities {
         naturalStreamTextureId: c.naturalStreamTextureId,
         naturalStreamWidth: c.naturalStreamWidth,
         naturalStreamHeight: c.naturalStreamHeight,
+        streamTextureId: c.previewTextureId,
         streamWidth: c.streamWidth,
         streamHeight: c.streamHeight,
         sensorStreamWidth: c.sensorStreamWidth,
@@ -213,6 +216,13 @@ class CameraCapabilities {
 
   /// Requested height of the GPU natural stream (pixels). 0 if natural stream is disabled.
   final int naturalStreamHeight;
+
+  /// Flutter texture ID for the GPU processed (tone-mapped) stream — the lane
+  /// rendered by [CambrianCamera.toneMappedTexture], with black-balance,
+  /// brightness, contrast, saturation, and gamma applied. Minted at [open] and
+  /// stable for the session. Distinct from the camera handle on iOS (separate
+  /// texture registry); equal to the handle on Android by coincidence.
+  final int streamTextureId;
 
   /// Width of the GPU processed stream texture (pixels). Matches the largest 4:3 YUV size.
   final int streamWidth;

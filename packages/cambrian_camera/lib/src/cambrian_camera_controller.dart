@@ -118,7 +118,12 @@ class CambrianCamera {
   // ---------------------------------------------------------------------------
 
   /// Opaque handle identifying this camera in platform channel calls.
-  /// Also serves as the Flutter [Texture] widget's texture ID.
+  ///
+  /// On Android this also happens to equal the processed stream's Flutter
+  /// [Texture] id (the handle is the `SurfaceProducer.id()`), but that is NOT
+  /// true on iOS — there the texture ids come from a separate registry. Use
+  /// [CameraCapabilities.streamTextureId] / [CameraCapabilities.naturalStreamTextureId]
+  /// for rendering, never the handle.
   final int _handle;
 
   /// Whether the raw (pre-processing) GPU stream was requested via [open].
@@ -239,12 +244,17 @@ class CambrianCamera {
   /// Emits the current state immediately if already streaming, then continues
   /// with future state changes. This ensures late subscribers don't miss the
   /// streaming transition event.
+  ///
+  /// Renders [CameraCapabilities.streamTextureId] — the processed lane's Flutter
+  /// texture id, minted at [open] and carried in the bootstrap capabilities.
+  /// (Do NOT use the camera handle: it equals the texture id on Android by
+  /// coincidence but not on iOS — see [_handle].)
   Stream<CameraTextureInfo> get toneMappedTexture => _toneMappedTextureStream();
 
   Stream<CameraTextureInfo> _toneMappedTextureStream() async* {
     if (_currentState == CameraState.streaming) {
       yield CameraTextureInfo(
-        textureId: _handle,
+        textureId: _capabilities.streamTextureId,
         width: _capabilities.streamWidth,
         height: _capabilities.streamHeight,
       );
@@ -253,7 +263,7 @@ class CambrianCamera {
         .where((s) => s == CameraState.streaming)
         .map(
           (_) => CameraTextureInfo(
-            textureId: _handle,
+            textureId: _capabilities.streamTextureId,
             width: _capabilities.streamWidth,
             height: _capabilities.streamHeight,
           ),
@@ -803,6 +813,7 @@ class CambrianCamera {
       naturalStreamTextureId: cfg.naturalTextureId,
       naturalStreamWidth: prev.naturalStreamWidth,
       naturalStreamHeight: prev.naturalStreamHeight,
+      streamTextureId: cfg.previewTextureId,
       streamWidth: cfg.cropWidth ?? cfg.captureWidth,
       streamHeight: cfg.cropHeight ?? cfg.captureHeight,
       sensorStreamWidth: cfg.captureWidth,

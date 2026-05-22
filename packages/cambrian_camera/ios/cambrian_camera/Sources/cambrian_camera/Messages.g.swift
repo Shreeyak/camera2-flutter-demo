@@ -323,6 +323,15 @@ struct CamCapabilities {
   var naturalStreamWidth: Int64
   /// Requested height of the GPU natural stream (pixels). 0 if natural stream is disabled.
   var naturalStreamHeight: Int64
+  /// Flutter texture ID for the GPU processed (tone-mapped) stream — the lane
+  /// with black-balance/brightness/contrast/saturation/gamma applied. Minted at
+  /// [CameraHostApi.open] and stable for the session.
+  ///
+  /// On Android this equals the camera handle (the handle is the processed
+  /// `SurfaceProducer.id()`); on iOS the handle and texture IDs come from
+  /// separate registries, so this is the only authoritative source for the
+  /// processed lane's texture ID. Mirrors [CamStreamConfiguration.previewTextureId].
+  var previewTextureId: Int64
   /// Width of the GPU processed stream texture (pixels). Matches the largest 4:3 YUV size.
   var streamWidth: Int64
   /// Height of the GPU processed stream texture (pixels).
@@ -359,11 +368,12 @@ struct CamCapabilities {
     let naturalStreamTextureId = pigeonVar_list[12] as! Int64
     let naturalStreamWidth = pigeonVar_list[13] as! Int64
     let naturalStreamHeight = pigeonVar_list[14] as! Int64
-    let streamWidth = pigeonVar_list[15] as! Int64
-    let streamHeight = pigeonVar_list[16] as! Int64
-    let sensorStreamWidth = pigeonVar_list[17] as! Int64
-    let sensorStreamHeight = pigeonVar_list[18] as! Int64
-    let streamPixelFormat = pigeonVar_list[19] as! String
+    let previewTextureId = pigeonVar_list[15] as! Int64
+    let streamWidth = pigeonVar_list[16] as! Int64
+    let streamHeight = pigeonVar_list[17] as! Int64
+    let sensorStreamWidth = pigeonVar_list[18] as! Int64
+    let sensorStreamHeight = pigeonVar_list[19] as! Int64
+    let streamPixelFormat = pigeonVar_list[20] as! String
 
     return CamCapabilities(
       supportedSizes: supportedSizes,
@@ -381,6 +391,7 @@ struct CamCapabilities {
       naturalStreamTextureId: naturalStreamTextureId,
       naturalStreamWidth: naturalStreamWidth,
       naturalStreamHeight: naturalStreamHeight,
+      previewTextureId: previewTextureId,
       streamWidth: streamWidth,
       streamHeight: streamHeight,
       sensorStreamWidth: sensorStreamWidth,
@@ -405,6 +416,7 @@ struct CamCapabilities {
       naturalStreamTextureId,
       naturalStreamWidth,
       naturalStreamHeight,
+      previewTextureId,
       streamWidth,
       streamHeight,
       sensorStreamWidth,

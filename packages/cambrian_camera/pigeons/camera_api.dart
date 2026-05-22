@@ -195,6 +195,7 @@ class CamCapabilities {
     required this.naturalStreamTextureId,
     required this.naturalStreamWidth,
     required this.naturalStreamHeight,
+    required this.previewTextureId,
     required this.streamWidth,
     required this.streamHeight,
     required this.sensorStreamWidth,
@@ -225,6 +226,16 @@ class CamCapabilities {
 
   /// Requested height of the GPU natural stream (pixels). 0 if natural stream is disabled.
   int naturalStreamHeight;
+
+  /// Flutter texture ID for the GPU processed (tone-mapped) stream — the lane
+  /// with black-balance/brightness/contrast/saturation/gamma applied. Minted at
+  /// [CameraHostApi.open] and stable for the session.
+  ///
+  /// On Android this equals the camera handle (the handle is the processed
+  /// `SurfaceProducer.id()`); on iOS the handle and texture IDs come from
+  /// separate registries, so this is the only authoritative source for the
+  /// processed lane's texture ID. Mirrors [CamStreamConfiguration.previewTextureId].
+  int previewTextureId;
 
   /// Width of the GPU processed stream texture (pixels). Matches the largest 4:3 YUV size.
   int streamWidth;
