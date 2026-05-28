@@ -80,7 +80,7 @@ public enum EngineError: Error, Sendable {
     ///
     /// iOS apps are kernel-sandboxed; only paths under `NSHomeDirectory()` are writable.
     ///
-    /// See `PhotosLibraryClient.resolve` for the valid-locations list.
+    /// See `OutputPathResolver` for the valid-locations list.
     case invalidOutputPath(URL)
     /// A `calibrate*()` call is in flight; conflicting mutating ops
     /// (`updateSettings(...)` touching white balance, `setResolution(...)`)
@@ -122,6 +122,16 @@ public enum RecordingError: Error, Sendable {
     case finalizeTimeout
     case finalizeFailed(reason: String)
     case cancelledByPause
+    /// The output filename carried no extension; the format cannot be inferred.
+    ///
+    /// Only `.mp4` is supported — pass a name ending in `.mp4`, or pass no name
+    /// at all to get a timestamped default. Associated value is the offending
+    /// filename.
+    case missingFileExtension(String)
+    /// The output filename extension is not a supported video format.
+    ///
+    /// Only `.mp4` is supported. Associated value is the offending extension.
+    case unsupportedVideoFormat(String)
 }
 
 // MARK: - Still capture types (compressed here per Stage 01 type-compression decision)
@@ -150,4 +160,16 @@ public enum StillCaptureError: Error, Sendable {
     /// covers GPU-readback failures on the processed lane (vImage, CGImage
     /// build, IOSurface lock).
     case bufferUnavailable
+    /// The output filename carried no extension; the image format cannot be
+    /// inferred.
+    ///
+    /// Supply one of: `.png`, `.jpg`/`.jpeg`, `.tif`/`.tiff` — or pass no name
+    /// at all to get a timestamped `.png` default. Associated value is the
+    /// offending filename.
+    case missingFileExtension(String)
+    /// The output filename extension is not a supported still-image format.
+    ///
+    /// Supported: `.png`, `.jpg`/`.jpeg`, `.tif`/`.tiff`. Associated value is
+    /// the offending extension.
+    case unsupportedImageFormat(String)
 }

@@ -367,3 +367,87 @@ struct Stage10StopPromptnessTests {
         }
     }
 }
+
+// MARK: - Suite 10: recording URI format
+
+/// Guards the wire-format contract that `RecordingStart.uri` is a bare POSIX
+/// path — not a `file://` URL string — so Dart consumers can pass it directly
+/// to `dart:io.File` without stripping the scheme.  Symmetric: `stop()` must
+/// return the same bare path so `startRecording()` and `stopRecording()` are
+/// consistent on the Dart side.
+@Suite("Stage 10 — recording URI format", .progressLogged)
+struct Stage10URIFormatTests {
+
+    private func makeRecording() -> Recording {
+        Recording(
+            clock: FastClock(),
+            hooks: Recording.Hooks(publishState: { _ in }, emitError: { _ in }),
+            writerFactory: makeFakeFactory(writer: FakeAssetWriter(), adaptor: FakeAdaptor())
+        )
+    }
+
+    @Test("start.uri is a bare POSIX path, not a file:// URL")
+    func uriIsBarePathNotFileURL() async throws {
+        let rec = makeRecording()
+        let start = try await rec.start(
+            options: RecordingOptions(),
+            captureSize: Size(width: 256, height: 256)
+        )
+        #expect(
+            !start.uri.hasPrefix("file://"),
+            "uri must not carry file:// scheme; got \(start.uri)"
+        )
+        #expect(start.uri.hasPrefix("/"), "uri must be an absolute path; got \(start.uri)")
+        #expect(start.uri.hasSuffix(".mp4"))
+    }
+
+    @Test("start.displayName is the last path component of start.uri")
+    func displayNameIsLastPathComponent() async throws {
+        let rec = makeRecording()
+        let start = try await rec.start(
+            options: RecordingOptions(),
+            captureSize: Size(width: 256, height: 256)
+        )
+        let expected = URL(fileURLWithPath: start.uri).lastPathComponent
+        #expect(
+            start.displayName == expected,
+            "displayName '\(start.displayName)' must equal last path component '\(expected)'"
+        )
+        #expect(!start.displayName.isEmpty)
+    }
+
+    @Test("stop() returns the same bare path as start.uri")
+    func stopReturnsSamePathAsStartURI() async throws {
+        let writer = FakeAssetWriter()
+        let adaptor = FakeAdaptor()
+        let rec = Recording(
+            clock: FastClock(),
+            hooks: Recording.Hooks(publishState: { _ in }, emitError: { _ in }),
+            writerFactory: makeFakeFactory(writer: writer, adaptor: adaptor)
+        )
+        let start = try await rec.start(
+            options: RecordingOptions(),
+            captureSize: Size(width: 256, height: 256)
+        )
+        let stopURI = await rec.stop()
+        #expect(stopURI == start.uri, "stop() URI '\(stopURI)' must equal start.uri '\(start.uri)'")
+        #expect(!stopURI.hasPrefix("file://"))
+    }
+
+    @Test("custom outputURL produces uri equal to url.path")
+    func customOutputURLProducesPathURI() async throws {
+        // Use a sandbox-valid path: Documents dir passes OutputPathResolver.video.
+        let customURL = URL.documentsDirectory
+            .appendingPathComponent("test_\(UUID().uuidString).mp4")
+        let rec = makeRecording()
+        let start = try await rec.start(
+            options: RecordingOptions(outputURL: customURL),
+            captureSize: Size(width: 256, height: 256)
+        )
+        #expect(
+            start.uri == customURL.path,
+            "uri '\(start.uri)' must equal url.path '\(customURL.path)'"
+        )
+        #expect(start.displayName == customURL.lastPathComponent)
+    }
+}

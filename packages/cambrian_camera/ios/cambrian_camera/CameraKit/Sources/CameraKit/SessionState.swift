@@ -50,12 +50,15 @@ public struct RecordingOptions: Sendable, Hashable {
     ///
     /// Nil → `Constants.frameRateTargetFPS`.
     public var fps: Int?
-    /// Output URL resolved per `PhotosLibraryClient.resolve`.
+    /// Output URL resolved per `OutputPathResolver.video`.
     ///
-    /// `nil` → `<Documents>/<ISO8601-timestamp>.mp4`. Filename-only URLs land
-    /// in `<Documents>`; absolute paths inside `NSHomeDirectory()` are used
-    /// as-is. Paths outside the app sandbox throw
-    /// `EngineError.invalidOutputPath` from `startRecording`.
+    /// `nil` → `<Documents>/<ISO8601-timestamp>.mp4`. A name must carry the
+    /// `.mp4` extension (filename-only URLs land in `<Documents>`; absolute
+    /// paths inside `NSHomeDirectory()` are used as-is). A name with no
+    /// extension throws `RecordingError.missingFileExtension`; a non-`.mp4`
+    /// extension throws `RecordingError.unsupportedVideoFormat`; a path outside
+    /// the app sandbox throws `EngineError.invalidOutputPath` — all from
+    /// `startRecording`.
     public var outputURL: URL?
     /// Whether and how to publish the finished `.mp4` to the Photos library.
     ///

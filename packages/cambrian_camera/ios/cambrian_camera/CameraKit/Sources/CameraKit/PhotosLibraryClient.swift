@@ -16,16 +16,11 @@ import Photos
 //
 // ## Output URL resolution
 //
-// Every capture call (`engine.captureImage(outputURL:)`,
-// `engine.startRecording(options:)` via `RecordingOptions.outputURL`) routes
-// the caller's URL through `PhotosLibraryClient.resolve(outputURL:defaultExt:)`:
-//
-// - `nil`                                → `<Documents>/<ISO-8601-timestamp>.<ext>`
-// - `URL(string: "video.mp4")`           → `<Documents>/video.mp4`
-// - `URL.documentsDirectory.appendingPathComponent("trial-A/v1.mp4")`
-//                                        → as-is; intermediate dirs auto-created
-// - any path **outside** `NSHomeDirectory()`
-//                                        → throws `EngineError.invalidOutputPath(URL)`
+// Path placement + format selection live in `OutputPathResolver` (see
+// `OutputPathResolution.swift`), not here — every capture call routes the
+// caller's URL through `OutputPathResolver.image` / `.video`, which derive the
+// on-disk *format* from the filename extension and resolve the path inside the
+// sandbox (throwing `EngineError.invalidOutputPath` for escapes).
 //
 // `<Documents>` is user-visible via Files.app (`UIFileSharingEnabled = YES`
 // in the app target). `<Library/Caches>`, `<Library/Application Support>`,
@@ -103,13 +98,13 @@ public enum PhotosDestination: String, Sendable, Hashable, Codable {
     case move
 }
 
-/// Shared helper for routing CameraKit captures into the user-visible filesystem
-/// and the Photos library.
+/// Shared helper for publishing CameraKit captures into the Photos library.
 ///
-/// Hosts the URL-resolution rule (`resolve`) used by both stills and video, and
-/// the single Photos publish entry point (`publish`) that dispatches on
-/// `PhotosDestination`. The seam `authorizationProvider` is overridable in tests
-/// to avoid live `PHPhotoLibrary` calls.
+/// Hosts the single Photos publish entry point (`publish`) that dispatches on
+/// `PhotosDestination`, plus error `describe`. Path placement + format selection
+/// live in `OutputPathResolver` (`OutputPathResolution.swift`). The seam
+/// `authorizationProvider` is overridable in tests to avoid live
+/// `PHPhotoLibrary` calls.
 enum PhotosLibraryClient {
 
     /// Test seam — defaults to `PHPhotoLibrary.requestAuthorization(for: .addOnly)`.
@@ -118,75 +113,6 @@ enum PhotosLibraryClient {
     /// single-writer-per-test in unit tests, never mutated in production.
     nonisolated(unsafe) static var authorizationProvider: @Sendable () async -> PHAuthorizationStatus = {
         await PHPhotoLibrary.requestAuthorization(for: .addOnly)
-    }
-
-    /// Resolve a caller-supplied output URL to an absolute on-disk path inside
-    /// the app sandbox, creating parent directories as needed.
-    ///
-    /// Resolution rules:
-    /// - `nil` → `<Documents>/<ISO8601-timestamp>.<defaultExt>`
-    /// - URL whose `path` contains no slash (e.g. `URL(string: "video.mp4")`) →
-    ///   `<Documents>/<filename>` (the `defaultExt` is ignored — caller's
-    ///   filename extension wins)
-    /// - URL with a path → used as-is
-    ///
-    /// Valid output locations (any path inside `NSHomeDirectory()`):
-    /// - `<App Sandbox>/Documents/...` — recommended. User-visible via
-    ///   Files.app when `UIFileSharingEnabled = YES` is set on the app target.
-    /// - `<App Sandbox>/Library/Caches/...` — hidden from Files.app; iOS may
-    ///   purge under storage pressure.
-    /// - `<App Sandbox>/Library/Application Support/...` — hidden; backed up
-    ///   to iCloud by default.
-    /// - `<App Sandbox>/tmp/...` — hidden; iOS may purge anytime.
-    ///
-    /// Invalid (throws `EngineError.invalidOutputPath`):
-    /// - Any path outside `NSHomeDirectory()` (system paths, other apps'
-    ///   sandboxes, `/var`, `/System`, etc.). iOS apps are kernel-sandboxed;
-    ///   even with the right permissions the kernel rejects writes outside the
-    ///   app container.
-    ///
-    /// Parent directories of the resolved path are auto-created via
-    /// `FileManager.default.createDirectory(at:withIntermediateDirectories: true)`.
-    static func resolve(outputURL: URL?, defaultExt: String) throws -> URL {
-        let resolved: URL
-        if let outputURL {
-            if !outputURL.path.contains("/") {
-                resolved = URL.documentsDirectory
-                    .appendingPathComponent(outputURL.lastPathComponent)
-            } else {
-                resolved = outputURL
-            }
-        } else {
-            let timestamp = ISO8601DateFormatter().string(from: Date())
-                .replacingOccurrences(of: ":", with: "-")
-            resolved = URL.documentsDirectory
-                .appendingPathComponent("\(timestamp).\(defaultExt)")
-        }
-
-        // Accept both forms of the sandbox root: NSHomeDirectory() returns
-        // `/var/mobile/Containers/Data/Application/<UUID>` while
-        // `FileManager.default.temporaryDirectory` (and any URL that has
-        // round-tripped through Foundation canonicalization) returns
-        // `/private/var/mobile/...`. The two are the same physical path —
-        // iOS exposes `/private/var` as the canonical location with `/var`
-        // as a stable alias. `URL.resolvingSymlinksInPath()` does NOT
-        // collapse `/var` → `/private/var` on iOS in practice, so we check
-        // both prefixes explicitly rather than relying on canonicalization.
-        let home = NSHomeDirectory()
-        let homeFromPrivate = "/private" + home
-        guard
-            resolved.path.hasPrefix(home)
-                || resolved.path.hasPrefix(homeFromPrivate)
-        else {
-            throw EngineError.invalidOutputPath(resolved)
-        }
-
-        try FileManager.default.createDirectory(
-            at: resolved.deletingLastPathComponent(),
-            withIntermediateDirectories: true,
-            attributes: nil
-        )
-        return resolved
     }
 
     /// Publish a captured file to the Photos library according to the requested

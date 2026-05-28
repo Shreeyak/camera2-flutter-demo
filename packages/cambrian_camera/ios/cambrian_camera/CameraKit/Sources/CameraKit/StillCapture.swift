@@ -122,17 +122,31 @@ final class StillCapture: @unchecked Sendable {
     private func writeImage(
         cgImage: CGImage,
         metadata: [String: Any],
-        format: UTType,
+        format: ImageFileFormat,
         to url: URL
     ) throws {
         guard
             let dest = CGImageDestinationCreateWithURL(
-                url as CFURL, format.identifier as CFString, 1, nil
+                url as CFURL, format.utType.identifier as CFString, 1, nil
             )
         else {
             throw StillCaptureError.fileWriteFailed("CGImageDestinationCreateWithURL failed: \(url.path)")
         }
-        CGImageDestinationAddImage(dest, cgImage, metadata as CFDictionary)
+        // Per-image properties carry the EXIF/TIFF metadata and, for JPEG, the
+        // lossy-compression quality (a fixed high-quality default, not surfaced
+        // to callers). PNG/TIFF are lossless, so `lossyQuality` is nil. The same
+        // metadata dict is passed for every format; on iOS 26 ImageIO round-trips
+        // the EXIF UserComment carrying the `CamPlugin/v1` envelope (lane tag +
+        // capture metadata — the operational contract) into PNG's eXIf chunk,
+        // verified by `CaptureNaturalPictureTests.pngCarriesCamPluginV1`. Other
+        // standalone EXIF/TIFF keys may not survive the PNG path; the contract
+        // lives inside the UserComment JSON, which does. See DECISIONS.md /
+        // state.md.
+        var properties = metadata
+        if let quality = format.lossyQuality {
+            properties[kCGImageDestinationLossyCompressionQuality as String] = quality
+        }
+        CGImageDestinationAddImage(dest, cgImage, properties as CFDictionary)
         guard CGImageDestinationFinalize(dest) else {
             throw StillCaptureError.fileWriteFailed("CGImageDestinationFinalize failed: \(url.path)")
         }
@@ -142,12 +156,13 @@ final class StillCapture: @unchecked Sendable {
 
     /// Encodes a CPU-readable BGRA8 `CVPixelBuffer` to disk in the requested format.
     ///
-    /// Used by `CameraEngine.captureImage` (latest processed-lane buffer,
-    /// `.tiff`) and `CameraEngine.captureNaturalPicture` (latest natural-lane
-    /// buffer, `.jpeg`). Both source the same BGRA8 IOSurface delivered to the
-    /// preview/bridge — no separate readback or precision-preserving copy.
+    /// Used by `CameraEngine.captureImage` (latest processed-lane buffer) and
+    /// `CameraEngine.captureNaturalPicture` (graded ISP one-shot). Both source a
+    /// BGRA8 IOSurface — no separate readback or precision-preserving copy. The
+    /// `format` is chosen by the caller's filename extension via
+    /// `OutputPathResolver.image` (PNG / JPEG / TIFF; PNG default for no name).
     ///
-    /// - Parameter format: `.tiff` for processed-lane stills, `.jpeg` for natural-lane.
+    /// - Parameter format: derived from the output filename extension.
     /// - Parameter laneTag: `"processed"` / `"natural"` / `nil`. When non-nil, written
     ///   into the `CamPlugin/v1` EXIF envelope under the `"lane"` key so consumers can
     ///   distinguish the two capture paths post-hoc.
@@ -158,7 +173,7 @@ final class StillCapture: @unchecked Sendable {
         focalLengthMm: Double,
         apertureValue: Double,
         outputURL: URL,
-        format: UTType,
+        format: ImageFileFormat,
         laneTag: String?
     ) async throws -> StillCaptureOutput {
         let cgImage = try makeCGImage(buffer: buffer)

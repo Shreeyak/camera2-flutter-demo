@@ -145,4 +145,14 @@ enum Constants {
     /// Conversion to BGRA8 is unconditional — natural and processed lane buffers
     /// always deliver `kCVPixelFormatType_32BGRA` to `currentPixelBuffer(stream:)`.
     static let streamPixelFormatString: String = "BGRA8"
+
+    // MARK: - Still capture encoding
+
+    /// JPEG lossy-compression quality for extension-driven `.jpg`/`.jpeg` stills.
+    ///
+    /// Fixed high-quality default for `kCGImageDestinationLossyCompressionQuality`,
+    /// deliberately not surfaced as a public parameter (caller picks JPEG via the
+    /// filename extension; quality is ours). 0.95 ≈ visually lossless at a
+    /// fraction of the TIFF/PNG file size.
+    static let jpegCaptureQuality: Double = 0.95
 }

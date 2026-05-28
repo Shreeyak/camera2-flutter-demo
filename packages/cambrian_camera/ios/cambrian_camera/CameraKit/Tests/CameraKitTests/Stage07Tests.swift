@@ -103,11 +103,11 @@ struct Stage07Tests {
 
     // MARK: - 07:default-flow-writes-to-documents
 
-    @Test("default-flow-writes-to-documents: resolve(nil, .tif) → <Documents>/<timestamp>.tif")
+    @Test("default-flow-writes-to-documents: image(nil) → <Documents>/<timestamp>.png")
     func defaultFlowWritesToDocuments() throws {
         // `StillCapture.encode` takes a fully-resolved URL; the engine wrapper
-        // (`captureImage`) resolves nil → <Documents>/<ts>.tif via this resolver.
-        let url = try PhotosLibraryClient.resolve(outputURL: nil, defaultExt: "tif")
+        // (`captureImage`) resolves nil → <Documents>/<ts>.png via this resolver.
+        let (url, format) = try OutputPathResolver.image(nil)
         let docsURL = try FileManager.default.url(
             for: .documentDirectory, in: .userDomainMask,
             appropriateFor: nil, create: false)
@@ -115,7 +115,8 @@ struct Stage07Tests {
             url.path.hasPrefix(docsURL.path),
             "Expected path under documents directory, got: \(url.path)"
         )
-        #expect(url.pathExtension == "tif", "Expected .tif extension, got: \(url.pathExtension)")
+        #expect(url.pathExtension == "png", "Expected .png extension, got: \(url.pathExtension)")
+        #expect(format == .png)
     }
 
     // MARK: - 07:exif-standard-dictionary-present

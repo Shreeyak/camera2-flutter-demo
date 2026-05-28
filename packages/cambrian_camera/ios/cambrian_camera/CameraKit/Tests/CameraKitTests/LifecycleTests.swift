@@ -530,6 +530,12 @@ struct LifecycleTests {
 
         let streaming = CameraEngine(initialPhase: .active)
         await streaming._setStateForTest(.opening)
+        // `_setStateForTest` doesn't go through `_markOpenForTest`, so the
+        // permissionStatusProvider still reads the live AVFoundation check.
+        // The `.active` reconcile's mid-session-revocation guard would
+        // early-return on a host without granted permission — pin it here so
+        // this is a pure state-machine test.
+        await streaming._setPermissionStatusForTest(.authorized)
         await streaming.setLifecyclePhase(.active)  // target .streaming
         #expect(
             await streaming._currentStateForTest == .streaming,

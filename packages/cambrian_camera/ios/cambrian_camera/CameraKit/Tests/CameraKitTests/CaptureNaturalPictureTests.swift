@@ -87,13 +87,22 @@ struct CaptureNaturalPictureTests {
         #expect(lane == nil, "Expected no 'lane' key, got: \(String(describing: lane))")
     }
 
-    @Test("default-flow-writes-to-documents-jpg: resolve(nil, .jpg) → <Documents>/<ts>.jpg")
-    func defaultFlowWritesToDocumentsJpg() async throws {
-        // Mirrors `Stage07Tests.defaultFlowWritesToDocuments` but for the
-        // natural-picture extension. We exercise the resolver directly here —
-        // `StillCapture.encode` takes a fully-resolved URL, so the resolver
-        // call belongs in the engine wrapper. Test it via PhotosLibraryClient.
-        let url = try PhotosLibraryClient.resolve(outputURL: nil, defaultExt: "jpg")
+    @Test("png-carries-camplugin-v1: PNG preserves the EXIF UserComment lane tag")
+    func pngCarriesCamPluginV1() async throws {
+        // Empirical check (see DECISIONS.md / state.md): does ImageIO's PNG
+        // writer round-trip the CamPlugin/v1 EXIF envelope (via the eXIf chunk)?
+        // `encodeAndReadCamPluginV1` records an Issue if the UserComment is
+        // absent, so a pass here = PNG preserves the lane tag + capture metadata.
+        let lane = try await encodeAndReadCamPluginV1(laneTag: "processed", format: .png, ext: "png")
+        #expect(lane == "processed", "PNG dropped the CamPlugin/v1 lane tag; got: \(String(describing: lane))")
+    }
+
+    @Test("default-flow-writes-to-documents: image(nil) → <Documents>/<ts>.png")
+    func defaultFlowWritesToDocuments() async throws {
+        // Both still paths now share one resolver: nil → <Documents>/<ts>.png.
+        // `StillCapture.encode` takes a fully-resolved URL, so the resolver call
+        // belongs in the engine wrapper; exercise it directly here.
+        let (url, format) = try OutputPathResolver.image(nil)
         let docsURL = try FileManager.default.url(
             for: .documentDirectory, in: .userDomainMask,
             appropriateFor: nil, create: false)
@@ -102,9 +111,10 @@ struct CaptureNaturalPictureTests {
             "Expected path under documents directory, got: \(url.path)"
         )
         #expect(
-            url.pathExtension == "jpg",
-            "Expected .jpg extension, got: \(url.pathExtension)"
+            url.pathExtension == "png",
+            "Expected .png extension, got: \(url.pathExtension)"
         )
+        #expect(format == .png)
     }
 
     // MARK: - Helpers
@@ -114,7 +124,7 @@ struct CaptureNaturalPictureTests {
     /// envelope (or `nil` if the key is absent).
     private func encodeAndReadCamPluginV1(
         laneTag: String?,
-        format: UTType,
+        format: ImageFileFormat,
         ext: String
     ) async throws -> String? {
         let size = Size(width: 4, height: 4)
@@ -145,7 +155,7 @@ struct CaptureNaturalPictureTests {
             let exif = props[kCGImagePropertyExifDictionary as String] as? [String: Any],
             let userComment = exif[kCGImagePropertyExifUserComment as String] as? String
         else {
-            Issue.record("Missing EXIF UserComment in encoded \(format.identifier)")
+            Issue.record("Missing EXIF UserComment in encoded \(format)")
             return nil
         }
         guard let data = userComment.data(using: .utf8),

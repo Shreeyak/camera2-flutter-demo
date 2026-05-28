@@ -101,7 +101,8 @@ public actor CameraEngine {
 
     var watchdogs: WatchdogPair?
     var recovery: RecoveryCoordinator?
-    private let clock: any CameraKitClock
+    // internal (not private) so `CameraEngine+TestSupport.swift` can reach it.
+    let clock: any CameraKitClock
     private var aeMonitorTask: Task<Void, Never>?
     private var fpsWindowStartMs: UInt64 = 0
     private var fpsFrameCount: Int = 0
@@ -601,92 +602,6 @@ public actor CameraEngine {
     // `.permissionDenied` on mid-session revocation — mirrors `publishState`.
     func publishError(_ err: CameraError) {
         errorContinuationBox.withLock { $0?.yield(err) }
-    }
-
-    /// Test-only: emit an arbitrary CameraError without driving the recovery machine.
-    func _emitErrorForTest(_ err: CameraError) {
-        publishError(err)
-    }
-
-    /// Test-only: drive the state machine into `.streaming` so teardown paths
-    /// (`close()` and the `.cameraInUseEnded` self-heal) can be exercised
-    /// without real hardware.
-    ///
-    /// Pokes `SessionStateMachine` directly via `_setCurrentForTest` (bypasses
-    /// classification — matches the prior `isOpen = true` intent of skipping
-    /// the normal `.opening`/`.streaming` path). No emission on the state
-    /// stream — preserves the original `isOpen = true` semantics where the
-    /// seam mutated state without publishing. Tests that need a published
-    /// `.streaming` should call `engine.open()` or subscribe before posting
-    /// events that advance state. `cameraSession`, `metalPipeline`, etc.
-    /// stay nil — `close()` is nil-safe for all of them, so the path runs
-    /// cleanly and reaches `publishState(.closed)`. Reproduces the realistic
-    /// D-14 precondition: a `.cameraInUse` interruption only ever reaches a
-    /// running session, i.e. an already-open engine.
-    func _markOpenForTest() {
-        stateMachine._setCurrentForTest(.streaming)
-        // Seed the phase-derived hardware mirror the way open()-then-reconcile
-        // would leave it for `currentPhase`, so phase-dependent tests (cheap
-        // pause, F4) start from a faithful post-open state without real hardware
-        // (`cameraSession` stays nil). Task 5 as-built.
-        reconciledSessionRunning = (currentPhase != .background)
-        setGate(currentPhase == .active)
-    }
-
-    /// Test-only: read the state machine's current `SessionState` (stateStream only yields on publish).
-    var _currentStateForTest: SessionState { stateMachine.current }
-
-    /// Test-only: read the engine's current lifecycle phase.
-    var _currentPhaseForTest: AppLifecyclePhase { currentPhase }
-
-    /// Test-only: drive the state machine to an arbitrary `SessionState` without emission.
-    ///
-    /// Mirrors `_markOpenForTest`'s direct poke. The only way to observe the
-    /// `.opening` origin — no engine command publishes `.opening` (`open()`
-    /// jumps `.closed → .streaming`), so the `shouldDeferCommandLabel`
-    /// `.opening → .paused` rider is otherwise untestable at the engine level.
-    func _setStateForTest(_ state: SessionState) { stateMachine._setCurrentForTest(state) }
-
-    /// Test-only: reconcile's last session-running decision.
-    ///
-    /// Logical mirror, not a hardware probe — see `reconciledSessionRunning`.
-    /// `_markOpenForTest` seeds it from `currentPhase`.
-    var _isSessionRunningForTest: Bool { reconciledSessionRunning }
-
-    /// Test-only: install the `.background` reconcile seam (idempotent).
-    ///
-    /// Required before a test reads `_backgroundActionsForTest` after a plain
-    /// `.background` transition; the park accessors install it implicitly.
-    func _installLifecycleTestHookForTest() {
-        if lifecycleTestHook == nil { lifecycleTestHook = LifecycleTestHook() }
-    }
-
-    /// Test-only: override the camera-permission probe the `.active` reconcile
-    /// reads (drives the mid-session-revocation guard without real Settings).
-    func _setPermissionStatusForTest(_ status: CameraPermissionStatus) {
-        permissionStatusProvider = { status }
-    }
-
-    /// Test-only: ordered trace of the most recent `.background` reconcile.
-    var _backgroundActionsForTest: [String] { lifecycleTestHook?.actions ?? [] }
-
-    /// Test-only: arm a one-shot park of the next `.background` reconcile at its
-    /// post-disarm checkpoint (latest-intent-wins interleave test).
-    ///
-    /// Installs the seam if needed. One-shot — call again to re-arm for a second park.
-    func _armBackgroundReconcileParkForTest() {
-        _installLifecycleTestHookForTest()
-        lifecycleTestHook?.parkArmed = true
-    }
-
-    /// Test-only: true once the armed `.background` reconcile has parked.
-    var _isBackgroundReconcileParkedForTest: Bool { lifecycleTestHook?.parked ?? false }
-
-    /// Test-only: release a parked `.background` reconcile so it resumes (and
-    /// aborts if a later phase superseded it).
-    func _releaseBackgroundReconcileParkForTest() {
-        lifecycleTestHook?.parkRelease?.resume()
-        lifecycleTestHook?.parkRelease = nil
     }
 
     /// Called from `CaptureDelegate` on every sample buffer (nonisolated — delivery queue).
@@ -1324,8 +1239,10 @@ public actor CameraEngine {
     /// for the full contract and known error codes.
     ///
     /// - Parameters:
-    ///   - outputURL: Resolved per `PhotosLibraryClient.resolve` (default ext
-    ///     `tif`). `nil` → `<Documents>/<timestamp>.tif`.
+    ///   - outputURL: Resolved per `OutputPathResolver.image`. `nil` →
+    ///     `<Documents>/<timestamp>.png` (PNG). A name's extension picks the
+    ///     format: `.png` / `.jpg`/`.jpeg` / `.tif`/`.tiff`. A name with no
+    ///     extension, or an unsupported one, throws.
     ///   - photosDestination: See `PhotosDestination`. Independent of
     ///     `outputURL`; defaults to `.none` (no Photos interaction).
     /// - Returns: A `StillCaptureOutput` with the on-disk file path. With
@@ -1333,7 +1250,8 @@ public actor CameraEngine {
     /// - Throws: `EngineError.notOpen` if the engine is not open or not running.
     /// - Throws: `EngineError.invalidOutputPath(_:)` if `outputURL` resolves
     ///   outside the app sandbox.
-    /// - Throws: `EngineError.capture(_:)` wrapping any `StillCaptureError`.
+    /// - Throws: `EngineError.capture(_:)` wrapping any `StillCaptureError` —
+    ///   including `.missingFileExtension` / `.unsupportedImageFormat`.
     public func captureImage(
         outputURL: URL? = nil,
         photosDestination: PhotosDestination = .none
@@ -1365,8 +1283,11 @@ public actor CameraEngine {
         }
 
         let writeURL: URL
+        let format: ImageFileFormat
         do {
-            writeURL = try PhotosLibraryClient.resolve(outputURL: outputURL, defaultExt: "tif")
+            (writeURL, format) = try OutputPathResolver.image(outputURL)
+        } catch let e as StillCaptureError {
+            throw EngineError.capture(e)
         } catch let e as EngineError {
             throw e
         }
@@ -1380,7 +1301,7 @@ public actor CameraEngine {
                 focalLengthMm: 0,
                 apertureValue: apertureValue,
                 outputURL: writeURL,
-                format: .tiff,
+                format: format,
                 laneTag: "processed"
             )
         } catch let e as StillCaptureError {
@@ -1418,12 +1339,13 @@ public actor CameraEngine {
         return output
     }
 
-    /// ISP one-shot via `AVCapturePhotoOutput` → live Metal crop+grade → TIFF
+    /// ISP one-shot via `AVCapturePhotoOutput` → live Metal crop+grade → still
     /// cropped to the active region.
     ///
     /// Same device and grade settings as `captureImage`, differing only by
     /// source: this method fires an ISP one-shot rather than reading the latest
-    /// processed-lane buffer. The graded output is TIFF-encoded at `outputSize`.
+    /// processed-lane buffer. The graded output is encoded at `outputSize` in the
+    /// format chosen by `outputURL`'s extension (see `OutputPathResolver.image`).
     /// EXIF carries `"lane": "natural"` inside the `CamPlugin/v1` envelope so
     /// consumers can distinguish natural-lane stills from processed-lane stills
     /// written by `captureImage` (`"lane": "processed"`). Errors cleanly when
@@ -1431,8 +1353,10 @@ public actor CameraEngine {
     /// D-2P-10).
     ///
     /// - Parameters:
-    ///   - outputURL: Resolved per `PhotosLibraryClient.resolve` (default ext
-    ///     `tif`). `nil` → `<Documents>/<timestamp>.tif`.
+    ///   - outputURL: Resolved per `OutputPathResolver.image`. `nil` →
+    ///     `<Documents>/<timestamp>.png` (PNG). A name's extension picks the
+    ///     format: `.png` / `.jpg`/`.jpeg` / `.tif`/`.tiff`. A name with no
+    ///     extension, or an unsupported one, throws.
     ///   - photosDestination: See `PhotosDestination`. Independent of
     ///     `outputURL`; defaults to `.none` (no Photos interaction).
     /// - Returns: A `StillCaptureOutput` with the on-disk file path. With
@@ -1468,7 +1392,8 @@ public actor CameraEngine {
         // 2. Crop + grade through the live Metal pipeline (matches preview grade).
         let graded = try await pipeline.gradeOneShot(pixelBuffer: photoBuffer)
 
-        // 3. Encode TIFF with the same EXIF/lane tag contract as before.
+        // 3. Encode in the extension-chosen format with the same EXIF/lane tag
+        //    contract as before.
         let snap = await session.device?.lastSnapshot
         let apertureValue: Double
         if let device = session.device {
@@ -1478,8 +1403,11 @@ public actor CameraEngine {
         }
 
         let writeURL: URL
+        let format: ImageFileFormat
         do {
-            writeURL = try PhotosLibraryClient.resolve(outputURL: outputURL, defaultExt: "tif")
+            (writeURL, format) = try OutputPathResolver.image(outputURL)
+        } catch let e as StillCaptureError {
+            throw EngineError.capture(e)
         } catch let e as EngineError {
             throw e
         }
@@ -1493,7 +1421,7 @@ public actor CameraEngine {
                 focalLengthMm: 0,
                 apertureValue: apertureValue,
                 outputURL: writeURL,
-                format: .tiff,
+                format: format,
                 laneTag: "natural"
             )
         } catch let e as StillCaptureError {
@@ -1537,7 +1465,8 @@ public actor CameraEngine {
     private nonisolated let recordingContinuationBox =
         Mutex<AsyncStream<RecordingState>.Continuation?>(nil)
     private let cachedRecordingStream = Mailbox<AsyncStream<RecordingState>>()
-    private var assetWriterFactory: AssetWriterFactory = DefaultAssetWriterFactory.make
+    // internal (not private) so `CameraEngine+TestSupport.swift` can reach it.
+    var assetWriterFactory: AssetWriterFactory = DefaultAssetWriterFactory.make
 
     /// Returns a stream of `RecordingState` transitions.
     ///
@@ -1556,11 +1485,6 @@ public actor CameraEngine {
 
     private func publishRecordingState(_ s: RecordingState) {
         recordingContinuationBox.withLock { $0?.yield(s) }
-    }
-
-    /// Test seam — swap the writer factory before startRecording().
-    func _setAssetWriterFactoryForTest(_ f: @escaping AssetWriterFactory) {
-        assetWriterFactory = f
     }
 
     /// Starts a recording session using the current capture pipeline.
@@ -1647,7 +1571,8 @@ public actor CameraEngine {
         // for `destination == .none` (the default); for `.copy`/`.move` this
         // adds the PHPhotoLibrary roundtrip latency, which is acceptable
         // because the caller opted into Photos.
-        if destination != .none, let url = URL(string: uri) {
+        if destination != .none {
+            let url = URL(fileURLWithPath: uri)
             do {
                 try await PhotosLibraryClient.publish(
                     url: url, kind: .video, destination: destination
@@ -1929,44 +1854,4 @@ public actor CameraEngine {
         }
     }
 
-    /// Test-only: inject a session event directly (avoids needing avSession reference).
-    func _postSessionEventForTest(_ event: CameraSession.SessionEvent) async {
-        await onSessionEvent(event)
-    }
-
-    /// Test-only: armed token of the capture stall watchdog (nil when disarmed).
-    ///
-    /// Lets a test observe disarm-on-interruption / re-arm-on-resume directly.
-    var _captureWatchdogArmedTokenForTest: UInt64? { watchdogs?.capture.armedSessionToken }
-
-    /// Test-only: build and arm the stall watchdogs + recovery coordinator the
-    /// way `open()` does, without a real `AVCaptureSession`.
-    ///
-    /// Exercises the lifecycle disarm/re-arm paths and the watchdog→recovery
-    /// wiring under an injected clock. `performTeardownAndReopen` is a no-op —
-    /// these tests assert that recovery is NOT spuriously triggered on the
-    /// interrupted / background path.
-    func _armWatchdogsForTest() {
-        let gpu = Watchdog(kind: .gpu, clock: clock) { [weak self] fire in
-            Task { [weak self] in await self?.handleWatchdogFire(fire) }
-        }
-        let cap = Watchdog(kind: .capture, clock: clock) { [weak self] fire in
-            Task { [weak self] in await self?.handleWatchdogFire(fire) }
-        }
-        let pair = WatchdogPair(gpu: gpu, capture: cap)
-        self.watchdogs = pair
-        self.recovery = RecoveryCoordinator(
-            clock: clock,
-            hooks: RecoveryCoordinator.Hooks(
-                performTeardownAndReopen: {},
-                emitStateRecovering: { [weak self] in await self?.publishStateAsync(.recovering) },
-                emitError: { [weak self] err in await self?.publishErrorAsync(err) },
-                disarmWatchdogs: { [weak self] in await self?.disarmWatchdogsAsync() },
-                incrementSessionToken: { [weak self] in
-                    self?.sessionToken.wrappingIncrement(ordering: .sequentiallyConsistent)
-                }
-            )
-        )
-        armWatchdogs()
-    }
 }

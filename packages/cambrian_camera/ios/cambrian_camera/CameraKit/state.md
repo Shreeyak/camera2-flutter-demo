@@ -1,3 +1,55 @@
+# state.md — Test-seam DEBUG gating + production/test clarity (2026-05-28)
+
+All test-only seams are now compiled out of the Release binary behind `#if DEBUG`,
+grouped into per-type test extensions; production code that tests merely consume
+stays in production with clear naming. See `CameraEngine+TestSupport.swift` and the
+DEBUG extensions in `MetalPipeline.swift`, `PixelSink.swift`, `Recording.swift`,
+`TexturePoolManager.swift`.
+
+## What's now permanent — test-seam gating
+
+- **`CameraEngine+TestSupport.swift`** — new file; one `#if DEBUG extension
+  CameraEngine` holding all 16 `_*ForTest` seams. Trimmed `CameraEngine.swift`
+  ~136 lines (1992 → 1856).
+- **Same-file `#if DEBUG` test extensions** on `MetalPipeline`, `ConsumerRegistry`
+  (in PixelSink.swift), `Recording`, `TexturePoolManager` — same-file so the seams
+  keep `private`-member access (a separate-file extension cannot reach `private`).
+- **`MetalPipeline.didNoOpCountForTest`** — stored property + its hot-path
+  increment stay inline `#if DEBUG`-guarded: a stored property can't live in an
+  extension, and the increment is in the production commit completion handler.
+- **Access relaxations (intra-module only):** `CameraEngine.clock` and
+  `assetWriterFactory` `private → internal` so the separate test file reaches them.
+  Never exposed to the app target / public API.
+- **Naming clarity (production vs test):**
+  - `backgroundReconcileParkForTest` → `parkBackgroundReconcileIfArmed`
+    (CameraEngine+Lifecycle.swift). It is a *production* reconcile checkpoint
+    (called unconditionally at the `.background` post-disarm point), inert unless a
+    DEBUG test arms a park via `_armBackgroundReconcileParkForTest`. The misleading
+    `ForTest` suffix is gone; the arm/release/query seams remain DEBUG-only.
+  - `MetalPipeline.setGate` → `setGateForTest`, moved into the DEBUG test
+    extension — it is test-only (Stage02 pipeline-level gating); production drives
+    the shared submission gate through `CameraEngine` (which owns the atomic).
+  - `ConsumerRegistry.dropCount` documented as production (aggregated by
+    `metricsStream()`), not a test seam — tests read it via `@testable import`.
+
+## Verified — test-seam gating
+
+- Release device build: SUCCEEDED (seams stripped, zero production references).
+- Debug device tests: 221 passed / 0 failed. `swift-format --strict`: clean.
+
+## Follow-ups — pending
+
+- **[PENDING] Split the `CameraEngine.swift` monolith.** Still ~1856 lines after
+  the test-seam extraction. Break the production body into focused
+  `CameraEngine+<Feature>.swift` extensions (recording, still capture, calibration,
+  watchdog/recovery wiring, …), mirroring the existing `CameraEngine+Lifecycle.swift`
+  split. Deferred by request (2026-05-28) to a dedicated later session — not bundled
+  with the test-seam work. Note: cross-file extensions force `private → internal` on
+  every member the moved code touches (see the 2026-05-22 lifecycle-refactor entry in
+  DECISIONS.md, which widened 18 members); plan the access widening up front.
+
+---
+
 # state.md — Lifecycle ownership (2026-05-21)
 
 Single declarative lifecycle API: the host forwards `AppLifecyclePhase` via
@@ -392,6 +444,22 @@ method signature; no public surface change is observable.
 ## Decisions taken — Post-Stage-12
 
 See `DECISIONS.md` entries dated 2026-05-15.
+
+**2026-05-22 [image-filename] — output format from filename extension.** Both
+still paths (`captureImage`, `captureNaturalPicture`) and `startRecording` now
+pick the on-disk format from the caller's filename extension instead of a
+hardcoded format. Images: nil → `<Documents>/<timestamp>.png`; `.png` → PNG;
+`.jpg`/`.jpeg` → JPEG (fixed quality 0.95, not surfaced); `.tif`/`.tiff` → TIFF;
+no extension → `StillCaptureError.missingFileExtension`; other →
+`.unsupportedImageFormat`. Video: nil → `.mp4`; `.mp4` only, else
+`RecordingError.missingFileExtension` / `.unsupportedVideoFormat`. ImageIO already
+encodes all three — no new dependency. `PhotosLibraryClient.resolve` extracted to
+the new `OutputPathResolver` (`OutputPathResolution.swift`). **Behavior change:**
+nil-name stills are now `.png`, not `.tif`. **Empirical PNG-metadata finding:**
+ImageIO's PNG writer *does* round-trip the EXIF `CamPlugin/v1` UserComment (lane
+tag + capture metadata) via the `eXIf` chunk on iOS 26 — no loss; verified by
+`CaptureNaturalPictureTests.pngCarriesCamPluginV1` on physical iPad. See
+`DECISIONS.md` 2026-05-22.
 
 ## Follow-up consumers (out of scope this PR)
 
