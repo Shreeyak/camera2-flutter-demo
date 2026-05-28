@@ -392,7 +392,7 @@ final actor LiveCaptureDevice: CaptureDeviceProviding {
 /// Awaits `AVCaptureDevice.isAdjustingWhiteBalance == false` via KVO, with a 2s timeout.
 ///
 /// Uses `ManagedAtomic<Bool>` CAS to guarantee exactly-once continuation resume
-/// across the KVO and deadline branches (ADR-30 / CLAUDE.md §8). `withTaskGroup`
+/// across the KVO and deadline branches (ADR-30). `withTaskGroup`
 /// is explicitly NOT used: a child task suspended on an unresumed
 /// `withCheckedContinuation` cannot respond to cancellation, causing the group to
 /// hang indefinitely when AWB stalls.
@@ -411,8 +411,8 @@ private enum WBApplyKind {
 /// Returns the AVF-supplied buffer timestamp, or `CMTime.invalid` if the 400 ms
 /// deadline fired (logged at error level so field traces surface the miss
 /// frequency). CAS-races the handler against the deadline so a missed callback
-/// can't hang calibration. Mirrors the `wbSettledWait` pattern (ADR-30 /
-/// CLAUDE.md §8 — `withTaskGroup` over an unresumed continuation is forbidden).
+/// can't hang calibration. Mirrors the `wbSettledWait` pattern (ADR-30 —
+/// `withTaskGroup` over an unresumed continuation is forbidden).
 private func wbApplyAwait(
     avDevice: AVCaptureDevice,
     kind: WBApplyKind

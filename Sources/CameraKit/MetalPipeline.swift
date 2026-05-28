@@ -225,8 +225,10 @@ final class MetalPipeline: @unchecked Sendable {
     // Session token reference from the owning engine. Used by completion handler (D-10).
     private let engineSessionToken: ManagedAtomic<UInt64>
 
+    #if DEBUG
     // Test-only: count of completion-handler invocations that no-op due to token mismatch.
     nonisolated(unsafe) var didNoOpCountForTest: UInt64 = 0
+    #endif
 
     // Resume-latency diagnostic (one-shot). Armed by the engine actor in
     // `reconcile(.active)` the instant the gate reopens; the first frame to pass
@@ -648,7 +650,9 @@ final class MetalPipeline: @unchecked Sendable {
             let liveToken = self.engineSessionToken.load(ordering: .acquiring)
             if liveToken != tokenAtCommit {
                 // Session advanced — drop this frame's delivery entirely.
+                #if DEBUG
                 self.didNoOpCountForTest &+= 1
+                #endif
                 return
             }
             // Metal-level error classification (G-02 / ADR-15).
@@ -1121,14 +1125,19 @@ final class MetalPipeline: @unchecked Sendable {
         )
     }
 
-    /// Opens or closes the pipeline's submission gate.
+}
+
+// MARK: - Test seams (internal — accessed via @testable import)
+#if DEBUG
+extension MetalPipeline {
+    /// Test seam: opens/closes the pipeline's shared submission gate directly.
     ///
-    /// Used by Stage02Tests.
-    func setGate(_ open: Bool) {
+    /// For pipeline-level tests (Stage02) that exercise commit gating without a
+    /// full engine. Production drives the same shared gate through `CameraEngine`
+    /// (which owns the atomic and passes it in at construction).
+    func setGateForTest(_ open: Bool) {
         submissionGate.store(open, ordering: .sequentiallyConsistent)
     }
-
-    // MARK: - Test seams (internal — accessed via @testable import)
 
     // Stage 06: pool-backed buffer accessors replace the removed single-buffer properties.
     var latestNaturalBufferForTest: CVPixelBuffer? { latestNaturalBuffer }
@@ -1207,3 +1216,4 @@ final class MetalPipeline: @unchecked Sendable {
         }
     }
 }
+#endif

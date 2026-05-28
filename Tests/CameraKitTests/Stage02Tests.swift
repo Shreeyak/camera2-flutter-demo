@@ -1,8 +1,9 @@
-import Testing
-import Foundation
-import Metal
 import CoreMedia
 import CoreVideo
+import Foundation
+import Metal
+import Testing
+
 @testable import CameraKit
 
 // MARK: - Stage02Tests
@@ -13,8 +14,8 @@ struct Stage02Tests {
     // MARK: Test 1 — 02:gate-closes-on-inactive
 
     /// Verifies the gate-before-commit invariant (ADR-09):
-    /// - setGate(false) prevents commandBuffer.commit() from executing in MetalPipeline.encode().
-    /// - setGate(true) resumes commits.
+    /// - setGateForTest(false) prevents commandBuffer.commit() from executing in MetalPipeline.encode().
+    /// - setGateForTest(true) resumes commits.
     ///
     /// Uses a real MetalPipeline + synthetic IOSurface-backed CVPixelBuffer so that
     /// pipeline.commitCount directly measures whether commit() was called.
@@ -31,10 +32,11 @@ struct Stage02Tests {
         // Pipeline-level: verify gate-before-commit — commit() must be suppressed when
         // gate is false. This is the invariant that prevents MTLCommandBufferErrorNotPermitted
         // IOAF 6 on background submit (02-concurrency.md §Concurrency contract table row 4).
-        guard let device = MTLCreateSystemDefaultDevice() else { return } // skip if no GPU
-        let pipeline = try MetalPipeline(device: device,
-                                         captureSize: Size(width: 320, height: 240),
-                                         gateOpen: true)
+        guard let device = MTLCreateSystemDefaultDevice() else { return }  // skip if no GPU
+        let pipeline = try MetalPipeline(
+            device: device,
+            captureSize: Size(width: 320, height: 240),
+            gateOpen: true)
         let sampleBuffer = try makeSyntheticYUVSampleBuffer(width: 320, height: 240)
 
         // Gate open → encode → commit fires.
@@ -42,10 +44,11 @@ struct Stage02Tests {
         #expect(pipeline.commitCount == 1, "Expected 1 commit with gate open")
 
         // Gate closed → encode → commit must NOT fire (gate-before-commit, ADR-09).
-        pipeline.setGate(false)
+        pipeline.setGateForTest(false)
         try pipeline.encode(sampleBuffer: sampleBuffer)
-        #expect(pipeline.commitCount == 1,
-                "commitCount must not increase with gate closed — gate-before-commit invariant violated")
+        #expect(
+            pipeline.commitCount == 1,
+            "commitCount must not increase with gate closed — gate-before-commit invariant violated")
     }
 
     // MARK: Test 2 — 02:wait-until-scheduled-on-inactive
@@ -63,9 +66,10 @@ struct Stage02Tests {
 
         // Real drain: verify lastCommandBuffer is set after a committed frame.
         guard let device = MTLCreateSystemDefaultDevice() else { return }
-        let pipeline = try MetalPipeline(device: device,
-                                         captureSize: Size(width: 320, height: 240),
-                                         gateOpen: true)
+        let pipeline = try MetalPipeline(
+            device: device,
+            captureSize: Size(width: 320, height: 240),
+            gateOpen: true)
 
         // Before any encode, no buffer to drain.
         #expect(pipeline.lastCommandBuffer == nil)
@@ -73,12 +77,13 @@ struct Stage02Tests {
         // Encode one frame with gate open → buffer is committed → lastCommandBuffer set.
         let sampleBuffer = try makeSyntheticYUVSampleBuffer(width: 320, height: 240)
         try pipeline.encode(sampleBuffer: sampleBuffer)
-        #expect(pipeline.lastCommandBuffer != nil,
-                "lastCommandBuffer must be non-nil after a committed frame")
+        #expect(
+            pipeline.lastCommandBuffer != nil,
+            "lastCommandBuffer must be non-nil after a committed frame")
 
         // Close gate, drain → waitUntilScheduled() runs on the committed buffer.
         // If drain hangs here, the drain path is broken.
-        pipeline.setGate(false)
+        pipeline.setGateForTest(false)
         pipeline.drainLastBuffer()
         // Reaching this line without hanging confirms the drain completed within
         // FRAME_LATENCY_BUDGET_MS (33ms at 30fps — GPU scheduling is sub-millisecond).
@@ -99,8 +104,9 @@ struct Stage02Tests {
         }
 
         let elapsed = ContinuousClock.now - startedAt
-        #expect(elapsed < .milliseconds(600),
-                "runOnQueue must return via timeout (~150ms), not wait for work to complete")
+        #expect(
+            elapsed < .milliseconds(600),
+            "runOnQueue must return via timeout (~150ms), not wait for work to complete")
     }
 
 }

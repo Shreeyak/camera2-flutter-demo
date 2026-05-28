@@ -152,7 +152,7 @@ extension CameraEngine {
             setGate(false)
             disarmWatchdogsAsync()
             lifecycleTestHook?.actions.append("disarm")
-            await backgroundReconcileParkForTest()
+            await parkBackgroundReconcileIfArmed()
             guard generation == reconcileGeneration else { return }
             await recovery?.cancelPendingRetry()
             guard generation == reconcileGeneration else { return }
@@ -246,14 +246,16 @@ extension CameraEngine {
         publishState(target, kind: .command)
     }
 
-    /// Test interleave seam (F1): park the in-flight `.background` reconcile at
-    /// the post-disarm checkpoint until a test releases it.
+    /// Production-flow interleave checkpoint for the `.background` reconcile.
     ///
-    /// Lets a test deterministically admit a second `setLifecyclePhase` while a
-    /// `.background` reconcile is suspended, to prove the straggler aborts. No-op
-    /// in production (never armed). One-shot — re-arm with
-    /// `_armBackgroundReconcileParkForTest()` for a second park.
-    private func backgroundReconcileParkForTest() async {
+    /// Inert in production: returns immediately because `lifecycleTestHook` is
+    /// only ever installed by DEBUG test seams. When a test has armed a park via
+    /// `_armBackgroundReconcileParkForTest()`, this suspends the in-flight
+    /// reconcile at the post-disarm checkpoint until the test releases it —
+    /// proving a superseding `.background` straggler aborts. Lives in production
+    /// flow (not the DEBUG test section) because the suspension must happen
+    /// mid-reconcile; only the arm/release/query seams are DEBUG-only.
+    private func parkBackgroundReconcileIfArmed() async {
         guard let hook = lifecycleTestHook, hook.parkArmed else { return }
         hook.parkArmed = false
         hook.parked = true

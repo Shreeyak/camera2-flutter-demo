@@ -100,11 +100,6 @@ public actor Recording {
 
     // MARK: - Public Methods
 
-    /// Test seam: publish the current state through the hook so tests can observe it.
-    func observeCurrentStateForTest() {
-        hooks.publishState(state)
-    }
-
     public func currentState() -> RecordingState { state }
     public func currentDroppedNotReady() -> Int { droppedNotReady }
 
@@ -118,7 +113,7 @@ public actor Recording {
         guard case .idle = state else {
             throw RecordingError.writerStartFailed(status: -1)
         }
-        let url = try PhotosLibraryClient.resolve(outputURL: options.outputURL, defaultExt: "mp4")
+        let url = try OutputPathResolver.video(options.outputURL)
         let bitrate = options.bitrateBps ?? Constants.recordingTargetBitrateBpsDefault
         let fps = options.fps ?? Constants.frameRateTargetFPS
 
@@ -137,7 +132,7 @@ public actor Recording {
         }
         state = .recording
         hooks.publishState(state)
-        return RecordingStart(uri: url.absoluteString, displayName: url.lastPathComponent)
+        return RecordingStart(uri: url.path, displayName: url.lastPathComponent)
     }
 
     /// Submit an encoded NV12 buffer.
@@ -167,7 +162,7 @@ public actor Recording {
                 "[recording] Recording.stop early exit (state=\(state))"
             )
             if case .idle(let last) = state { return last ?? "" }
-            return outputURL?.absoluteString ?? ""
+            return outputURL?.path ?? ""
         }
         let stopEntryMs = clock.nowMs()
         CameraKitLog.notice(
@@ -244,7 +239,7 @@ public actor Recording {
             "[recording] Recording.stop group done: durationMs=\(stopGroupDoneMs - stopEntryMs) writerStatus=\(stopWriterStatus) didCancel=\(didCancel.load(ordering: .acquiring))"
         )
 
-        let url = outputURL?.absoluteString ?? ""
+        let url = outputURL?.path ?? ""
         if didCancel.load(ordering: .acquiring) {
             let truncErr = CameraError(
                 code: .recordingTruncated,
@@ -270,3 +265,13 @@ public actor Recording {
         return url
     }
 }
+
+// MARK: - Test seams (internal — accessed via @testable import)
+#if DEBUG
+extension Recording {
+    /// Test seam: publish the current state through the hook so tests can observe it.
+    func observeCurrentStateForTest() {
+        hooks.publishState(state)
+    }
+}
+#endif

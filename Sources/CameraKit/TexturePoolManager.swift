@@ -273,33 +273,6 @@ final class TexturePoolManager: @unchecked Sendable {
 
     // MARK: - Stage 10 — Encoder NV12 pool + plane-texture dequeue
 
-    /// Test seam: creates an encoder NV12 pool without needing a live MTLDevice or texture cache.
-    ///
-    /// Builds the pool directly using CVPixelBufferPoolCreate — no instance state is touched.
-    static func makeEncoderNV12PoolForTest(size: Size) throws -> CVPixelBufferPool {
-        let poolAttrs: [CFString: Any] = [
-            kCVPixelBufferPoolMinimumBufferCountKey: Constants.poolMinBufferCount
-        ]
-        let bufferAttrs: [CFString: Any] = [
-            kCVPixelBufferPixelFormatTypeKey: Int(Constants.encoderPixelFormat),
-            kCVPixelBufferWidthKey: size.width,
-            kCVPixelBufferHeightKey: size.height,
-            kCVPixelBufferIOSurfacePropertiesKey: [:] as [String: Any],
-            kCVPixelBufferMetalCompatibilityKey: true,
-        ]
-        var pool: CVPixelBufferPool?
-        let status = CVPixelBufferPoolCreate(
-            kCFAllocatorDefault,
-            poolAttrs as CFDictionary,
-            bufferAttrs as CFDictionary,
-            &pool
-        )
-        guard status == kCVReturnSuccess, let p = pool else {
-            throw MetalError.textureCacheCreateFailed(code: status)
-        }
-        return p
-    }
-
     /// Encoder pool — NV12 video-range, IOSurface-backed, Metal-compatible.
     ///
     /// Feeds Pass 5 GPU writes and AVAssetWriterInputPixelBufferAdaptor.append() reads.
@@ -402,3 +375,35 @@ final class TexturePoolManager: @unchecked Sendable {
         return CVMetalTextureGetTexture(cvTexture)!
     }
 }
+
+// MARK: - Test seams (internal — accessed via @testable import)
+#if DEBUG
+extension TexturePoolManager {
+    /// Test seam: creates an encoder NV12 pool without needing a live MTLDevice or texture cache.
+    ///
+    /// Builds the pool directly using CVPixelBufferPoolCreate — no instance state is touched.
+    static func makeEncoderNV12PoolForTest(size: Size) throws -> CVPixelBufferPool {
+        let poolAttrs: [CFString: Any] = [
+            kCVPixelBufferPoolMinimumBufferCountKey: Constants.poolMinBufferCount
+        ]
+        let bufferAttrs: [CFString: Any] = [
+            kCVPixelBufferPixelFormatTypeKey: Int(Constants.encoderPixelFormat),
+            kCVPixelBufferWidthKey: size.width,
+            kCVPixelBufferHeightKey: size.height,
+            kCVPixelBufferIOSurfacePropertiesKey: [:] as [String: Any],
+            kCVPixelBufferMetalCompatibilityKey: true,
+        ]
+        var pool: CVPixelBufferPool?
+        let status = CVPixelBufferPoolCreate(
+            kCFAllocatorDefault,
+            poolAttrs as CFDictionary,
+            bufferAttrs as CFDictionary,
+            &pool
+        )
+        guard status == kCVReturnSuccess, let p = pool else {
+            throw MetalError.textureCacheCreateFailed(code: status)
+        }
+        return p
+    }
+}
+#endif

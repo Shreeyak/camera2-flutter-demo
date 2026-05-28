@@ -4,93 +4,10 @@ import Testing
 
 @testable import CameraKit
 
-// MARK: - PhotosLibraryClient.resolve
-
-@Suite("PhotosLibraryClient.resolve", .progressLogged)
-struct PhotosLibraryClientResolveTests {
-
-    @Test("nil outputURL returns <Documents>/<timestamp>.<ext> with no colons in filename")
-    func nilOutputURLAutoNames() throws {
-        let url = try PhotosLibraryClient.resolve(outputURL: nil, defaultExt: "mp4")
-        #expect(url.path.hasPrefix(URL.documentsDirectory.path))
-        #expect(url.pathExtension == "mp4")
-        // Bug-history note: ISO-8601 colons cannot land in filenames — Files.app
-        // and AirDrop trip on them.
-        #expect(!url.lastPathComponent.contains(":"))
-        // Sandbox guarantee.
-        #expect(url.path.hasPrefix(NSHomeDirectory()))
-    }
-
-    @Test("nil outputURL with .tif ext lands inside Documents")
-    func nilOutputURLRespectsDefaultExt() throws {
-        let url = try PhotosLibraryClient.resolve(outputURL: nil, defaultExt: "tif")
-        #expect(url.pathExtension == "tif")
-    }
-
-    @Test("filename-only URL drops into Documents; defaultExt is ignored")
-    func filenameOnlyURLLandsInDocuments() throws {
-        let input = URL(string: "video.mp4")
-        let url = try PhotosLibraryClient.resolve(outputURL: input, defaultExt: "tif")
-        #expect(url.path == URL.documentsDirectory.appendingPathComponent("video.mp4").path)
-        // Caller's extension wins.
-        #expect(url.pathExtension == "mp4")
-    }
-
-    @Test("absolute URL inside sandbox is used as-is")
-    func absoluteSandboxURLIsUsedAsIs() throws {
-        let input = URL.documentsDirectory.appendingPathComponent("custom-name.mp4")
-        let url = try PhotosLibraryClient.resolve(outputURL: input, defaultExt: "mp4")
-        #expect(url.path == input.path)
-    }
-
-    @Test("URL with subdirectory auto-creates intermediate directories")
-    func subdirectoryAutoCreated() throws {
-        let unique = "PLCTest-\(UUID().uuidString)"
-        let input = URL.documentsDirectory
-            .appendingPathComponent(unique)
-            .appendingPathComponent("video-01.mp4")
-        let url = try PhotosLibraryClient.resolve(outputURL: input, defaultExt: "mp4")
-        #expect(url.path == input.path)
-        let parentExists = FileManager.default.fileExists(
-            atPath: input.deletingLastPathComponent().path
-        )
-        #expect(parentExists, "expected resolve to auto-create \(input.deletingLastPathComponent().path)")
-        // Cleanup
-        try? FileManager.default.removeItem(
-            at: URL.documentsDirectory.appendingPathComponent(unique)
-        )
-    }
-
-    @Test("FileManager.temporaryDirectory URL (/private/var/... symlink form) is accepted")
-    func sandboxTmpDirectorySymlinkAccepted() throws {
-        // NSHomeDirectory() returns /var/mobile/Containers/Data/Application/<UUID>,
-        // but FileManager.temporaryDirectory canonicalizes through the /private
-        // root symlink and returns /private/var/mobile/... — both point at the
-        // same physical directory inside the sandbox. The hasPrefix(home) check
-        // must accept either form (regression test for the Stage07
-        // still-capture-in-flight-guard / Stage 12 sweep finding).
-        let input = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString + ".tif")
-        let url = try PhotosLibraryClient.resolve(outputURL: input, defaultExt: "tif")
-        #expect(url.path == input.path)
-        // Sanity — the URL really does carry the /private/var/... shape we're
-        // asserting works, otherwise this test isn't covering the regression.
-        #expect(input.path.hasPrefix("/private/var/"))
-    }
-
-    @Test("absolute URL outside the app sandbox throws EngineError.invalidOutputPath")
-    func sandboxEscapeThrows() {
-        let input = URL(fileURLWithPath: "/tmp/eva-test.mp4")
-        do {
-            _ = try PhotosLibraryClient.resolve(outputURL: input, defaultExt: "mp4")
-            Issue.record("Expected invalidOutputPath, got success")
-        } catch EngineError.invalidOutputPath(let bad) {
-            #expect(bad.path == input.path)
-        } catch {
-            Issue.record("Expected EngineError.invalidOutputPath, got \(error)")
-        }
-    }
-}
+// NOTE: Output-path/format resolution tests moved to
+// `OutputPathResolutionTests.swift` when `PhotosLibraryClient.resolve` was
+// extracted into `OutputPathResolver`. This file now covers Photos `describe`
+// and the Recording ↔ PhotosDestination integration only.
 
 // MARK: - PhotosLibraryClient.describe
 
@@ -242,7 +159,7 @@ struct RecordingPhotosDestinationTests {
             captureSize: Size(width: 1920, height: 1080)
         )
         #expect(start.displayName == "custom-recording.mp4")
-        #expect(start.uri == custom.absoluteString)
+        #expect(start.uri == custom.path)
         _ = await rec.stop()
     }
 }
