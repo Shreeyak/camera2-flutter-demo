@@ -242,7 +242,7 @@ struct RecordingPhotosDestinationTests {
             captureSize: Size(width: 1920, height: 1080)
         )
         #expect(start.displayName == "custom-recording.mp4")
-        #expect(start.uri == custom.path)
+        #expect(start.uri == custom.absoluteString)
         _ = await rec.stop()
     }
 }

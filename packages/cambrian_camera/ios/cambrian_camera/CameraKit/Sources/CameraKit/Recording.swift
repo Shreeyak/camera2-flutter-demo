@@ -137,7 +137,7 @@ public actor Recording {
         }
         state = .recording
         hooks.publishState(state)
-        return RecordingStart(uri: url.path, displayName: url.lastPathComponent)
+        return RecordingStart(uri: url.absoluteString, displayName: url.lastPathComponent)
     }
 
     /// Submit an encoded NV12 buffer.
@@ -167,7 +167,7 @@ public actor Recording {
                 "[recording] Recording.stop early exit (state=\(state))"
             )
             if case .idle(let last) = state { return last ?? "" }
-            return outputURL?.path ?? ""
+            return outputURL?.absoluteString ?? ""
         }
         let stopEntryMs = clock.nowMs()
         CameraKitLog.notice(
@@ -244,7 +244,7 @@ public actor Recording {
             "[recording] Recording.stop group done: durationMs=\(stopGroupDoneMs - stopEntryMs) writerStatus=\(stopWriterStatus) didCancel=\(didCancel.load(ordering: .acquiring))"
         )
 
-        let url = outputURL?.path ?? ""
+        let url = outputURL?.absoluteString ?? ""
         if didCancel.load(ordering: .acquiring) {
             let truncErr = CameraError(
                 code: .recordingTruncated,
