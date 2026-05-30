@@ -1,6 +1,15 @@
 {
   "pins" : [
     {
+      "identity" : "cambrian-ios-camera",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/Shreeyak/cambrian-ios-camera.git",
+      "state" : {
+        "revision" : "9c8fda6c220b6d8e921592ab349f9e4045e105f5",
+        "version" : "1.2.0"
+      }
+    },
+    {
       "identity" : "swift-atomics",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/apple/swift-atomics.git",

@@ -11,21 +11,22 @@ let package = Package(
         .library(name: "cambrian-camera", targets: ["cambrian_camera"]),
     ],
     dependencies: [
-        // Vendored under the plugin's source tree via git subtree.
-        // Path is relative to this Package.swift; Flutter's SPM integration
-        // symlinks the plugin into ios/Flutter/ephemeral/Packages/.packages/
-        // and evaluates relative paths from there, so the CameraKit subtree
-        // MUST live inside the plugin directory (not as a sibling) so the
-        // relative reference resolves under both the canonical and ephemeral
-        // SPM container locations. Subtree prefix:
-        // packages/cambrian_camera/ios/cambrian_camera/CameraKit/
-        .package(path: "CameraKit"),
+        // CameraKit is consumed as a remote SwiftPM package pinned to the
+        // upstream release tag. This replaces the former git-subtree vendoring;
+        // URL dependencies resolve by package *identity* (the repo name), not by
+        // a relative path, so the old "subtree must live inside the plugin dir"
+        // fragility no longer applies. Pinned exact for reproducibility — bump
+        // the version here to adopt a new CameraKit release.
+        .package(url: "https://github.com/Shreeyak/cambrian-ios-camera.git", exact: "1.2.0"),
     ],
     targets: [
         .target(
             name: "cambrian_camera",
             dependencies: [
-                .product(name: "CameraKit", package: "CameraKit"),
+                // package: is the SwiftPM identity derived from the repo name
+                // (lowercased, ".git" stripped) — NOT the package's declared
+                // name ("CameraKit"). The product is still "CameraKit".
+                .product(name: "CameraKit", package: "cambrian-ios-camera"),
             ],
             swiftSettings: [
                 .interoperabilityMode(.Cxx),
