@@ -41,7 +41,12 @@ Read these before making changes to the plugin internals:
 - **`docs/architecture.md`** — plugin architecture, data flow, component relationships. **Read before modifying any Kotlin or C++ file.**
 - **`docs/usage-guide.md`** — public API and usage patterns. **Read before modifying Dart-facing APIs.**
 
-Keep both files up to date whenever the architecture or public API changes.
+When making changes, update docs as follows:
+- Update the KDoc/docstring on every changed symbol
+- Search for any doc that *references* the changed symbol and update those too
+- Update `docs/usage-guide.md` if any Dart-facing API changed
+- Update `docs/architecture.md` if data flow or component relationships changed
+- Verify all code samples in docs compile against the current API
 
 ## Important Notes
 
@@ -103,4 +108,6 @@ Reference: `backgroundSuspend()`, `backgroundResume()`, `close()`. Never call `t
 - **Verify before claiming "doesn't exist."** Fields may be far from your edit site in a large file.
 - **Name magic numbers and explain why.** Save any non-trivial literal to a descriptive named constant. Add a comment answering "why this value and not another." Applies to thresholds, timing values, dimensions, and scaling factors. Self-evident values (`0`, `1.0` in a clamp, `0` for a default) are exempt.
 - **Write docstrings for new public APIs and classes.** Every new public method, class, typedef, and enum needs a `///` docstring (Dart) or KDoc (Kotlin) or Doxygen-style comment (C++). Private helpers only need docs when the purpose isn't obvious from the name.
+- **Async callbacks must resolve on all paths.** Every Pigeon method and async operation must invoke its callback/Result on success, failure, AND early return. A missing failure callback silently hangs the Dart side with no error. Check every early-return path and catch block.
+- **Trace parameters through all layers.** When adding or changing a parameter, follow the full chain: Dart → Pigeon → Kotlin/Swift → JNI/native. Missing a layer causes silent data corruption (wrong values at wrong argument positions). Applies equally to renames, type changes, and removals.
 - **Trust the log's verdict line, not the process exit code.** "Exit code 0" from the background device-test was a lie the wrapper told — the real signal was `** TEST FAILED **` / the tool-hosted error in the log. Always read the build log's own verdict line (`** TEST SUCCEEDED/FAILED **`, `BUILD SUCCEEDED`, Flutter's `All tests passed!`/`Some tests failed`), not just the process exit.

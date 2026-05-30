@@ -2,9 +2,9 @@
 
 **Status:** queued, not started. Surfaced 2026-05-19 during Plan 2 (Phase 3) wrap.
 
-**When to do:** after Plan 4 (HITL + device-test harness) lands. The device-test
-harness is a prerequisite — every rename / wire-shape change needs end-to-end
-verification on both iOS and Android before merge, not just "iOS build green."
+**When to do:** Android development is frozen (2026-05-29); iOS is primary platform.
+The original Plan 4 device-test harness prerequisite has been retired. Wire-shape
+changes should be validated by manual iOS device verification before merge.
 
 ## Background
 
@@ -77,9 +77,9 @@ See Plan 2 wrap-up notes for the full reasoning.
   (`cambrian_camera_controller.dart`, any UI code reading these fields, any
   `SharedPreferences`-persisted state). Coordinate with the camera-UI flow
   in `lib/` before merging.
-- **Test coverage gap:** Plan 4's device-test harness is the safety net for
-  this plan. Without it, regressions are caught only by manual smoke. Do not
-  start this plan before that harness ships.
+- **Test coverage gap:** Android is frozen; iOS is primary. Regressions are caught
+  by manual iOS device verification. Run the example app on a real device after
+  each tier to confirm nothing broke before merging.
 - **CameraKit (engine) ignorance:** the engine has no opinion on these wire
   fields — all conversions live in `PigeonValueMapping.swift` (iOS) and the
   Android equivalent. The cleanup is plugin-layer-only on both platforms; the
@@ -87,8 +87,8 @@ See Plan 2 wrap-up notes for the full reasoning.
 
 ## Prerequisites
 
-- Plan 3 merged (per-platform Pigeon split precedent established).
-- Plan 4 merged (device-test harness available for verification).
+- Plan 3 merged (per-platform Pigeon split precedent established). ✓
+- Manual iOS device verification available (Plan 4 retired; Android is frozen).
 
 ## Suggested commit shape (~5 commits)
 
