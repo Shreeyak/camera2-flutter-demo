@@ -487,9 +487,11 @@ Future<WbCalibrationResult> calibrateWhiteBalance({
 })
 ```
 
-Runs the iterative white balance calibration loop. Point the camera at a neutral grey or white surface before calling.
+Runs white balance calibration. Point the camera at a neutral grey or white surface before calling. The committed gains are returned in `gains` so you can re-apply them via `WhiteBalance.manual()`. The app never needs to call `sampleCenterPatch()` directly — this method owns all patch sampling.
 
-The package takes a trimmed-mean RGB sample of the **96×96 pixel center patch** at the start of the loop (`patchBefore`), then iteratively adjusts R/G/B gains until the patch error falls below 1% or 10 iterations are exhausted. The final gains are applied and a second sample is taken (`patchAfter`). The app never needs to call `sampleCenterPatch()` directly.
+**Platform behavior:**
+- **Android** — runs an iterative Dart loop: it takes a trimmed-mean RGB sample of the **96×96 pixel center patch** at the start (`patchBefore`), then iteratively adjusts the R and B gains (G is held fixed as the reference channel, per gray-world) until the patch error falls below 1% or 10 iterations are exhausted, applies the final gains, and takes a second sample (`patchAfter`). `initialGainR/G/B` seed the first iteration — pass the current AWB values from `FrameResult` when available.
+- **iOS** — delegates to the CameraKit engine's single-shot gray-world calibration; the engine runs its own loop natively and commits the manual gains internally. **`initialGainR/G/B` are ignored** — the engine always starts from auto. `patchBefore`/`patchAfter` and the committed `gains` are still returned.
 
 Returns a `WbCalibrationResult`:
 
@@ -502,6 +504,7 @@ Returns a `WbCalibrationResult`:
 Pass `gains` to `WhiteBalance.manual()` to lock the result:
 
 ```dart
+// initialGain* seed the Android loop; they are ignored on iOS (engine starts from auto).
 final result = await camera.calibrateWhiteBalance(
   initialGainR: frameResult.wbGainR,
   initialGainG: frameResult.wbGainG,
@@ -529,9 +532,11 @@ Future<BbCalibrationResult> calibrateBlackBalance({
 })
 ```
 
-Runs the iterative black balance calibration loop. Cover the lens (or point at a fully dark scene) before calling.
+Runs black balance calibration. Cover the lens (or point at a fully dark scene) before calling. The committed offsets are returned in `offsets` so you can re-apply them via `ProcessingParams.copyWith()`. The app never needs to call `sampleCenterPatch()` directly — this method owns all patch sampling.
 
-The package takes a trimmed-mean RGB sample of the **96×96 pixel center patch** at the start of the loop (`patchBefore`), then iteratively accumulates per-channel black-level offsets until the patch maximum falls below 1% or 10 iterations are exhausted. A second sample is taken after convergence (`patchAfter`). The non-black fields in `params` are preserved throughout.
+**Platform behavior:**
+- **Android** — runs an iterative Dart loop: it takes a trimmed-mean RGB sample of the **96×96 pixel center patch** at the start (`patchBefore`), then iteratively accumulates per-channel black-level offsets until the patch maximum falls below 1% or 10 iterations are exhausted, then takes a second sample (`patchAfter`). The non-black fields in `params` are preserved throughout.
+- **iOS** — delegates to the CameraKit engine's single-shot calibration; the engine runs its own loop natively and writes the committed offsets to its processing parameters internally. **`params` is ignored** — the engine owns the full processing-parameters state. `patchBefore`/`patchAfter` and the committed `offsets` are still returned.
 
 Returns a `BbCalibrationResult`:
 
@@ -544,6 +549,7 @@ Returns a `BbCalibrationResult`:
 Apply the result via `setProcessingParams()`:
 
 ```dart
+// params seeds/preserves fields on Android; it is ignored on iOS (engine owns the params state).
 final result = await camera.calibrateBlackBalance(params: currentParams);
 camera.setProcessingParams(currentParams.copyWith(
   blackR: result.offsets.r,

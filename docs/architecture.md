@@ -335,9 +335,16 @@ class FrameResult {
 
 Defined in `packages/cambrian_camera/pigeons/camera_api.dart`. Generated outputs: `messages.g.dart` (Dart), `Messages.g.kt` (Kotlin), `Messages.g.swift` (iOS).
 
-**HostApi** (Dart → Kotlin): `open`, `getCapabilities`, `updateSettings`, `setResolution`, `setProcessingParams`, `captureNaturalPicture`, `captureImage`, `getNativePipelineHandle`, `startRecording`, `stopRecording`, `close`, `getPersistedProcessingParams`, `sampleCenterPatch`
+**HostApi** (Dart → native; Kotlin on Android, Swift on iOS): `open`, `getCapabilities`, `updateSettings`, `setResolution`, `setProcessingParams`, `captureNaturalPicture`, `captureImage`, `getNativePipelineHandle`, `startRecording`, `stopRecording`, `close`, `getPersistedProcessingParams`, `sampleCenterPatch`, `calibrateWhiteBalance` (iOS-only), `calibrateBlackBalance` (iOS-only)
 
-**FlutterApi** (Kotlin → Dart): `onStateChanged`, `onError`, `onFrameResult`, `onRecordingStateChanged`
+**FlutterApi** (native → Dart): `onStateChanged`, `onError`, `onFrameResult`, `onRecordingStateChanged`
+
+#### Calibration: platform-split execution
+
+White/black balance calibration is exposed through one Dart API (`CambrianCamera.calibrateWhiteBalance` / `calibrateBlackBalance`) but runs in two different places depending on platform — the controller branches on `defaultTargetPlatform` **before** touching the platform channel:
+
+- **Android** — the closed-loop calibration runs **in Dart** (`lib/src/calibration.dart` + the controller loop). It repeatedly calls `sampleCenterPatch` and `updateSettings`/`setProcessingParams` until the 96×96 center-patch error converges (<1%) or 10 iterations elapse. The `calibrate*` HostApi methods are **not** used; the Kotlin stub throws `not_implemented`. The caller-supplied `initialGain*` / `params` seed the loop.
+- **iOS** — the controller makes a single `calibrateWhiteBalance(handle)` / `calibrateBlackBalance(handle)` HostApi call. `CameraHostApiImpl.swift` forwards it to `CameraKit.CameraEngine.calibrateWhiteBalance()` / `.calibrateBlackBalance()`, which runs the loop natively and commits the result, then reads the committed values back via `currentSettingsSnapshot()` (WB) / `currentProcessingParametersSnapshot()` (BB). **The only input that crosses the wire is the engine handle** — the Dart `initialGain*` / `params` are ignored.
 
 ### JNI Metadata Layout
 
