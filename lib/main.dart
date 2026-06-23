@@ -48,8 +48,6 @@ const _kInitialSettings = CameraSettings(
   exposureTimeNs: AutoValue<int>.auto(),
   focus: AutoValue<double>.auto(),
   whiteBalance: WhiteBalance.auto(),
-  enableNaturalStream: true,
-  naturalStreamHeight: 720,
   cropOutputSize: CameraSize(1600, 1200),
 );
 
@@ -828,7 +826,8 @@ class _CameraScreenState extends State<CameraScreen> {
           bottom: false,
           child: Column(
             children: [
-              // Two preview panes side by side: raw (left) vs processed (right).
+              // Single processed/primary preview pane. (The raw/natural lane was
+              // removed in the CameraKit v1.5.0 migration.)
               // GPU controls sidebar pushes content from the left.
               Expanded(
                 child: Stack(
@@ -868,12 +867,7 @@ class _CameraScreenState extends State<CameraScreen> {
                           ),
                         ),
                         Expanded(
-                          child: Row(
-                            children: [
-                              Expanded(child: _buildRawPreview()),
-                              Expanded(child: _buildCameraPreview()),
-                            ],
-                          ),
+                          child: _buildCameraPreview(),
                         ),
                       ],
                     ),
@@ -1000,26 +994,4 @@ class _CameraScreenState extends State<CameraScreen> {
     );
   }
 
-  /// Raw preview: direct YUV→BGR output before any post-processing.
-  Widget _buildRawPreview() {
-    final camera = _camera;
-    if (camera == null) {
-      return const ColoredBox(color: Colors.black);
-    }
-    return StreamBuilder<CameraTextureInfo>(
-      stream: camera.rawTexture,
-      builder: (context, snap) {
-        if (!snap.hasData) return const ColoredBox(color: Colors.black);
-        final t = snap.data!;
-        return FittedBox(
-          fit: BoxFit.contain,
-          child: SizedBox(
-            width: t.width.toDouble(),
-            height: t.height.toDouble(),
-            child: Texture(textureId: t.textureId),
-          ),
-        );
-      },
-    );
-  }
 }

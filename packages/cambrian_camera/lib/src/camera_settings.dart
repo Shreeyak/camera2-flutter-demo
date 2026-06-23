@@ -178,8 +178,6 @@ class CameraSettings {
     this.noiseReductionMode,
     this.edgeMode,
     this.evCompensation,
-    this.enableNaturalStream,
-    this.naturalStreamHeight,
     this.cropOutputSize,
   });
 
@@ -225,19 +223,11 @@ class CameraSettings {
   /// [exposureTimeNs] is manual (AE is disabled in that mode).
   final int? evCompensation;
 
-  /// Enable GPU natural (unprocessed/passthrough) stream. Null = don't change (preserves prior setting).
-  /// Only meaningful at open() time; changes after open() are ignored.
-  final bool? enableNaturalStream;
-
-  /// Requested height of the GPU natural stream in pixels. Null = don't change. 0 = use default.
-  /// Only meaningful when [enableNaturalStream] is true.
-  final int? naturalStreamHeight;
-
   /// Center-crop the GPU output to this exact pixel size.
   ///
-  /// When set, all downstream consumers — preview surface, natural stream,
-  /// 480p C++ sink, [captureImage], video recording — receive frames
-  /// at the cropped dims. The camera session stays at full sensor resolution.
+  /// When set, all downstream consumers — preview surface, 480p C++ sink,
+  /// [captureImage], video recording — receive frames at the cropped dims.
+  /// The camera session stays at full sensor resolution.
   ///
   /// `null` = don't change the current crop (matches the latest-value-wins
   /// semantics of the other `CameraSettings` fields). To clear an active
@@ -274,8 +264,6 @@ class CameraSettings {
     NoiseReductionMode? noiseReductionMode,
     EdgeMode? edgeMode,
     int? evCompensation,
-    bool? enableNaturalStream,
-    int? naturalStreamHeight,
     CameraSize? cropOutputSize,
   }) =>
       CameraSettings(
@@ -287,8 +275,6 @@ class CameraSettings {
         noiseReductionMode: noiseReductionMode ?? this.noiseReductionMode,
         edgeMode: edgeMode ?? this.edgeMode,
         evCompensation: evCompensation ?? this.evCompensation,
-        enableNaturalStream: enableNaturalStream ?? this.enableNaturalStream,
-        naturalStreamHeight: naturalStreamHeight ?? this.naturalStreamHeight,
         cropOutputSize: cropOutputSize ?? this.cropOutputSize,
       );
 
@@ -304,8 +290,6 @@ class CameraSettings {
     if (noiseReductionMode != null) parts.add('nr=$noiseReductionMode');
     if (edgeMode != null) parts.add('edge=$edgeMode');
     if (evCompensation != null) parts.add('ev=$evCompensation');
-    if (enableNaturalStream != null) parts.add('raw=$enableNaturalStream');
-    if (naturalStreamHeight != null) parts.add('rawH=$naturalStreamHeight');
     if (cropOutputSize != null) parts.add('crop=$cropOutputSize');
     return 'CameraSettings(${parts.join(', ')})';
   }
@@ -389,8 +373,6 @@ class CameraSettings {
       noiseReductionMode: noiseReductionMode?.index,
       edgeMode: edgeMode?.index,
       evCompensation: evCompensation,
-      enableNaturalStream: enableNaturalStream,
-      naturalStreamHeight: naturalStreamHeight,
       cropOutputSize: cropOutputSize == null
           ? null
           : CamSize(

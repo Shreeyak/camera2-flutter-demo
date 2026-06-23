@@ -139,10 +139,6 @@ data class CamSettings (
    * because CONTROL_AE_MODE is set to OFF in that case.
    */
   val evCompensation: Long? = null,
-  /** Enable GPU natural (unprocessed/passthrough) stream. Null = don't change. */
-  val enableNaturalStream: Boolean? = null,
-  /** Requested height of the GPU natural stream in pixels. Null = don't change. 0 = use default. */
-  val naturalStreamHeight: Long? = null,
   /**
    * Center-crop the GPU output to this exact pixel size.
    *
@@ -200,10 +196,8 @@ data class CamSettings (
       val noiseReductionMode = pigeonVar_list[11] as Long?
       val edgeMode = pigeonVar_list[12] as Long?
       val evCompensation = pigeonVar_list[13] as Long?
-      val enableNaturalStream = pigeonVar_list[14] as Boolean?
-      val naturalStreamHeight = pigeonVar_list[15] as Long?
-      val cropOutputSize = pigeonVar_list[16] as CamSize?
-      return CamSettings(isoMode, iso, exposureMode, exposureTimeNs, focusMode, focusDistanceDiopters, wbMode, wbGainR, wbGainG, wbGainB, zoomRatio, noiseReductionMode, edgeMode, evCompensation, enableNaturalStream, naturalStreamHeight, cropOutputSize)
+      val cropOutputSize = pigeonVar_list[14] as CamSize?
+      return CamSettings(isoMode, iso, exposureMode, exposureTimeNs, focusMode, focusDistanceDiopters, wbMode, wbGainR, wbGainG, wbGainB, zoomRatio, noiseReductionMode, edgeMode, evCompensation, cropOutputSize)
     }
   }
   fun toList(): List<Any?> {
@@ -222,8 +216,6 @@ data class CamSettings (
       noiseReductionMode,
       edgeMode,
       evCompensation,
-      enableNaturalStream,
-      naturalStreamHeight,
       cropOutputSize,
     )
   }
@@ -281,15 +273,6 @@ data class CamCapabilities (
   val evCompMax: Long,
   val evCompensationStep: Double,
   /**
-   * Flutter texture ID for the GPU natural stream (passthrough, no color adjustments).
-   * 0 if natural stream is disabled.
-   */
-  val naturalStreamTextureId: Long,
-  /** Actual computed width of the GPU natural stream (pixels). 0 if natural stream is disabled. */
-  val naturalStreamWidth: Long,
-  /** Requested height of the GPU natural stream (pixels). 0 if natural stream is disabled. */
-  val naturalStreamHeight: Long,
-  /**
    * Flutter texture ID for the GPU processed (tone-mapped) stream — the lane
    * with black-balance/brightness/contrast/saturation/gamma applied. Minted at
    * [CameraHostApi.open] and stable for the session.
@@ -337,16 +320,13 @@ data class CamCapabilities (
       val evCompMin = pigeonVar_list[9] as Long
       val evCompMax = pigeonVar_list[10] as Long
       val evCompensationStep = pigeonVar_list[11] as Double
-      val naturalStreamTextureId = pigeonVar_list[12] as Long
-      val naturalStreamWidth = pigeonVar_list[13] as Long
-      val naturalStreamHeight = pigeonVar_list[14] as Long
-      val previewTextureId = pigeonVar_list[15] as Long
-      val streamWidth = pigeonVar_list[16] as Long
-      val streamHeight = pigeonVar_list[17] as Long
-      val sensorStreamWidth = pigeonVar_list[18] as Long
-      val sensorStreamHeight = pigeonVar_list[19] as Long
-      val streamPixelFormat = pigeonVar_list[20] as String
-      return CamCapabilities(supportedSizes, isoMin, isoMax, exposureTimeMinNs, exposureTimeMaxNs, focusMin, focusMax, zoomMin, zoomMax, evCompMin, evCompMax, evCompensationStep, naturalStreamTextureId, naturalStreamWidth, naturalStreamHeight, previewTextureId, streamWidth, streamHeight, sensorStreamWidth, sensorStreamHeight, streamPixelFormat)
+      val previewTextureId = pigeonVar_list[12] as Long
+      val streamWidth = pigeonVar_list[13] as Long
+      val streamHeight = pigeonVar_list[14] as Long
+      val sensorStreamWidth = pigeonVar_list[15] as Long
+      val sensorStreamHeight = pigeonVar_list[16] as Long
+      val streamPixelFormat = pigeonVar_list[17] as String
+      return CamCapabilities(supportedSizes, isoMin, isoMax, exposureTimeMinNs, exposureTimeMaxNs, focusMin, focusMax, zoomMin, zoomMax, evCompMin, evCompMax, evCompensationStep, previewTextureId, streamWidth, streamHeight, sensorStreamWidth, sensorStreamHeight, streamPixelFormat)
     }
   }
   fun toList(): List<Any?> {
@@ -363,9 +343,6 @@ data class CamCapabilities (
       evCompMin,
       evCompMax,
       evCompensationStep,
-      naturalStreamTextureId,
-      naturalStreamWidth,
-      naturalStreamHeight,
       previewTextureId,
       streamWidth,
       streamHeight,
@@ -384,10 +361,10 @@ data class CamCapabilities (
  * from the heavier [CamCapabilities] which is a one-time bootstrap surface
  * retrieved via [CameraHostApi.getCapabilities].
  *
- * The texture-ID fields ([naturalTextureId], [previewTextureId]) are stable
- * across the open session — they are minted at [CameraHostApi.open] time and
- * carried on every change emission so a Dart consumer never needs a
- * separate getCapabilities round-trip after a configuration change.
+ * The texture-ID field ([previewTextureId]) is stable across the open session
+ * — it is minted at [CameraHostApi.open] time and carried on every change
+ * emission so a Dart consumer never needs a separate getCapabilities
+ * round-trip after a configuration change.
  *
  * Generated class from Pigeon that represents data sent in messages.
  */
@@ -400,8 +377,6 @@ data class CamStreamConfiguration (
   val cropWidth: Long? = null,
   /** Height of the active GPU center crop. Null = no crop (full capture). */
   val cropHeight: Long? = null,
-  /** Flutter texture ID for the natural-stream lane. Stable across the open session. */
-  val naturalTextureId: Long,
   /**
    * Flutter texture ID for the processed (post-color-pipeline) preview lane.
    * Stable across the open session.
@@ -415,9 +390,8 @@ data class CamStreamConfiguration (
       val captureHeight = pigeonVar_list[1] as Long
       val cropWidth = pigeonVar_list[2] as Long?
       val cropHeight = pigeonVar_list[3] as Long?
-      val naturalTextureId = pigeonVar_list[4] as Long
-      val previewTextureId = pigeonVar_list[5] as Long
-      return CamStreamConfiguration(captureWidth, captureHeight, cropWidth, cropHeight, naturalTextureId, previewTextureId)
+      val previewTextureId = pigeonVar_list[4] as Long
+      return CamStreamConfiguration(captureWidth, captureHeight, cropWidth, cropHeight, previewTextureId)
     }
   }
   fun toList(): List<Any?> {
@@ -426,7 +400,6 @@ data class CamStreamConfiguration (
       captureHeight,
       cropWidth,
       cropHeight,
-      naturalTextureId,
       previewTextureId,
     )
   }
@@ -858,12 +831,18 @@ interface CameraHostApi {
   fun setResolution(handle: Long, width: Long, height: Long, callback: (Result<Unit>) -> Unit)
   fun setProcessingParams(handle: Long, params: CamProcessingParams)
   /**
-   * Captures a still JPEG image using Camera2's hardware ISP (Android) or
-   * the natural-lane tap (iOS). Does NOT include GPU post-processing
-   * (saturation, contrast, brightness, black balance, gamma).
+   * Captures a still using Camera2's hardware ISP (Android) or a fresh
+   * one-shot `AVCapturePhotoOutput` (iOS, CameraKit >= v1.5.0).
    *
-   * Neutral hardware baseline: captured with auto AE/AWB at 1.0x zoom. Manual
-   * ISO/exposure/WB/zoom from [updateSettings] are NOT applied (use captureImage).
+   * **Android** — neutral hardware baseline with NO GPU post-processing
+   * (saturation, contrast, brightness, black balance, gamma): captured with
+   * auto AE/AWB at 1.0x zoom. Manual ISO/exposure/WB/zoom from [updateSettings]
+   * are NOT applied (use [captureImage] for those).
+   *
+   * **iOS** — the same color pipeline as [captureImage] is applied (it is a
+   * *graded* still, not unprocessed). It differs from [captureImage] only in
+   * source (fresh ISP one-shot vs live-stream snapshot) and in that it is NOT
+   * horizontally mirrored, whereas the live preview / [captureImage] are.
    *
    * Returns a [CamCaptureResult] whose populated field depends on
    * [destination] and platform — see [CamPhotosDestination] /

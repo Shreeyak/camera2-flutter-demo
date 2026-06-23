@@ -25,12 +25,10 @@ import io.flutter.view.TextureRegistry
  * the Camera2 lifecycle for this session.
  *
  * @property producer             Flutter texture entry backing the processed preview.
- * @property rawSurfaceProducer  Flutter texture entry backing the raw (pre-processing) preview.
  * @property controller  Camera2 lifecycle manager for this session.
  */
 data class CameraSession(
     val producer: TextureRegistry.SurfaceProducer,
-    val rawSurfaceProducer: TextureRegistry.SurfaceProducer?,
     val controller: CameraController,
 )
 
@@ -134,7 +132,6 @@ class CambrianCameraPlugin : FlutterPlugin, ActivityAware, CameraHostApi {
             sessions.values.forEach { session ->
                 try { session.controller.release() } catch (_: Exception) {}
                 try { session.producer.release() } catch (_: Exception) {}
-                try { session.rawSurfaceProducer?.release() } catch (_: Exception) {}
             }
             sessions.clear()
         }
@@ -179,7 +176,6 @@ class CambrianCameraPlugin : FlutterPlugin, ActivityAware, CameraHostApi {
         sessions.values.forEach { session ->
             try { session.controller.release() } catch (_: Exception) {}
             try { session.producer.release() } catch (_: Exception) {}
-            try { session.rawSurfaceProducer?.release() } catch (_: Exception) {}
         }
         sessions.clear()
         VideoRecordingReceiver.activeController = null
@@ -242,23 +238,22 @@ class CambrianCameraPlugin : FlutterPlugin, ActivityAware, CameraHostApi {
             return
         }
 
-        val enableNaturalStream = settings?.enableNaturalStream ?: false
-        val naturalStreamHeight = settings?.naturalStreamHeight ?: 0L
         val producer = registry.createSurfaceProducer()
-        val rawSurfaceProducer = if (enableNaturalStream) registry.createSurfaceProducer() else null
         val handle = producer.id()
         Log.i(TAG, "open handle=$handle cameraId=${cameraId ?: "default"}")
-        val controller = CameraController(ctx, producer, rawSurfaceProducer, enableNaturalStream, naturalStreamHeight.toInt(), api, handle)
+        // Natural ("raw") preview lane dropped from the API in the CameraKit
+        // v1.5.0 migration: always disabled (no raw surface producer). The
+        // controller's raw-stream plumbing is dormant.
+        val controller = CameraController(ctx, producer, null, false, 0, api, handle)
 
         // Register the session immediately so that close() can tear it down even if open()
         // hasn't returned yet.  On failure, remove the session and release resources.
-        sessions[handle] = CameraSession(producer, rawSurfaceProducer, controller)
+        sessions[handle] = CameraSession(producer, controller)
         controller.open(cameraId, settings) { result ->
             if (result.isFailure) {
                 sessions.remove(handle)
                 try { controller.release() } catch (_: Exception) {}
                 try { producer.release() } catch (_: Exception) {}
-                try { rawSurfaceProducer?.release() } catch (_: Exception) {}
             } else {
                 // Last-opened camera owns activeController. In multi-session scenarios,
                 // ADB recording broadcasts target whichever camera was opened most recently.
@@ -539,7 +534,6 @@ class CambrianCameraPlugin : FlutterPlugin, ActivityAware, CameraHostApi {
         }
         session.controller.close { result ->
             session.producer.release()
-            session.rawSurfaceProducer?.release()
             callback(result)
         }
     }

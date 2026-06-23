@@ -105,8 +105,7 @@ final class CameraHostApiImpl: CameraHostApi {
                 let initialPhase = await LifecycleObserver.currentPhase()
                 let engine = CameraEngine(initialPhase: initialPhase)
 
-                // Hardcoded capture resolution per Plan 2 — matches the
-                // natural-stream default the rest of the pipeline assumes.
+                // Hardcoded capture resolution per Plan 2.
                 let captureW = 4032
                 let captureH = 3024
                 let cropRegion: Rect? = settings?.cropOutputSize.map { cs in
@@ -140,53 +139,43 @@ final class CameraHostApiImpl: CameraHostApi {
                 //    with the real handle baked into its per-task captures.
                 let handle = await registry.register(engine)
 
-                // 5. Mint two texture IDs. Texture registration is independent
-                //    of the handle; FlutterTextureRegistry assigns its own IDs.
-                let naturalTexture = CameraLaneTexture(engine: engine, stream: .natural)
-                let processedTexture = CameraLaneTexture(engine: engine, stream: .processed)
-                let naturalId = await MainActor.run {
-                    textureRegistry.register(naturalTexture)
-                }
+                // 5. Mint the preview texture ID. CameraKit >= v1.5.0 exposes a
+                //    single live processed lane (`StreamId.primary`); the former
+                //    streaming "natural" lane was removed upstream. Texture
+                //    registration is independent of the handle; FlutterTextureRegistry
+                //    assigns its own IDs.
+                let processedTexture = CameraLaneTexture(engine: engine, stream: .primary)
                 let previewId = await MainActor.run {
                     textureRegistry.register(processedTexture)
                 }
 
-                // 6. Construct pump + bridges with the real handle and IDs.
+                // 6. Construct pump + bridge with the real handle and ID.
                 let pump = FlutterApiPump(
                     handle: handle,
                     engine: engine,
                     flutterApi: flutterApi,
-                    textureIds: { (natural: naturalId, preview: previewId) }
-                )
-                let naturalBridge = CameraLaneBridge(
-                    textureRegistry: textureRegistry,
-                    textureId: naturalId,
-                    engine: engine,
-                    stream: .natural
+                    textureIds: { previewId }
                 )
                 let processedBridge = CameraLaneBridge(
                     textureRegistry: textureRegistry,
                     textureId: previewId,
                     engine: engine,
-                    stream: .processed
+                    stream: .primary
                 )
 
                 // 7. Build state, store under lock.
                 let state = CameraHandleState(
                     engine: engine,
                     capabilities: capabilities,
-                    naturalTextureId: naturalId,
                     previewTextureId: previewId,
                     pump: pump,
-                    naturalBridge: naturalBridge,
                     processedBridge: processedBridge
                 )
                 self?.storeState(state, for: handle)
 
-                // 8. Start pump + bridges AFTER state is stored so any
+                // 8. Start pump + bridge AFTER state is stored so any
                 //    immediate stream event finds the state available.
                 pump.start()
-                naturalBridge.start()
                 processedBridge.start()
 
                 completion(.success(handle))
@@ -238,7 +227,7 @@ final class CameraHostApiImpl: CameraHostApi {
     // MARK: - Not-yet-implemented stubs (filled in by later tasks)
 
     /// Returns the `SessionCapabilities` cached at `open()` time, repackaged
-    /// as the wire-level `CamCapabilities` and decorated with the natural-lane
+    /// as the wire-level `CamCapabilities` and decorated with the preview-lane
     /// texture ID minted by the texture bridge. Capabilities are immutable
     /// for the lifetime of an open session, so we never need to refetch from
     /// the engine.
@@ -252,7 +241,6 @@ final class CameraHostApiImpl: CameraHostApi {
         }
         let payload = PigeonValueMapping.toCamCapabilities(
             state.capabilities,
-            naturalTextureId: state.naturalTextureId,
             previewTextureId: state.previewTextureId
         )
         completion(.success(payload))
@@ -475,24 +463,22 @@ final class CameraHostApiImpl: CameraHostApi {
         }
     }
 
-    /// Returns the C++ pipeline handle (an opaque pointer-shaped integer) for
-    /// FFI consumers that subscribe directly to the engine's pixel sink pool.
-    /// `UInt64?` on the engine side is reinterpreted to `Int64?` via
-    /// `Int64(bitPattern:)` (spec §3) so the wire-level type matches Dart's
-    /// platform-neutral integer.
+    /// Always returns `nil` on iOS. CameraKit >= v1.5.0 removed
+    /// `CameraEngine.getNativePipelineHandle()` — the engine no longer exposes a
+    /// pointer-shaped handle into a C++ pixel sink pool (the in-process FFI
+    /// consumer model it served is gone). The Pigeon return type is `Int64?`, so
+    /// `nil` is the honest "no native pipeline handle on this platform" answer;
+    /// callers must treat a null result as "unsupported here". Android still
+    /// returns a real handle.
     func getNativePipelineHandle(
         handle: Int64,
         completion: @escaping (Result<Int64?, Error>) -> Void
     ) {
-        guard let state = resolveState(for: handle) else {
+        guard resolveState(for: handle) != nil else {
             completion(.failure(Self.handleNotFound(handle)))
             return
         }
-        Task {
-            let raw: UInt64? = await state.engine.getNativePipelineHandle()
-            let mapped: Int64? = raw.map { Int64(bitPattern: $0) }
-            completion(.success(mapped))
-        }
+        completion(.success(nil))
     }
 
     /// Starts a recording session. Returns the on-disk file path to which

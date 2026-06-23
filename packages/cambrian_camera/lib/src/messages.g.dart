@@ -94,8 +94,6 @@ class CamSettings {
     this.noiseReductionMode,
     this.edgeMode,
     this.evCompensation,
-    this.enableNaturalStream,
-    this.naturalStreamHeight,
     this.cropOutputSize,
   });
 
@@ -142,12 +140,6 @@ class CamSettings {
   /// NOTE: has no effect when isoMode == "manual" or exposureMode == "manual"
   /// because CONTROL_AE_MODE is set to OFF in that case.
   int? evCompensation;
-
-  /// Enable GPU natural (unprocessed/passthrough) stream. Null = don't change.
-  bool? enableNaturalStream;
-
-  /// Requested height of the GPU natural stream in pixels. Null = don't change. 0 = use default.
-  int? naturalStreamHeight;
 
   /// Center-crop the GPU output to this exact pixel size.
   ///
@@ -203,8 +195,6 @@ class CamSettings {
       noiseReductionMode,
       edgeMode,
       evCompensation,
-      enableNaturalStream,
-      naturalStreamHeight,
       cropOutputSize,
     ];
   }
@@ -226,9 +216,7 @@ class CamSettings {
       noiseReductionMode: result[11] as int?,
       edgeMode: result[12] as int?,
       evCompensation: result[13] as int?,
-      enableNaturalStream: result[14] as bool?,
-      naturalStreamHeight: result[15] as int?,
-      cropOutputSize: result[16] as CamSize?,
+      cropOutputSize: result[14] as CamSize?,
     );
   }
 }
@@ -298,9 +286,6 @@ class CamCapabilities {
     required this.evCompMin,
     required this.evCompMax,
     required this.evCompensationStep,
-    required this.naturalStreamTextureId,
-    required this.naturalStreamWidth,
-    required this.naturalStreamHeight,
     required this.previewTextureId,
     required this.streamWidth,
     required this.streamHeight,
@@ -333,16 +318,6 @@ class CamCapabilities {
   int evCompMax;
 
   double evCompensationStep;
-
-  /// Flutter texture ID for the GPU natural stream (passthrough, no color adjustments).
-  /// 0 if natural stream is disabled.
-  int naturalStreamTextureId;
-
-  /// Actual computed width of the GPU natural stream (pixels). 0 if natural stream is disabled.
-  int naturalStreamWidth;
-
-  /// Requested height of the GPU natural stream (pixels). 0 if natural stream is disabled.
-  int naturalStreamHeight;
 
   /// Flutter texture ID for the GPU processed (tone-mapped) stream — the lane
   /// with black-balance/brightness/contrast/saturation/gamma applied. Minted at
@@ -390,9 +365,6 @@ class CamCapabilities {
       evCompMin,
       evCompMax,
       evCompensationStep,
-      naturalStreamTextureId,
-      naturalStreamWidth,
-      naturalStreamHeight,
       previewTextureId,
       streamWidth,
       streamHeight,
@@ -417,15 +389,12 @@ class CamCapabilities {
       evCompMin: result[9]! as int,
       evCompMax: result[10]! as int,
       evCompensationStep: result[11]! as double,
-      naturalStreamTextureId: result[12]! as int,
-      naturalStreamWidth: result[13]! as int,
-      naturalStreamHeight: result[14]! as int,
-      previewTextureId: result[15]! as int,
-      streamWidth: result[16]! as int,
-      streamHeight: result[17]! as int,
-      sensorStreamWidth: result[18]! as int,
-      sensorStreamHeight: result[19]! as int,
-      streamPixelFormat: result[20]! as String,
+      previewTextureId: result[12]! as int,
+      streamWidth: result[13]! as int,
+      streamHeight: result[14]! as int,
+      sensorStreamWidth: result[15]! as int,
+      sensorStreamHeight: result[16]! as int,
+      streamPixelFormat: result[17]! as String,
     );
   }
 }
@@ -437,17 +406,16 @@ class CamCapabilities {
 /// from the heavier [CamCapabilities] which is a one-time bootstrap surface
 /// retrieved via [CameraHostApi.getCapabilities].
 ///
-/// The texture-ID fields ([naturalTextureId], [previewTextureId]) are stable
-/// across the open session — they are minted at [CameraHostApi.open] time and
-/// carried on every change emission so a Dart consumer never needs a
-/// separate getCapabilities round-trip after a configuration change.
+/// The texture-ID field ([previewTextureId]) is stable across the open session
+/// — it is minted at [CameraHostApi.open] time and carried on every change
+/// emission so a Dart consumer never needs a separate getCapabilities
+/// round-trip after a configuration change.
 class CamStreamConfiguration {
   CamStreamConfiguration({
     required this.captureWidth,
     required this.captureHeight,
     this.cropWidth,
     this.cropHeight,
-    required this.naturalTextureId,
     required this.previewTextureId,
   });
 
@@ -463,9 +431,6 @@ class CamStreamConfiguration {
   /// Height of the active GPU center crop. Null = no crop (full capture).
   int? cropHeight;
 
-  /// Flutter texture ID for the natural-stream lane. Stable across the open session.
-  int naturalTextureId;
-
   /// Flutter texture ID for the processed (post-color-pipeline) preview lane.
   /// Stable across the open session.
   int previewTextureId;
@@ -476,7 +441,6 @@ class CamStreamConfiguration {
       captureHeight,
       cropWidth,
       cropHeight,
-      naturalTextureId,
       previewTextureId,
     ];
   }
@@ -488,8 +452,7 @@ class CamStreamConfiguration {
       captureHeight: result[1]! as int,
       cropWidth: result[2] as int?,
       cropHeight: result[3] as int?,
-      naturalTextureId: result[4]! as int,
-      previewTextureId: result[5]! as int,
+      previewTextureId: result[4]! as int,
     );
   }
 }
@@ -1045,12 +1008,18 @@ class CameraHostApi {
     }
   }
 
-  /// Captures a still JPEG image using Camera2's hardware ISP (Android) or
-  /// the natural-lane tap (iOS). Does NOT include GPU post-processing
-  /// (saturation, contrast, brightness, black balance, gamma).
+  /// Captures a still using Camera2's hardware ISP (Android) or a fresh
+  /// one-shot `AVCapturePhotoOutput` (iOS, CameraKit >= v1.5.0).
   ///
-  /// Neutral hardware baseline: captured with auto AE/AWB at 1.0x zoom. Manual
-  /// ISO/exposure/WB/zoom from [updateSettings] are NOT applied (use captureImage).
+  /// **Android** — neutral hardware baseline with NO GPU post-processing
+  /// (saturation, contrast, brightness, black balance, gamma): captured with
+  /// auto AE/AWB at 1.0x zoom. Manual ISO/exposure/WB/zoom from [updateSettings]
+  /// are NOT applied (use [captureImage] for those).
+  ///
+  /// **iOS** — the same color pipeline as [captureImage] is applied (it is a
+  /// *graded* still, not unprocessed). It differs from [captureImage] only in
+  /// source (fresh ISP one-shot vs live-stream snapshot) and in that it is NOT
+  /// horizontally mirrored, whereas the live preview / [captureImage] are.
   ///
   /// Returns a [CamCaptureResult] whose populated field depends on
   /// [destination] and platform — see [CamPhotosDestination] /

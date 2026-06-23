@@ -5,8 +5,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/Shreeyak/cambrian-ios-camera.git",
       "state" : {
-        "revision" : "9c8fda6c220b6d8e921592ab349f9e4045e105f5",
-        "version" : "1.2.0"
+        "revision" : "d13769bbf0d67581043c3958e8c86bc2db4c37d4",
+        "version" : "1.5.0"
       }
     },
     {

@@ -19,16 +19,13 @@ import 'package:flutter/material.dart';
 
 /// Initial settings used by the harness [CambrianCamera.open] call.
 ///
-/// Natural stream is enabled so both the processed and raw texture lanes have
-/// IDs to render — matching the dual-preview layout the verification matrix
-/// (spec §8.4 cases 2-3) checks.
+/// Only the processed/primary preview lane exists since the CameraKit v1.5.0
+/// migration removed the live natural lane.
 const _kInitialSettings = CameraSettings(
   iso: AutoValue<int>.auto(),
   exposureTimeNs: AutoValue<int>.auto(),
   focus: AutoValue<double>.auto(),
   whiteBalance: WhiteBalance.auto(),
-  enableNaturalStream: true,
-  naturalStreamHeight: 720,
 );
 
 /// Preset crop output size used by the setCropRegion test (case 6). Cleared by
@@ -57,7 +54,6 @@ class _HitlScreenState extends State<HitlScreen> {
   FrameResult? _lastFrame;
   RecordingState? _recordingState;
   CameraTextureInfo? _previewTex;
-  CameraTextureInfo? _naturalTex;
 
   // ── Last host-method call outcome (shown in the result panel) ──────────────
   String _result = '(no calls yet)';
@@ -72,7 +68,6 @@ class _HitlScreenState extends State<HitlScreen> {
   StreamSubscription<FrameResult>? _frameSub;
   StreamSubscription<RecordingState>? _recordingSub;
   StreamSubscription<CameraTextureInfo>? _previewTexSub;
-  StreamSubscription<CameraTextureInfo>? _naturalTexSub;
 
   // App-lifecycle (background/foreground) is driven entirely by the plugin's
   // native observers — iOS `LifecycleObserver` (UIScene scene-phase) and
@@ -93,7 +88,6 @@ class _HitlScreenState extends State<HitlScreen> {
     _frameSub?.cancel();
     _recordingSub?.cancel();
     _previewTexSub?.cancel();
-    _naturalTexSub?.cancel();
     _camera?.close().catchError((Object e) {
       debugPrint('HITL: camera.close failed during dispose: $e');
     });
@@ -146,9 +140,6 @@ class _HitlScreenState extends State<HitlScreen> {
     _previewTexSub = camera.toneMappedTexture.listen((t) {
       if (mounted) setState(() => _previewTex = t);
     });
-    _naturalTexSub = camera.rawTexture.listen((t) {
-      if (mounted) setState(() => _naturalTex = t);
-    });
     final caps = camera.capabilities;
     setState(() {
       _camera = camera;
@@ -158,7 +149,6 @@ class _HitlScreenState extends State<HitlScreen> {
     });
     return 'stream=${caps.streamWidth}x${caps.streamHeight} '
         'fmt=${caps.streamPixelFormat} '
-        'naturalTex=${caps.naturalStreamTextureId} '
         '(use getNativePipelineHandle for the pipeline pointer)';
   });
 
@@ -170,13 +160,11 @@ class _HitlScreenState extends State<HitlScreen> {
     await _frameSub?.cancel();
     await _recordingSub?.cancel();
     await _previewTexSub?.cancel();
-    await _naturalTexSub?.cancel();
     await camera.close();
     setState(() {
       _camera = null;
       _state = null;
       _previewTex = null;
-      _naturalTex = null;
       _lastFrame = null;
       _recordingState = null;
     });
@@ -428,13 +416,7 @@ class _HitlScreenState extends State<HitlScreen> {
             ),
           ),
           Expanded(
-            child: Row(
-              children: [
-                Expanded(child: _lane('processed', _previewTex)),
-                const SizedBox(width: 2),
-                Expanded(child: _lane('raw', _naturalTex)),
-              ],
-            ),
+            child: _lane('processed', _previewTex),
           ),
         ],
       ),

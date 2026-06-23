@@ -28,9 +28,8 @@ enum PigeonValueMapping {
             wbGainB: cam.wbGainB,
             zoomRatio: cam.zoomRatio,
             evCompensation: cam.evCompensation.map { Int($0) }
-            // §5.3 silent-ignore on iOS: noiseReductionMode, edgeMode,
-            // enableNaturalStream, naturalStreamHeight. cropOutputSize is
-            // handled separately by the HostApi impl.
+            // §5.3 silent-ignore on iOS: noiseReductionMode, edgeMode.
+            // cropOutputSize is handled separately by the HostApi impl.
         )
     }
 
@@ -53,22 +52,19 @@ enum PigeonValueMapping {
             noiseReductionMode: nil,
             edgeMode: nil,
             evCompensation: s.evCompensation.map { Int64($0) },
-            enableNaturalStream: nil,
-            naturalStreamHeight: nil,
             cropOutputSize: nil
         )
     }
 
     // MARK: - Capabilities
 
-    /// `SessionCapabilities` → `CamCapabilities`. Both lane texture IDs are
+    /// `SessionCapabilities` → `CamCapabilities`. The preview lane texture ID is
     /// carried here (minted at `open`, stable for the session): the engine
     /// `HandleRegistry` handle and the Flutter texture-registry IDs are
     /// unrelated on iOS, so the Dart side must read `previewTextureId` from the
     /// bootstrap capabilities rather than assuming `handle == texture id`.
     static func toCamCapabilities(
         _ caps: SessionCapabilities,
-        naturalTextureId: Int64,
         previewTextureId: Int64
     ) -> CamCapabilities {
         let sensorWidth = Int64(caps.activeCaptureResolution.width)
@@ -95,10 +91,6 @@ enum PigeonValueMapping {
             // step value, so 1 integer step = 1 EV stop is the natural
             // mapping (Android reports 0.5).
             evCompensationStep: 1.0,
-            naturalStreamTextureId: naturalTextureId,
-            // Natural lane is always full sensor — same dims as sensorStream.
-            naturalStreamWidth: sensorWidth,
-            naturalStreamHeight: sensorHeight,
             previewTextureId: previewTextureId,
             streamWidth: streamWidth,
             streamHeight: streamHeight,
@@ -114,7 +106,6 @@ enum PigeonValueMapping {
     /// Texture IDs are stable across the open session and passed in by caller.
     static func toCamStreamConfiguration(
         _ cfg: StreamConfiguration,
-        naturalTextureId: Int64,
         previewTextureId: Int64
     ) -> CamStreamConfiguration {
         let crop = cfg.activeCropRegion
@@ -125,7 +116,6 @@ enum PigeonValueMapping {
             captureHeight: Int64(cfg.activeCaptureResolution.height),
             cropWidth: cropWidth,
             cropHeight: cropHeight,
-            naturalTextureId: naturalTextureId,
             previewTextureId: previewTextureId
         )
     }

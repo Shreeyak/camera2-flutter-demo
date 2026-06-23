@@ -84,12 +84,24 @@ final class CameraLaneBridge {
         weak var engine = self.engine
         task = Task {
             guard let engine else { return }
-            let frames = await engine.consumers.subscribe(stream: stream)
-            // Discard the FrameSet — see type docstring. Only the signal matters.
-            for await _ in frames {
-                await MainActor.run {
-                    textureRegistry.textureFrameAvailable(textureId)
+            // CameraKit >= v1.5.0 requires an explicit BufferingPolicy.
+            // `.latestWins` keeps only the newest frame (drop-on-busy), matching
+            // this bridge's prior behavior: we only need the "frame available"
+            // signal to poke Flutter, never a backlog.
+            let frames = await engine.consumers.subscribe(stream: stream, buffering: .latestWins)
+            // CameraKit >= v1.5.0 returns an AsyncThrowingStream; the iteration
+            // can throw on stream termination. The task is non-throwing
+            // (Task<Void, Never>), so swallow the terminal error — there is
+            // nothing to recover, and stop()/close() handles texture cleanup.
+            do {
+                // Discard the FrameSet — see type docstring. Only the signal matters.
+                for try await _ in frames {
+                    await MainActor.run {
+                        textureRegistry.textureFrameAvailable(textureId)
+                    }
                 }
+            } catch {
+                // Stream ended with an error (typically engine teardown). No-op.
             }
         }
     }

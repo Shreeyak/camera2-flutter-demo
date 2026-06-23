@@ -1,2 +1,10 @@
 #include? "Pods/Target Support Files/Pods-Runner/Pods-Runner.debug.xcconfig"
 #include "Generated.xcconfig"
+
+// Code-signing team for on-device debug runs (`flutter run` on a real device).
+// 56WS9VF77S = "Shreeyak Sajjan (Personal Team)" — the free-provisioning team
+// tied to the ss.shrek7@gmail.com Apple ID logged into Xcode. Kept here so
+// on-device debug builds sign automatically without re-discovering the team.
+// Debug-only (Release.xcconfig is untouched); change if signing under a
+// different Apple ID / team.
+DEVELOPMENT_TEAM = 56WS9VF77S
