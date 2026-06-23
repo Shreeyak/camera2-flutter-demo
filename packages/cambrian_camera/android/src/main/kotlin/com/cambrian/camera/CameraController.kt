@@ -58,6 +58,13 @@ import java.util.concurrent.atomic.AtomicBoolean
 class CameraController(
     private val context: Context,
     private val surfaceProducer: TextureRegistry.SurfaceProducer,
+    // Natural ("raw") preview lane: dropped from the public API in the
+    // CameraKit v1.5.0 migration. The GL/C++ raw-sink mechanism remains in the
+    // pipeline but is no longer reachable — the plugin always passes
+    // rawSurfaceProducer=null / enableNaturalStream=false, so every
+    // `if (enableNaturalStream && rawSurfaceProducer != null)` block below is
+    // inert. Left in place to avoid a risky GL/C++ pipeline refactor; remove in
+    // a dedicated pass with on-device verification.
     private val rawSurfaceProducer: TextureRegistry.SurfaceProducer?,
     private val enableNaturalStream: Boolean,
     private val naturalStreamHeight: Int,
@@ -855,11 +862,6 @@ class CameraController(
                     evCompMin = evRange?.lower?.toLong() ?: -6L,
                     evCompMax = evRange?.upper?.toLong() ?: 6L,
                     evCompensationStep = evStep?.toDouble() ?: 0.5,
-                    // Report non-zero raw stream info only when the GPU pipeline is actually
-                    // running with raw enabled; nativeGpuInit may silently disable it.
-                    naturalStreamTextureId = if (gpuPipeline?.isRunning == true) rawSurfaceProducer?.id() ?: 0L else 0L,
-                    naturalStreamWidth = if (gpuPipeline?.isRunning == true) rawW.toLong() else 0L,
-                    naturalStreamHeight = if (gpuPipeline?.isRunning == true) rawH.toLong() else 0L,
                     // Processed (tone-mapped) lane's Flutter texture id. On Android this is
                     // the main SurfaceProducer's id, which is also the camera handle. Sent
                     // explicitly so Dart reads the texture id from the contract rather than
@@ -1189,7 +1191,6 @@ class CameraController(
             captureHeight = sensorStreamHeight.toLong(),
             cropWidth     = cropSize?.width,
             cropHeight    = cropSize?.height,
-            naturalTextureId = if (gpuPipeline?.isRunning == true) rawSurfaceProducer?.id() ?: 0L else 0L,
             previewTextureId = surfaceProducer.id(),
         )
         mainHandler.post {

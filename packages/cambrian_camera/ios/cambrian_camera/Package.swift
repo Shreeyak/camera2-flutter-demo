@@ -17,7 +17,7 @@ let package = Package(
         // a relative path, so the old "subtree must live inside the plugin dir"
         // fragility no longer applies. Pinned exact for reproducibility — bump
         // the version here to adopt a new CameraKit release.
-        .package(url: "https://github.com/Shreeyak/cambrian-ios-camera.git", exact: "1.2.0"),
+        .package(url: "https://github.com/Shreeyak/cambrian-ios-camera.git", exact: "1.5.0"),
     ],
     targets: [
         .target(

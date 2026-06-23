@@ -130,9 +130,6 @@ class CameraCapabilities {
     required this.evCompMin,
     required this.evCompMax,
     required this.evCompensationStep,
-    required this.naturalStreamTextureId,
-    required this.naturalStreamWidth,
-    required this.naturalStreamHeight,
     required this.streamTextureId,
     required this.streamWidth,
     required this.streamHeight,
@@ -155,9 +152,6 @@ class CameraCapabilities {
         evCompMin: 0,
         evCompMax: 0,
         evCompensationStep: 0,
-        naturalStreamTextureId: noTextureId,
-        naturalStreamWidth: 0,
-        naturalStreamHeight: 0,
         streamTextureId: noTextureId,
         streamWidth: 0,
         streamHeight: 0,
@@ -182,9 +176,6 @@ class CameraCapabilities {
         evCompMin: c.evCompMin,
         evCompMax: c.evCompMax,
         evCompensationStep: c.evCompensationStep,
-        naturalStreamTextureId: c.naturalStreamTextureId,
-        naturalStreamWidth: c.naturalStreamWidth,
-        naturalStreamHeight: c.naturalStreamHeight,
         streamTextureId: c.previewTextureId,
         streamWidth: c.streamWidth,
         streamHeight: c.streamHeight,
@@ -207,23 +198,13 @@ class CameraCapabilities {
   final int evCompMax;
   final double evCompensationStep;
 
-  /// Sentinel for "no texture" in [naturalStreamTextureId] / [streamTextureId].
+  /// Sentinel for "no texture" in [streamTextureId].
   ///
   /// `-1` because `FlutterTextureRegistry.register()` only ever returns
   /// non-negative ids — the first-registered lane legitimately gets `0`, so a
   /// real id can never collide with this sentinel. Test `>= 0` for presence,
   /// never `!= 0` (that would hide the lane that registered first).
   static const int noTextureId = -1;
-
-  /// Flutter texture ID for the GPU natural stream (passthrough, no color adjustments).
-  /// [noTextureId] if the natural stream is disabled.
-  final int naturalStreamTextureId;
-
-  /// Actual computed width of the GPU natural stream (pixels). 0 if natural stream is disabled.
-  final int naturalStreamWidth;
-
-  /// Requested height of the GPU natural stream (pixels). 0 if natural stream is disabled.
-  final int naturalStreamHeight;
 
   /// Flutter texture ID for the GPU processed (tone-mapped) stream — the lane
   /// rendered by [CambrianCamera.toneMappedTexture], with black-balance,

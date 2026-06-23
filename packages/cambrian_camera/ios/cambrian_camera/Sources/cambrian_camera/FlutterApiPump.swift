@@ -38,7 +38,7 @@ final class FlutterApiPump {
     /// dispatch. A closure (rather than two stored `Int64`s) lets the caller
     /// wire texture registration after the pump is constructed without
     /// changing the pump's API or risking a stale snapshot.
-    private let textureIds: @Sendable () -> (natural: Int64, preview: Int64)
+    private let textureIds: @Sendable () -> Int64
 
     /// Backing storage for the five spawned tasks. Populated by `start()`
     /// and cleared by `stop()`. Only mutated on the thread that owns the
@@ -52,7 +52,7 @@ final class FlutterApiPump {
         handle: Int64,
         engine: CameraEngine,
         flutterApi: CameraFlutterApi,
-        textureIds: @escaping @Sendable () -> (natural: Int64, preview: Int64)
+        textureIds: @escaping @Sendable () -> Int64
     ) {
         self.handle = handle
         self.engine = engine
@@ -158,11 +158,10 @@ final class FlutterApiPump {
         return Task {
             let stream = await engine.streamConfigurationStream()
             for await cfg in stream {
-                let ids = textureIds()
+                let previewId = textureIds()
                 let payload = PigeonValueMapping.toCamStreamConfiguration(
                     cfg,
-                    naturalTextureId: ids.natural,
-                    previewTextureId: ids.preview
+                    previewTextureId: previewId
                 )
                 await MainActor.run {
                     flutterApi.onStreamConfigurationChanged(

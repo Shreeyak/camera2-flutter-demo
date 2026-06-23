@@ -151,10 +151,6 @@ struct CamSettings {
   /// NOTE: has no effect when isoMode == "manual" or exposureMode == "manual"
   /// because CONTROL_AE_MODE is set to OFF in that case.
   var evCompensation: Int64? = nil
-  /// Enable GPU natural (unprocessed/passthrough) stream. Null = don't change.
-  var enableNaturalStream: Bool? = nil
-  /// Requested height of the GPU natural stream in pixels. Null = don't change. 0 = use default.
-  var naturalStreamHeight: Int64? = nil
   /// Center-crop the GPU output to this exact pixel size.
   ///
   /// When set, the GPU fragment shader samples from the centered
@@ -210,9 +206,7 @@ struct CamSettings {
     let noiseReductionMode: Int64? = nilOrValue(pigeonVar_list[11])
     let edgeMode: Int64? = nilOrValue(pigeonVar_list[12])
     let evCompensation: Int64? = nilOrValue(pigeonVar_list[13])
-    let enableNaturalStream: Bool? = nilOrValue(pigeonVar_list[14])
-    let naturalStreamHeight: Int64? = nilOrValue(pigeonVar_list[15])
-    let cropOutputSize: CamSize? = nilOrValue(pigeonVar_list[16])
+    let cropOutputSize: CamSize? = nilOrValue(pigeonVar_list[14])
 
     return CamSettings(
       isoMode: isoMode,
@@ -229,8 +223,6 @@ struct CamSettings {
       noiseReductionMode: noiseReductionMode,
       edgeMode: edgeMode,
       evCompensation: evCompensation,
-      enableNaturalStream: enableNaturalStream,
-      naturalStreamHeight: naturalStreamHeight,
       cropOutputSize: cropOutputSize
     )
   }
@@ -250,8 +242,6 @@ struct CamSettings {
       noiseReductionMode,
       edgeMode,
       evCompensation,
-      enableNaturalStream,
-      naturalStreamHeight,
       cropOutputSize,
     ]
   }
@@ -316,13 +306,6 @@ struct CamCapabilities {
   var evCompMin: Int64
   var evCompMax: Int64
   var evCompensationStep: Double
-  /// Flutter texture ID for the GPU natural stream (passthrough, no color adjustments).
-  /// 0 if natural stream is disabled.
-  var naturalStreamTextureId: Int64
-  /// Actual computed width of the GPU natural stream (pixels). 0 if natural stream is disabled.
-  var naturalStreamWidth: Int64
-  /// Requested height of the GPU natural stream (pixels). 0 if natural stream is disabled.
-  var naturalStreamHeight: Int64
   /// Flutter texture ID for the GPU processed (tone-mapped) stream — the lane
   /// with black-balance/brightness/contrast/saturation/gamma applied. Minted at
   /// [CameraHostApi.open] and stable for the session.
@@ -365,15 +348,12 @@ struct CamCapabilities {
     let evCompMin = pigeonVar_list[9] as! Int64
     let evCompMax = pigeonVar_list[10] as! Int64
     let evCompensationStep = pigeonVar_list[11] as! Double
-    let naturalStreamTextureId = pigeonVar_list[12] as! Int64
-    let naturalStreamWidth = pigeonVar_list[13] as! Int64
-    let naturalStreamHeight = pigeonVar_list[14] as! Int64
-    let previewTextureId = pigeonVar_list[15] as! Int64
-    let streamWidth = pigeonVar_list[16] as! Int64
-    let streamHeight = pigeonVar_list[17] as! Int64
-    let sensorStreamWidth = pigeonVar_list[18] as! Int64
-    let sensorStreamHeight = pigeonVar_list[19] as! Int64
-    let streamPixelFormat = pigeonVar_list[20] as! String
+    let previewTextureId = pigeonVar_list[12] as! Int64
+    let streamWidth = pigeonVar_list[13] as! Int64
+    let streamHeight = pigeonVar_list[14] as! Int64
+    let sensorStreamWidth = pigeonVar_list[15] as! Int64
+    let sensorStreamHeight = pigeonVar_list[16] as! Int64
+    let streamPixelFormat = pigeonVar_list[17] as! String
 
     return CamCapabilities(
       supportedSizes: supportedSizes,
@@ -388,9 +368,6 @@ struct CamCapabilities {
       evCompMin: evCompMin,
       evCompMax: evCompMax,
       evCompensationStep: evCompensationStep,
-      naturalStreamTextureId: naturalStreamTextureId,
-      naturalStreamWidth: naturalStreamWidth,
-      naturalStreamHeight: naturalStreamHeight,
       previewTextureId: previewTextureId,
       streamWidth: streamWidth,
       streamHeight: streamHeight,
@@ -413,9 +390,6 @@ struct CamCapabilities {
       evCompMin,
       evCompMax,
       evCompensationStep,
-      naturalStreamTextureId,
-      naturalStreamWidth,
-      naturalStreamHeight,
       previewTextureId,
       streamWidth,
       streamHeight,
@@ -433,10 +407,10 @@ struct CamCapabilities {
 /// from the heavier [CamCapabilities] which is a one-time bootstrap surface
 /// retrieved via [CameraHostApi.getCapabilities].
 ///
-/// The texture-ID fields ([naturalTextureId], [previewTextureId]) are stable
-/// across the open session — they are minted at [CameraHostApi.open] time and
-/// carried on every change emission so a Dart consumer never needs a
-/// separate getCapabilities round-trip after a configuration change.
+/// The texture-ID field ([previewTextureId]) is stable across the open session
+/// — it is minted at [CameraHostApi.open] time and carried on every change
+/// emission so a Dart consumer never needs a separate getCapabilities
+/// round-trip after a configuration change.
 ///
 /// Generated class from Pigeon that represents data sent in messages.
 struct CamStreamConfiguration {
@@ -448,8 +422,6 @@ struct CamStreamConfiguration {
   var cropWidth: Int64? = nil
   /// Height of the active GPU center crop. Null = no crop (full capture).
   var cropHeight: Int64? = nil
-  /// Flutter texture ID for the natural-stream lane. Stable across the open session.
-  var naturalTextureId: Int64
   /// Flutter texture ID for the processed (post-color-pipeline) preview lane.
   /// Stable across the open session.
   var previewTextureId: Int64
@@ -461,15 +433,13 @@ struct CamStreamConfiguration {
     let captureHeight = pigeonVar_list[1] as! Int64
     let cropWidth: Int64? = nilOrValue(pigeonVar_list[2])
     let cropHeight: Int64? = nilOrValue(pigeonVar_list[3])
-    let naturalTextureId = pigeonVar_list[4] as! Int64
-    let previewTextureId = pigeonVar_list[5] as! Int64
+    let previewTextureId = pigeonVar_list[4] as! Int64
 
     return CamStreamConfiguration(
       captureWidth: captureWidth,
       captureHeight: captureHeight,
       cropWidth: cropWidth,
       cropHeight: cropHeight,
-      naturalTextureId: naturalTextureId,
       previewTextureId: previewTextureId
     )
   }
@@ -479,7 +449,6 @@ struct CamStreamConfiguration {
       captureHeight,
       cropWidth,
       cropHeight,
-      naturalTextureId,
       previewTextureId,
     ]
   }
@@ -901,12 +870,18 @@ protocol CameraHostApi {
   func updateSettings(handle: Int64, settings: CamSettings) throws
   func setResolution(handle: Int64, width: Int64, height: Int64, completion: @escaping (Result<Void, Error>) -> Void)
   func setProcessingParams(handle: Int64, params: CamProcessingParams) throws
-  /// Captures a still JPEG image using Camera2's hardware ISP (Android) or
-  /// the natural-lane tap (iOS). Does NOT include GPU post-processing
-  /// (saturation, contrast, brightness, black balance, gamma).
+  /// Captures a still using Camera2's hardware ISP (Android) or a fresh
+  /// one-shot `AVCapturePhotoOutput` (iOS, CameraKit >= v1.5.0).
   ///
-  /// Neutral hardware baseline: captured with auto AE/AWB at 1.0x zoom. Manual
-  /// ISO/exposure/WB/zoom from [updateSettings] are NOT applied (use captureImage).
+  /// **Android** — neutral hardware baseline with NO GPU post-processing
+  /// (saturation, contrast, brightness, black balance, gamma): captured with
+  /// auto AE/AWB at 1.0x zoom. Manual ISO/exposure/WB/zoom from [updateSettings]
+  /// are NOT applied (use [captureImage] for those).
+  ///
+  /// **iOS** — the same color pipeline as [captureImage] is applied (it is a
+  /// *graded* still, not unprocessed). It differs from [captureImage] only in
+  /// source (fresh ISP one-shot vs live-stream snapshot) and in that it is NOT
+  /// horizontally mirrored, whereas the live preview / [captureImage] are.
   ///
   /// Returns a [CamCaptureResult] whose populated field depends on
   /// [destination] and platform — see [CamPhotosDestination] /
@@ -1073,12 +1048,18 @@ class CameraHostApiSetup {
     } else {
       setProcessingParamsChannel.setMessageHandler(nil)
     }
-    /// Captures a still JPEG image using Camera2's hardware ISP (Android) or
-    /// the natural-lane tap (iOS). Does NOT include GPU post-processing
-    /// (saturation, contrast, brightness, black balance, gamma).
+    /// Captures a still using Camera2's hardware ISP (Android) or a fresh
+    /// one-shot `AVCapturePhotoOutput` (iOS, CameraKit >= v1.5.0).
     ///
-    /// Neutral hardware baseline: captured with auto AE/AWB at 1.0x zoom. Manual
-    /// ISO/exposure/WB/zoom from [updateSettings] are NOT applied (use captureImage).
+    /// **Android** — neutral hardware baseline with NO GPU post-processing
+    /// (saturation, contrast, brightness, black balance, gamma): captured with
+    /// auto AE/AWB at 1.0x zoom. Manual ISO/exposure/WB/zoom from [updateSettings]
+    /// are NOT applied (use [captureImage] for those).
+    ///
+    /// **iOS** — the same color pipeline as [captureImage] is applied (it is a
+    /// *graded* still, not unprocessed). It differs from [captureImage] only in
+    /// source (fresh ISP one-shot vs live-stream snapshot) and in that it is NOT
+    /// horizontally mirrored, whereas the live preview / [captureImage] are.
     ///
     /// Returns a [CamCaptureResult] whose populated field depends on
     /// [destination] and platform — see [CamPhotosDestination] /

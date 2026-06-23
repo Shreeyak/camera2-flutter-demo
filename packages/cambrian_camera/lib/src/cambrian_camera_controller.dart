@@ -32,15 +32,12 @@ import 'messages.g.dart';
 ///   settings: CameraSettings(
 ///     iso: AutoValue.auto(),
 ///     focus: AutoValue.auto(),
-///     enableNaturalStream: true,        // Enable dual-stream preview
-///     naturalStreamHeight: 720,          // Request 720p height
 ///   ),
 /// );
 /// // Listen for state changes
 /// camera.stateStream.listen((state) { ... });
-/// // Get preview textures (streams)
+/// // Get the preview texture (processed/primary lane)
 /// camera.toneMappedTexture.listen((info) { /* render processed stream */ });
-/// camera.rawTexture.listen((info) { /* render raw stream */ });
 /// // Adjust settings — only send what changed, omitted fields are preserved
 /// camera.updateSettings(CameraSettings(iso: AutoValue.manual(400)));
 /// camera.updateSettings(CameraSettings(focus: AutoValue.auto()));
@@ -62,12 +59,10 @@ class CambrianCamera {
     required int handle,
     required CameraHostApi hostApi,
     required CameraCapabilities capabilities,
-    required bool enableNaturalStream,
     CameraState initialState = CameraState.closed,
   }) : _handle = handle,
        _hostApi = hostApi,
        _capabilities = capabilities,
-       _enableNaturalStream = enableNaturalStream,
        _currentState = initialState,
        _stateController = StreamController<CameraState>.broadcast(),
        _errorController = StreamController<CameraError>.broadcast(),
@@ -122,12 +117,8 @@ class CambrianCamera {
   /// On Android this also happens to equal the processed stream's Flutter
   /// [Texture] id (the handle is the `SurfaceProducer.id()`), but that is NOT
   /// true on iOS — there the texture ids come from a separate registry. Use
-  /// [CameraCapabilities.streamTextureId] / [CameraCapabilities.naturalStreamTextureId]
-  /// for rendering, never the handle.
+  /// [CameraCapabilities.streamTextureId] for rendering, never the handle.
   final int _handle;
-
-  /// Whether the raw (pre-processing) GPU stream was requested via [open].
-  final bool _enableNaturalStream;
 
   final CameraHostApi _hostApi;
   // Non-final: set to CameraCapabilities.empty() at construction, then updated
@@ -155,10 +146,6 @@ class CambrianCamera {
   ///
   /// [cameraId] selects a specific device; pass null to use the default camera.
   /// [settings] apply initial ISP settings before streaming starts.
-  ///
-  /// To enable the GPU natural (unprocessed) preview stream, set [CameraSettings.enableNaturalStream]
-  /// to true in the settings. The [CameraSettings.naturalStreamHeight] field controls the
-  /// requested height of the natural stream; 0 uses a default.
   ///
   /// Current camera permission status, without prompting the user.
   ///
@@ -202,9 +189,6 @@ class CambrianCamera {
     // Ensure Flutter→Dart callbacks are wired before we open.
     _ensureFlutterApiSetup();
 
-    // Extract natural stream settings, defaulting to false if not specified.
-    final enableNaturalStream = settings?.enableNaturalStream ?? false;
-
     // The handle returned by the platform is also used as the texture ID.
     final handle = await api.open(cameraId, settings?.toCam());
 
@@ -214,7 +198,6 @@ class CambrianCamera {
       handle: handle,
       hostApi: api,
       capabilities: CameraCapabilities.empty(), // replaced below
-      enableNaturalStream: enableNaturalStream,
       initialState: CameraState.streaming,
     );
 
@@ -255,8 +238,8 @@ class CambrianCamera {
     // Gate on streaming intent only, NOT on the texture id value: `0` is a valid
     // FlutterTextureRegistry id (the first-registered lane gets it), so a `!= 0`
     // guard would wrongly hide the processed lane when it registers first.
-    // Matches _rawTextureStream's intent-only gating. (The "grey" symptom was the
-    // contrast convention, not an unregistered texture — see engine fix.)
+    // (The "grey" symptom was the contrast convention, not an unregistered
+    // texture — see engine fix.)
     if (_currentState == CameraState.streaming) {
       yield CameraTextureInfo(
         textureId: _capabilities.streamTextureId,
@@ -271,41 +254,6 @@ class CambrianCamera {
             textureId: _capabilities.streamTextureId,
             width: _capabilities.streamWidth,
             height: _capabilities.streamHeight,
-          ),
-        );
-  }
-
-  /// Emits a [CameraTextureInfo] each time the raw (unprocessed) stream
-  /// becomes ready for display. Only emits if [enableNaturalStream] was true
-  /// when [open] was called.
-  ///
-  /// Emits the current state immediately if already streaming, then continues
-  /// with future state changes. This ensures late subscribers don't miss the
-  /// streaming transition event.
-  Stream<CameraTextureInfo> get rawTexture => _rawTextureStream();
-
-  Stream<CameraTextureInfo> _rawTextureStream() async* {
-    // Gate on intent (`_enableNaturalStream`), NOT on the texture id value:
-    // `0` is a valid FlutterTextureRegistry id (the first-registered lane gets
-    // it), so a `!= 0` guard would wrongly hide the natural lane whenever it
-    // registers first. The processed lane (toneMappedTexture) uses the same
-    // intent-only gating.
-    if (_currentState == CameraState.streaming && _enableNaturalStream) {
-      yield CameraTextureInfo(
-        textureId: _capabilities.naturalStreamTextureId,
-        width: _capabilities.naturalStreamWidth,
-        height: _capabilities.naturalStreamHeight,
-      );
-    }
-    yield* stateStream
-        .where(
-          (s) => s == CameraState.streaming && _enableNaturalStream,
-        )
-        .map(
-          (_) => CameraTextureInfo(
-            textureId: _capabilities.naturalStreamTextureId,
-            width: _capabilities.naturalStreamWidth,
-            height: _capabilities.naturalStreamHeight,
           ),
         );
   }
@@ -807,9 +755,6 @@ class CambrianCamera {
       evCompMin: prev.evCompMin,
       evCompMax: prev.evCompMax,
       evCompensationStep: prev.evCompensationStep,
-      naturalStreamTextureId: cfg.naturalTextureId,
-      naturalStreamWidth: prev.naturalStreamWidth,
-      naturalStreamHeight: prev.naturalStreamHeight,
       streamTextureId: cfg.previewTextureId,
       streamWidth: cfg.cropWidth ?? cfg.captureWidth,
       streamHeight: cfg.cropHeight ?? cfg.captureHeight,
@@ -822,7 +767,7 @@ class CambrianCamera {
       debugPrint(
         'CC/Dart: streamConfigurationChanged capture=${cfg.captureWidth}x${cfg.captureHeight} '
         'crop=${cfg.cropWidth}x${cfg.cropHeight} '
-        'natural=${cfg.naturalTextureId} preview=${cfg.previewTextureId}',
+        'preview=${cfg.previewTextureId}',
       );
     }
     _capabilitiesController.add(newCaps);
