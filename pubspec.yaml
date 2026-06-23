@@ -1,7 +1,7 @@
 name: camera2_flutter_demo
 description: "A demo for camera2 library in Flutter."
 publish_to: 'none'
-version: 1.1.0
+version: 1.2.0
 
 environment:
   sdk: ^3.9.2
