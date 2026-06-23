@@ -1,6 +1,6 @@
 Pod::Spec.new do |s|
   s.name             = 'cambrian_camera'
-  s.version          = '1.2.0'
+  s.version          = '1.3.0'
   s.summary          = 'Flutter plugin for Cambrian camera (iOS + Android).'
   s.homepage         = 'https://cambrian.ai'
   s.license          = { :type => 'Proprietary' }
