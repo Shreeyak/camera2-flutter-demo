@@ -100,8 +100,6 @@ await camera.close();
 static Future<CambrianCamera> open({
   String? cameraId,
   CameraSettings? settings,
-  bool enableRawStream = false,
-  int rawStreamHeight = 0,
 })
 ```
 
@@ -109,12 +107,12 @@ Opens the camera and returns once it is actively streaming. This is the only way
 
 - `cameraId` — optional Camera2 device ID. Pass `null` to auto-select the default back-facing camera.
 - `settings` — optional initial ISP settings applied before the first frame.
-- `enableRawStream` — if `true`, allocates a second GPU render path (passthrough shader → rawFBO) that delivers unprocessed RGBA frames. Off by default; incurs additional GPU memory for rawFBO + rawPBOs.
-- `rawStreamHeight` — height of the raw stream in pixels. The width is auto-computed from the camera's aspect ratio. Ignored when `enableRawStream` is `false`.
 
 Throws `PlatformException` on failure (e.g., permission denied, no camera found). After opening, errors are delivered via `errorStream`.
 
-If `enableRawStream` is `true` but raw initialization fails (e.g., insufficient GPU resources), the failure is logged, raw is silently disabled, and the processed pipeline continues normally. Check `capabilities.rawStreamWidth > 0` after `open()` to confirm raw is active.
+> The live raw/natural preview lane (`enableRawStream` / `rawStreamHeight`) was
+> removed in the CameraKit v1.5.0 migration. Only the processed/primary preview
+> is streamed; use `captureNaturalPicture()` for a one-shot still.
 
 ```dart
 try {
@@ -216,31 +214,15 @@ StreamBuilder<CameraTextureInfo>(
 )
 ```
 
-#### `camera.rawTexture`
-
-```dart
-Stream<CameraTextureInfo> get rawTexture
-```
-
-Emits a `CameraTextureInfo` describing the raw (passthrough, unprocessed) preview stream. Only emits if `enableRawStream: true` was passed to `open()`.
-
-The raw stream provides the camera image before any GPU shader adjustments (brightness, contrast, saturation, etc.). It is not Bayer RAW sensor data — it is the Camera2/SurfaceTexture output as-is, in RGBA. Useful for side-by-side debugging. Most apps only need `toneMappedTexture`.
-
-```dart
-// Only available if enableRawStream: true
-StreamBuilder<CameraTextureInfo>(
-  stream: camera.rawTexture,
-  builder: (context, snap) {
-    if (!snap.hasData) return const SizedBox.shrink();
-    final t = snap.data!;
-    return Texture(textureId: t.textureId);
-  },
-)
-```
+> **Removed in the CameraKit v1.5.0 migration:** the live `rawTexture` stream
+> (and the `enableNaturalStream` / `naturalStreamHeight` settings that gated it).
+> CameraKit no longer exposes a streaming natural/passthrough lane — only the
+> processed/primary preview (`toneMappedTexture`) and an internal tracker lane
+> remain. For a one-shot unmodified-geometry still, use `captureNaturalPicture()`.
 
 #### Fixed output orientation
 
-Every GPU-sourced stream (processed preview, raw preview, video recording, `captureImage`) is delivered in a fixed orientation — a 90° rotation followed by a vertical flip — produced by the pipeline's `rotAndFlipMatrix` in `GpuPipeline.kt`. Consumers receive the same pixels in every sink, so what you see on screen matches the saved file byte-for-byte.
+Every GPU-sourced stream (processed preview, video recording, `captureImage`) is delivered in a fixed orientation — a 90° rotation followed by a vertical flip — produced by the pipeline's `rotAndFlipMatrix` in `GpuPipeline.kt`. Consumers receive the same pixels in every sink, so what you see on screen matches the saved file byte-for-byte.
 
 `captureNaturalPicture` (hardware JPEG) is not affected — it uses the Android JPEG path with EXIF orientation tagging and continues to orient itself according to the device rotation at capture time.
 
@@ -393,14 +375,20 @@ of the other `CameraSettings` fields).
 **Interaction with `zoomRatio`:** zoom and crop compose multiplicatively.
 Effective zoom ≈ `zoomRatio × (streamWidth / cropWidth)`.
 
-**Interaction with `captureNaturalPicture()`:** this method always returns
-the full-sensor hardware JPEG and **intentionally ignores `cropOutputSize`**.
-Use `captureImage()` if you want the cropped image. The preview and
-`captureImage()` reflect the crop; `captureNaturalPicture()` does not — this
-mismatch is by design, since "natural picture" is defined as the unprocessed
-sensor JPEG. For the same reason it also ignores `zoomRatio` (hardware zoom)
-and any manual ISO/exposure/white-balance — it is always the full-sensor frame
-at automatic 3A.
+**Interaction with `captureNaturalPicture()`:** this method **intentionally
+ignores `cropOutputSize`**. Use `captureImage()` if you want the cropped image.
+The preview and `captureImage()` reflect the crop; `captureNaturalPicture()`
+does not.
+
+Per-platform semantics differ:
+- **Android** — a full-sensor hardware JPEG: unprocessed (no GPU color
+  pipeline), ignoring `zoomRatio` and manual ISO/exposure/white-balance, always
+  at automatic 3A.
+- **iOS (CameraKit ≥ v1.5.0)** — a fresh one-shot `AVCapturePhotoOutput` still
+  that *is* graded through the same color pipeline as `captureImage` (it is not
+  "unprocessed"). It differs from `captureImage` only in source (fresh ISP
+  capture vs live-stream snapshot) and in that it is **not** horizontally
+  mirrored, whereas the live preview and `captureImage` are.
 
 ---
 
@@ -928,8 +916,6 @@ print('Resolutions: ${caps.supportedSizes}');
 | `evCompMin` / `evCompMax` | `int` | EV compensation range (in steps) |
 | `evCompensationStep` | `double` | Size of one EV step |
 | `yuvStreamWidth` / `yuvStreamHeight` | `int` | YUV stream dimensions delivered to the C++ pipeline (pixels). Used by the preview widget for correct aspect ratio. |
-| `rawStreamTextureId` | `int` | Flutter texture ID for the raw (passthrough) preview stream. `0` when raw is disabled. Available via `rawTexture` stream. |
-| `rawStreamWidth` / `rawStreamHeight` | `int` | Raw stream dimensions in pixels. Both are `0` when raw is disabled (either `enableRawStream` was `false`, or raw init failed). Width is auto-computed from aspect ratio; height matches the `rawStreamHeight` passed to `open()`. |
 
 ---
 
@@ -1048,9 +1034,14 @@ Sinks are routed by role, controlling which frame path they receive. Pass `role`
 |------|----------|-------------|--------------|-------------|
 | `SinkRole::FULL_RES` | yes | processedFBO | RGBA | Full-resolution color-processed frames (default for all sinks) |
 | `SinkRole::TRACKER` | — | processedFBO | RGBA | Same processed frames, typically registered at lower resolution |
-| `SinkRole::RAW` | — | rawFBO | RGBA | Passthrough frames — no shader adjustments applied. Camera2/SurfaceTexture output as-is in RGBA. Only available when `enableRawStream: true`. |
+| `SinkRole::RAW` | — | rawFBO | RGBA | Passthrough frames — no shader adjustments applied. **Dormant:** the raw render path is no longer enabled (see note below), so `RAW` sinks never receive frames. |
 
-`SinkRole::RAW` sinks receive frames from the raw render path at `rawStreamHeight` resolution. Register a `RAW` sink only when the raw stream is enabled; frames will not be delivered if raw was disabled at `open()` time.
+> **`SinkRole::RAW` is dormant.** The raw/natural render path was removed from
+> the public API in the CameraKit v1.5.0 migration (`enableNaturalStream` is
+> gone). The `RAW` role still exists in the C++ enum and the internal plumbing
+> remains in `GpuPipeline`/`ImagePipeline`, but the path is never activated, so a
+> registered `RAW` sink will not receive frames. Use `SinkRole::FULL_RES` or
+> `SinkRole::TRACKER` instead.
 
 ```cpp
 cam::SinkConfig rawCfg;
@@ -1266,14 +1257,12 @@ Kotlin: CameraController
 C++: GpuRenderer / ImagePipeline
   |
   |  Camera2 → SurfaceTexture → OES texture
-  |    ├── [color shader]       → processedFBO → preview surface + FULL_RES/TRACKER sinks
-  |    └── [passthrough shader] → rawFBO(rawH) → raw preview surface + RAW sinks
-  |         (only when enableRawStream: true)
+  |    └── [color shader]       → processedFBO → preview surface + FULL_RES/TRACKER sinks
+  |    (raw/passthrough render path removed from the API in the v1.5.0 migration;
+  |     rawFBO + RAW sinks remain in the code but are never activated)
   |
   +-> ANativeWindow (Flutter processed preview)
-  +-> ANativeWindow (Flutter raw preview, when raw enabled)
   +-> FULL_RES / TRACKER sinks (per-sink mailbox + dispatch thread, processed RGBA)
-  +-> RAW sinks (passthrough RGBA at rawStreamHeight resolution)
 ```
 
 **Processed frame path:** Camera2 → OES texture → color shader → processedFBO → preview surface + FULL_RES/TRACKER sinks

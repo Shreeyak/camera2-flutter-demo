@@ -146,7 +146,7 @@ packages/cambrian_camera/
 │   │                                          #   CameraKit is resolved via SPM, not the pod)
 │   └── cambrian_camera/
 │       ├── Package.swift                      # SPM manifest; depends on CameraKit as a remote
-│       │                                      #   SwiftPM dependency: cambrian-ios-camera @ v1.2.0
+│       │                                      #   SwiftPM dependency: cambrian-ios-camera @ v1.5.0
 │       │                                      #   (identity "cambrian-ios-camera", product "CameraKit")
 │       └── Sources/cambrian_camera/
 │           ├── CambrianCameraPlugin.swift     # FlutterPlugin registrar + Pigeon host wiring
@@ -165,13 +165,27 @@ packages/cambrian_camera/
 ```
 
 The iOS camera implementation lives in **CameraKit**, consumed as a remote SwiftPM
-dependency pinned at `v1.2.0` (`github.com/Shreeyak/cambrian-ios-camera`), declared in
+dependency pinned at `v1.5.0` (`github.com/Shreeyak/cambrian-ios-camera`), declared in
 `ios/cambrian_camera/Package.swift`. This replaced an earlier git-subtree vendoring of
 the same code; URL dependencies resolve by package identity rather than relative path,
 so the source no longer lives in this tree. The Swift files above are the plugin's thin
 Pigeon/texture bridge over CameraKit's `CameraEngine`. Note the `cambrian_camera.podspec`
 CocoaPods fallback compiles only the plugin sources — it does not pull CameraKit, which
 Flutter's SwiftPM integration resolves even when the host app uses CocoaPods.
+
+**Lane model (CameraKit ≥ v1.5.0).** CameraKit exposes two live stream lanes via
+`StreamId`: `.primary` (the GPU color-processed preview — what the plugin's single
+Flutter preview texture renders) and `.tracker` (a downscaled lane for analysis). The
+plugin's iOS bridge subscribes only to `.primary`. The earlier streaming **natural**
+(unprocessed/passthrough) lane was removed upstream in v1.5.0 and is no longer part of
+the plugin's public API — `naturalTextureId`, `enableNaturalStream`, and
+`naturalStreamHeight` were dropped from the Pigeon contract. `captureNaturalPicture`
+survives as a one-shot still (a fresh `AVCapturePhotoOutput` capture on iOS), now graded
+through the same color pipeline as `captureImage` but intentionally **not** horizontally
+mirrored. `getNativePipelineHandle()` was also removed from `CameraEngine`; the iOS bridge
+returns `null` for it (Android still returns a real handle). On Android the internal
+raw-stream plumbing (`rawSurfaceProducer`) remains in `CameraController` but is permanently
+disabled and no longer surfaced.
 
 ---
 
@@ -189,12 +203,8 @@ class CambrianCamera {
 
   Future<void> close();
 
-  /// Flutter texture ID for the color-processed preview.
+  /// Flutter texture ID for the color-processed (primary) preview.
   Stream<CameraTextureInfo> get toneMappedTexture;
-
-  /// Flutter texture ID for the raw (passthrough) preview.
-  /// Only emits if enableRawStream: true was set in CameraSettings.
-  Stream<CameraTextureInfo> get rawTexture;
 
   Stream<CameraState> get stateStream;
   Stream<CameraError> get errorStream;
